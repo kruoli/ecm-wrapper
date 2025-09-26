@@ -17,10 +17,11 @@ logger = logging.getLogger(__name__)
 class TLevelCalculator:
     """Calculate target t-levels and ECM parameters for composites."""
 
-    # Path to t-level executable (mounted via volume)
-    T_LEVEL_BINARY = "/app/bin/t-level"
-
     def __init__(self):
+        # Get t-level binary path from config
+        from ..config import get_settings
+        settings = get_settings()
+        self.T_LEVEL_BINARY = settings.t_level_binary_path
         self.t_level_available = self._check_t_level_software()
 
     def _check_t_level_software(self) -> bool:

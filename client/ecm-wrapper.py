@@ -265,7 +265,8 @@ class ECMWrapper(BaseWrapper):
                          resume_residues: Optional[str] = None,
                          gpu_device: Optional[int] = None,
                          gpu_curves: Optional[int] = None,
-                         continue_after_factor: bool = False) -> Dict[str, Any]:
+                         continue_after_factor: bool = False,
+                         progress_interval: int = 0) -> Dict[str, Any]:
         """Run ECM using two-stage approach: GPU stage 1 + multi-threaded CPU stage 2"""
         
         # Note: B2 can be None to use GMP-ECM defaults
@@ -384,7 +385,7 @@ class ECMWrapper(BaseWrapper):
             if continue_after_factor:
                 self.logger.info("Early termination disabled due to --continue-after-factor flag")
             stage2_result = self._run_stage2_multithread(
-                residue_file, b1, b2, stage2_workers, verbose, early_termination
+                residue_file, b1, b2, stage2_workers, verbose, early_termination, progress_interval
             )
 
             # Extract factor and sigma from stage 2 result
@@ -475,7 +476,8 @@ class ECMWrapper(BaseWrapper):
             return False, None, curves, "", []
     
     def _run_stage2_multithread(self, residue_file: Path, b1: int, b2: int,
-                               workers: int, verbose: bool, early_termination: bool = True) -> Optional[str]:
+                               workers: int, verbose: bool, early_termination: bool = True,
+                               progress_interval: int = 0) -> Optional[str]:
         """Run Stage 2 with multiple CPU workers"""
 
         # Extract B1 from residue file to ensure consistency
@@ -529,8 +531,40 @@ class ECMWrapper(BaseWrapper):
                 with process_lock:
                     running_processes.append(process)
                 
-                # Wait for process to complete and get all output at once
-                try:
+                # Stream output for progress tracking if progress_interval is set
+                if progress_interval > 0:
+                    full_output = ""
+                    last_progress_report = 0
+
+                    while True:
+                        line = process.stdout.readline()
+                        if not line:
+                            break
+
+                        full_output += line
+
+                        # Check if we should terminate early
+                        if early_termination and stop_event.is_set():
+                            process.terminate()
+                            self.logger.info(f"Worker {worker_id} terminating due to factor found elsewhere")
+                            return None
+
+                        # Check for curve completion and progress reporting
+                        if "Step 2 took" in line:
+                            curves_completed = full_output.count("Step 2 took")
+
+                            # Report progress at intervals
+                            if curves_completed - last_progress_report >= progress_interval:
+                                if total_lines > 0:
+                                    percentage = (curves_completed / total_lines) * 100
+                                    self.logger.info(f"Worker {worker_id}: {curves_completed}/{total_lines} curves ({percentage:.1f}%)")
+                                else:
+                                    self.logger.info(f"Worker {worker_id}: {curves_completed} curves completed")
+                                last_progress_report = curves_completed
+
+                    process.wait()
+                else:
+                    # Original behavior - get all output at once
                     stdout, stderr = process.communicate()
                     full_output = stdout if stdout else ""
 
@@ -547,7 +581,7 @@ class ECMWrapper(BaseWrapper):
                         percentage = (curves_completed / total_lines) * 100
                         self.logger.info(f"Worker {worker_id} progress: {curves_completed}/{total_lines} curves - {percentage:.1f}% complete")
 
-                    # Check for factor
+                    # Check for factor (common to both paths)
                     factor, sigma_from_output = parse_ecm_output(full_output)
                     if factor:
                         with factor_lock:
@@ -565,14 +599,10 @@ class ECMWrapper(BaseWrapper):
                                                 p.terminate()
                         return (factor, sigma_from_output)
 
-                except Exception as e:
-                    self.logger.error(f"Worker {worker_id} communication failed: {e}")
-                    return None
-
                 # If no factor found, report completion
                 self.logger.info(f"Worker {worker_id} completed (no factor)")
                 return None
-                
+
             except Exception as e:
                 self.logger.error(f"Worker {worker_id} failed: {e}")
                 return None
@@ -846,7 +876,8 @@ class ECMWrapper(BaseWrapper):
     
     def run_stage2_only(self, residue_file: str, b1: int, b2: int,
                        stage2_workers: int = 4, verbose: bool = False,
-                       continue_after_factor: bool = False) -> Dict[str, Any]:
+                       continue_after_factor: bool = False,
+                       progress_interval: int = 0) -> Dict[str, Any]:
         """Run Stage 2 only on existing residue file"""
         
         residue_path = Path(residue_file)
@@ -882,7 +913,7 @@ class ECMWrapper(BaseWrapper):
         if continue_after_factor:
             self.logger.info("Early termination disabled due to --continue-after-factor flag")
         stage2_result = self._run_stage2_multithread(
-            residue_path, actual_b1, b2, stage2_workers, verbose, early_termination
+            residue_path, actual_b1, b2, stage2_workers, verbose, early_termination, progress_interval
         )
         
         # Extract factor and sigma from result
@@ -1054,7 +1085,8 @@ def main():
             b2=b2,
             stage2_workers=stage2_workers,
             verbose=args.verbose,
-            continue_after_factor=args.continue_after_factor
+            continue_after_factor=args.continue_after_factor,
+            progress_interval=args.progress_interval
         )
     elif args.stage2_only:
         # Stage 2 only mode
@@ -1064,7 +1096,8 @@ def main():
             b2=b2,
             stage2_workers=stage2_workers,
             verbose=args.verbose,
-            continue_after_factor=args.continue_after_factor
+            continue_after_factor=args.continue_after_factor,
+            progress_interval=args.progress_interval
         )
     elif args.multiprocess:
         results = wrapper.run_ecm_multiprocess(
@@ -1090,7 +1123,8 @@ def main():
             resume_residues=args.resume_residues,
             gpu_device=gpu_device,
             gpu_curves=gpu_curves,
-            continue_after_factor=args.continue_after_factor
+            continue_after_factor=args.continue_after_factor,
+            progress_interval=args.progress_interval
         )
     else:
         # Standard mode

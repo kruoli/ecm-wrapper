@@ -31,7 +31,9 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     
     # Method and verbosity
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose ECM output')
-    parser.add_argument('--method', choices=['ecm', 'pm1', 'pp1'], default='ecm', 
+    parser.add_argument('--progress-interval', type=int, default=0,
+                       help='Show progress updates every N completed curves (0 = disabled)')
+    parser.add_argument('--method', choices=['ecm', 'pm1', 'pp1'], default='ecm',
                        help='Factorization method (ECM, P-1, P+1)')
     
     # Advanced modes

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Header
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, distinct, func, desc
@@ -6,12 +6,14 @@ from typing import List, Optional, Dict, Any
 import io
 import logging
 from datetime import datetime, timedelta
+import html
 
 from ...database import get_db
 from ...services.composite_manager import CompositeManager
 from ...services.work_assignment import WorkAssignmentService
 # Removed family-related services for minimal ECM middleware
 from ...config import get_settings
+from ...dependencies import verify_admin_key
 
 router = APIRouter()
 settings = get_settings()
@@ -31,7 +33,8 @@ async def upload_composites(
     default_priority: int = Form(0),
     number_column: str = Form("number"),
     priority_column: Optional[str] = Form(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
 ):
     """
     Upload composites from a file.
@@ -90,7 +93,8 @@ async def upload_composites(
 async def bulk_add_composites(
     numbers: List[str],
     default_priority: int = 0,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
 ):
     """
     Add a list of composite numbers.
@@ -121,7 +125,7 @@ async def bulk_add_composites(
 
 
 @router.get("/admin/composites/status")
-async def get_queue_status(db: Session = Depends(get_db)):
+async def get_queue_status(db: Session = Depends(get_db), _admin: bool = Depends(verify_admin_key)):
     """
     Get comprehensive status of the work queue.
 
@@ -142,7 +146,8 @@ async def get_queue_status(db: Session = Depends(get_db)):
 @router.get("/admin/composites/{composite_id}")
 async def get_composite_details(
     composite_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
 ):
     """
     Get detailed information about a specific composite.
@@ -168,11 +173,31 @@ async def get_composite_details(
 @router.get("/admin/composites/{composite_id}/details", response_class=HTMLResponse)
 async def get_composite_details_page(
     composite_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    x_admin_key: str = Header(None)
 ):
     """
     Web page showing detailed information about a specific composite.
     """
+    # Verify auth
+    settings = get_settings()
+    if not x_admin_key or x_admin_key != settings.admin_api_key:
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Unauthorized</title>
+            <script>
+                sessionStorage.removeItem('admin_api_key');
+                window.location.href = '/api/v1/admin/login';
+            </script>
+        </head>
+        <body>
+            <p>Redirecting to login...</p>
+        </body>
+        </html>
+        """
+
     details = composite_manager.get_composite_details(db, composite_id)
 
     if not details:
@@ -185,6 +210,10 @@ async def get_composite_details_page(
     progress = details['progress']
     recent_attempts = details['recent_attempts']
     active_work = details['active_work']
+
+    # Helper function to escape HTML - prevent XSS
+    def esc(text):
+        return html.escape(str(text))
 
     # Format numbers for display
     number_display = composite['number'][:50] + '...' if len(composite['number']) > 50 else composite['number']
@@ -220,23 +249,49 @@ async def get_composite_details_page(
             .status-active {{ background: #fff3cd; color: #856404; }}
             .status-pending {{ background: #f8d7da; color: #721c24; }}
         </style>
+        <script>
+            function backToDashboard() {{
+                const apiKey = sessionStorage.getItem('admin_api_key');
+                if (!apiKey) {{
+                    window.location.href = '/api/v1/admin/login';
+                    return;
+                }}
+
+                fetch('/api/v1/admin/dashboard', {{
+                    headers: {{
+                        'X-Admin-Key': apiKey
+                    }}
+                }})
+                .then(response => response.text())
+                .then(html => {{
+                    document.open();
+                    document.write(html);
+                    document.close();
+                    history.pushState(null, '', '/api/v1/admin/dashboard');
+                }})
+                .catch(() => {{
+                    sessionStorage.removeItem('admin_api_key');
+                    window.location.href = '/api/v1/admin/login';
+                }});
+            }}
+        </script>
     </head>
     <body>
         <div class="container">
             <div class="header">
                 <h1>Composite Details</h1>
-                <p><a href="/api/v1/admin/dashboard" class="btn btn-secondary">← Back to Dashboard</a></p>
+                <p><button onclick="backToDashboard()" class="btn btn-secondary">← Back to Dashboard</button></p>
             </div>
 
             <div class="card">
                 <h2>Composite Information</h2>
                 <table>
                     <tr><th>ID</th><td>{composite['id']}</td></tr>
-                    <tr><th>Number</th><td class="number-display">{composite['number']}</td></tr>
+                    <tr><th>Number</th><td class="number-display">{esc(composite['number'])}</td></tr>
                     <tr><th>Digit Length</th><td>{composite['digit_length']}</td></tr>
                     <tr><th>Priority</th><td>{composite['priority']}</td></tr>
-                    <tr><th>Created</th><td>{composite['created_at']}</td></tr>
-                    <tr><th>Last Updated</th><td>{composite['updated_at']}</td></tr>
+                    <tr><th>Created</th><td>{esc(composite['created_at'])}</td></tr>
+                    <tr><th>Last Updated</th><td>{esc(composite['updated_at'])}</td></tr>
                     <tr><th>Status</th><td>
                         {'<span class="status-badge status-complete">Fully Factored</span>' if composite['is_fully_factored'] else '<span class="status-badge status-active">Active</span>'}
                         {' <span class="status-badge status-complete">Prime</span>' if composite['is_prime'] else ''}
@@ -268,11 +323,11 @@ async def get_composite_details_page(
                 </table>
             </div>
 
-            {'<div class="card"><h2>Active Work Assignments</h2><table><tr><th>Client ID</th><th>Method</th><th>B1</th><th>B2</th><th>Curves Requested</th><th>Status</th><th>Expires</th></tr>' + ''.join(f'<tr><td>{work["client_id"]}</td><td>{work["method"]}</td><td>{work["b1"]:,}</td><td>{work["b2"]:,}</td><td>{work["curves_requested"]}</td><td>{work["status"]}</td><td>{work["expires_at"]}</td></tr>' for work in active_work) + '</table></div>' if active_work else ''}
+            {'<div class="card"><h2>Active Work Assignments</h2><table><tr><th>Client ID</th><th>Method</th><th>B1</th><th>B2</th><th>Curves Requested</th><th>Status</th><th>Expires</th></tr>' + ''.join(f'<tr><td>{esc(work["client_id"])}</td><td>{esc(work["method"])}</td><td>{work["b1"]:,}</td><td>{work["b2"]:,}</td><td>{work["curves_requested"]}</td><td>{esc(work["status"])}</td><td>{esc(work["expires_at"])}</td></tr>' for work in active_work) + '</table></div>' if active_work else ''}
 
             <div class="card">
                 <h2>Recent ECM Attempts</h2>
-                {'<table><tr><th>Method</th><th>B1</th><th>B2</th><th>Curves Completed</th><th>Factor Found</th><th>Client</th><th>Submitted</th></tr>' + ''.join(f'<tr><td>{attempt["method"]}</td><td>{attempt["b1"]:,}</td><td>{attempt["b2"]:,}</td><td>{attempt["curves_completed"]:,}</td><td>{attempt["factor_found"] or "None"}</td><td>{attempt["client_id"]}</td><td>{attempt["created_at"]}</td></tr>' for attempt in recent_attempts) + '</table>' if recent_attempts else '<p>No attempts yet.</p>'}
+                {'<table><tr><th>Method</th><th>B1</th><th>B2</th><th>Curves Completed</th><th>Factor Found</th><th>Client</th><th>Submitted</th></tr>' + ''.join(f'<tr><td>{esc(attempt["method"])}</td><td>{attempt["b1"]:,}</td><td>{attempt["b2"]:,}</td><td>{attempt["curves_completed"]:,}</td><td>{esc(attempt["factor_found"]) if attempt["factor_found"] else "None"}</td><td>{esc(attempt["client_id"])}</td><td>{esc(attempt["created_at"])}</td></tr>' for attempt in recent_attempts) + '</table>' if recent_attempts else '<p>No attempts yet.</p>'}
             </div>
         </div>
     </body>
@@ -284,7 +339,8 @@ async def get_composite_details_page(
 async def set_composite_priority(
     composite_id: int,
     priority: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
 ):
     """
     Set priority for a composite.
@@ -316,7 +372,8 @@ async def set_composite_priority(
 async def mark_composite_complete(
     composite_id: int,
     reason: str = "manual",
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
 ):
     """
     Mark a composite as fully factored.
@@ -350,7 +407,8 @@ async def mark_composite_complete(
 async def remove_composite(
     composite_id: int,
     reason: str = "admin_removal",
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
 ):
     """
     Remove a composite from the queue entirely.
@@ -411,7 +469,8 @@ async def get_work_assignments(
     status_filter: Optional[str] = None,
     client_id: Optional[str] = None,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
 ):
     """
     Get work assignments with optional filtering.
@@ -481,7 +540,8 @@ async def get_work_assignments(
 async def cancel_work_assignment(
     work_id: str,
     reason: str = "admin_cancel",
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
 ):
     """
     Cancel a work assignment (admin override).
@@ -519,7 +579,7 @@ async def cancel_work_assignment(
 
 
 @router.post("/admin/work/cleanup")
-async def cleanup_expired_work(db: Session = Depends(get_db)):
+async def cleanup_expired_work(db: Session = Depends(get_db), _admin: bool = Depends(verify_admin_key)):
     """
     Manually trigger cleanup of expired work assignments.
 
@@ -553,7 +613,8 @@ async def cleanup_expired_work(db: Session = Depends(get_db)):
 @router.post("/admin/composites/calculate-t-levels")
 async def calculate_t_levels_for_all_composites(
     recalculate_all: bool = False,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
 ):
     """
     Calculate and populate t-levels for all composites in the database.
@@ -627,7 +688,7 @@ async def calculate_t_levels_for_all_composites(
 
 
 @router.post("/admin/composites/recalculate-all-t-levels")
-async def recalculate_all_t_levels(db: Session = Depends(get_db)):
+async def recalculate_all_t_levels(db: Session = Depends(get_db), _admin: bool = Depends(verify_admin_key)):
     """
     Force recalculation of ALL t-levels (both target and current) for all composites.
 
@@ -641,7 +702,7 @@ async def recalculate_all_t_levels(db: Session = Depends(get_db)):
 
 
 @router.get("/admin/stats/summary")
-async def get_admin_summary(db: Session = Depends(get_db)):
+async def get_admin_summary(db: Session = Depends(get_db), _admin: bool = Depends(verify_admin_key)):
     """
     Get high-level summary statistics for admin dashboard.
 
@@ -712,11 +773,202 @@ async def get_admin_summary(db: Session = Depends(get_db)):
 # Family management endpoints removed for minimal ECM middleware
 
 
+@router.get("/admin/login", response_class=HTMLResponse)
+async def admin_login_page():
+    """
+    Admin login page - prompts for API key and redirects to dashboard.
+    """
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>ECM Admin Login</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                margin: 0;
+            }
+            .login-box {
+                background: white;
+                padding: 40px;
+                border-radius: 10px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                max-width: 400px;
+                width: 100%;
+            }
+            h1 {
+                margin-top: 0;
+                color: #667eea;
+            }
+            input {
+                width: 100%;
+                padding: 12px;
+                margin: 10px 0;
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                box-sizing: border-box;
+                font-size: 14px;
+            }
+            button {
+                width: 100%;
+                padding: 12px;
+                background: #667eea;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            button:hover {
+                background: #5a67d8;
+            }
+            .error {
+                color: #dc3545;
+                margin-top: 10px;
+                display: none;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="login-box">
+            <h1>🔧 ECM Admin Login</h1>
+            <p>Enter your admin API key to access the dashboard.</p>
+            <form id="loginForm">
+                <input type="password" id="apiKey" placeholder="Admin API Key" required autofocus>
+                <button type="submit">Login</button>
+                <div class="error" id="error">Invalid API key. Please try again.</div>
+            </form>
+        </div>
+
+        <script>
+            document.getElementById('loginForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const apiKey = document.getElementById('apiKey').value;
+                const errorDiv = document.getElementById('error');
+                errorDiv.style.display = 'none';
+
+                // Test the API key by making a request
+                try {
+                    const response = await fetch('/api/v1/admin/stats/summary', {
+                        headers: {
+                            'X-Admin-Key': apiKey
+                        }
+                    });
+
+                    if (response.ok) {
+                        // Valid key - store and redirect with key in custom header
+                        sessionStorage.setItem('admin_api_key', apiKey);
+
+                        // Create a form that will send the request with the header via fetch
+                        // Then navigate once we know it will work
+                        const dashResponse = await fetch('/api/v1/admin/dashboard', {
+                            headers: {
+                                'X-Admin-Key': apiKey
+                            }
+                        });
+
+                        if (dashResponse.ok) {
+                            // Store the HTML and navigate
+                            const html = await dashResponse.text();
+                            document.open();
+                            document.write(html);
+                            document.close();
+                            // Update URL without reload
+                            history.pushState(null, '', '/api/v1/admin/dashboard');
+                        } else {
+                            errorDiv.style.display = 'block';
+                        }
+                    } else {
+                        // Invalid key
+                        errorDiv.style.display = 'block';
+                    }
+                } catch (error) {
+                    errorDiv.textContent = 'Error connecting to server.';
+                    errorDiv.style.display = 'block';
+                }
+            });
+
+            // If already logged in, try to load dashboard
+            const storedKey = sessionStorage.getItem('admin_api_key');
+            if (storedKey) {
+                fetch('/api/v1/admin/dashboard', {
+                    headers: {
+                        'X-Admin-Key': storedKey
+                    }
+                }).then(response => {
+                    if (response.ok) {
+                        return response.text();
+                    } else {
+                        // Key invalid, stay on login page
+                        sessionStorage.removeItem('admin_api_key');
+                        throw new Error('Invalid key');
+                    }
+                }).then(html => {
+                    document.open();
+                    document.write(html);
+                    document.close();
+                    history.pushState(null, '', '/api/v1/admin/dashboard');
+                }).catch(() => {
+                    // Stay on login page
+                });
+            }
+        </script>
+    </body>
+    </html>
+    """
+
+
+async def verify_admin_key_optional(x_admin_key: str = Header(None)):
+    """
+    Optional admin key verification - returns the key if valid, None otherwise.
+    Used for pages that need to check auth but handle it in JavaScript.
+    """
+    settings = get_settings()
+    if x_admin_key and x_admin_key == settings.admin_api_key:
+        return x_admin_key
+    return None
+
 @router.get("/admin/dashboard", response_class=HTMLResponse)
-async def admin_dashboard(db: Session = Depends(get_db)):
+async def admin_dashboard(
+    db: Session = Depends(get_db),
+    x_admin_key: str = Header(None)
+):
     """
     Admin dashboard showing system status, work assignments, and management tools.
+    This endpoint allows initial page load without auth, but JavaScript checks the key.
     """
+    # Verify auth via header
+    settings = get_settings()
+    if not x_admin_key or x_admin_key != settings.admin_api_key:
+        # Return error page that redirects to login
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Unauthorized</title>
+            <script>
+                // Redirect to login if no valid session
+                if (!sessionStorage.getItem('admin_api_key')) {
+                    window.location.href = '/api/v1/admin/login';
+                } else {
+                    // Key exists but invalid - clear and redirect
+                    sessionStorage.removeItem('admin_api_key');
+                    window.location.href = '/api/v1/admin/login';
+                }
+            </script>
+        </head>
+        <body>
+            <p>Redirecting to login...</p>
+        </body>
+        </html>
+        """
+
     from ...models.composites import Composite
     from ...models.work_assignments import WorkAssignment
     from ...models.attempts import ECMAttempt
@@ -764,11 +1016,42 @@ async def admin_dashboard(db: Session = Depends(get_db)):
 
 # Simplified ECM middleware - no family tracking needed
 
+    # Helper function to escape HTML - prevent XSS
+    def esc(text):
+        return html.escape(str(text))
+
     html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <title>ECM Admin Dashboard</title>
+        <script>
+            // Check if API key exists, redirect to login if not
+            const API_KEY = sessionStorage.getItem('admin_api_key');
+            if (!API_KEY) {{
+                window.location.href = '/api/v1/admin/login';
+            }}
+
+            // Add API key to all fetch requests
+            function fetchWithAuth(url, options = {{}}) {{
+                options.headers = options.headers || {{}};
+                options.headers['X-Admin-Key'] = sessionStorage.getItem('admin_api_key');
+                return fetch(url, options).then(response => {{
+                    if (response.status === 401) {{
+                        sessionStorage.removeItem('admin_api_key');
+                        window.location.href = '/api/v1/admin/login';
+                        throw new Error('Unauthorized');
+                    }}
+                    return response;
+                }});
+            }}
+
+            // Logout function
+            function logout() {{
+                sessionStorage.removeItem('admin_api_key');
+                window.location.href = '/api/v1/admin/login';
+            }}
+        </script>
         <style>
             body {{ font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }}
             .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }}
@@ -800,8 +1083,13 @@ async def admin_dashboard(db: Session = Depends(get_db)):
     </head>
     <body>
         <div class="header">
-            <h1>🔧 ECM Coordination Dashboard</h1>
-            <p>Distributed ECM coordination middleware - work assignment and t-level progress tracking</p>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h1>🔧 ECM Coordination Dashboard</h1>
+                    <p>Distributed ECM coordination middleware - work assignment and t-level progress tracking</p>
+                </div>
+                <button onclick="logout()" class="btn" style="background: #dc3545;">Logout</button>
+            </div>
         </div>
 
         <div class="stats-grid">
@@ -886,7 +1174,7 @@ async def admin_dashboard(db: Session = Depends(get_db)):
         for work in recent_work:
             composite = work.composite
             progress_pct = (work.curves_completed / work.curves_requested * 100) if work.curves_requested > 0 else 0
-            status_class = f"status-{work.status.replace('_', '-')}"
+            status_class = f"status-{esc(work.status.replace('_', '-'))}"
 
             composite_display = f"{composite.number[:20]}..." if len(composite.number) > 20 else composite.number
             time_remaining = work.expires_at - datetime.utcnow() if work.expires_at > datetime.utcnow() else timedelta(0)
@@ -898,13 +1186,13 @@ async def admin_dashboard(db: Session = Depends(get_db)):
 
             html_content += f"""
                         <tr>
-                            <td><span class="number">{work.id[:8]}...</span></td>
-                            <td>{work.client_id}</td>
-                            <td><span class="number">{composite_display}</span> ({composite.digit_length})</td>
+                            <td><span class="number">{esc(work.id[:8])}...</span></td>
+                            <td>{esc(work.client_id)}</td>
+                            <td><span class="number">{esc(composite_display)}</span> ({composite.digit_length})</td>
                             <td>
                                 <span style="font-size: 0.9em;">📊 t{current_t:.1f}→t{target_t:.1f}</span>
                             </td>
-                            <td>{work.method.upper()}</td>
+                            <td>{esc(work.method.upper())}</td>
                             <td>B1={work.b1:,}{f', B2={work.b2:,}' if work.b2 else ''}</td>
                             <td>
                                 <div class="progress">
@@ -912,8 +1200,8 @@ async def admin_dashboard(db: Session = Depends(get_db)):
                                 </div>
                                 {work.curves_completed}/{work.curves_requested}
                             </td>
-                            <td><span class="{status_class}">{work.status}</span></td>
-                            <td>{time_str}</td>
+                            <td><span class="{status_class}">{esc(work.status)}</span></td>
+                            <td>{esc(time_str)}</td>
                         </tr>
             """
 
@@ -962,7 +1250,7 @@ async def admin_dashboard(db: Session = Depends(get_db)):
         html_content += f"""
                         <tr>
                             <td>{composite.id}</td>
-                            <td><span class="number">{composite_display}</span></td>
+                            <td><span class="number">{esc(composite_display)}</span></td>
                             <td>{composite.digit_length}</td>
                             <td>
                                 <div style="display: flex; align-items: center; gap: 10px;">
@@ -977,7 +1265,7 @@ async def admin_dashboard(db: Session = Depends(get_db)):
                             <td>
                                 <span style="font-weight: bold; color: {'#198754' if composite.priority > 0 else '#666'};">{composite.priority}</span>
                             </td>
-                            <td>{created_str}</td>
+                            <td>{esc(created_str)}</td>
                             <td>
                                 <button class="btn" onclick="viewDetails({composite.id})" style="margin-right: 5px;">Details</button>
                                 <button class="btn" onclick="removeComposite({composite.id})" style="background: #dc3545;">Remove</button>
@@ -1009,9 +1297,9 @@ async def admin_dashboard(db: Session = Depends(get_db)):
         last_seen_str = client_info.last_seen.strftime("%Y-%m-%d %H:%M") if client_info.last_seen else "Unknown"
         html_content += f"""
                         <tr>
-                            <td>{client_info.client_id}</td>
+                            <td>{esc(client_info.client_id)}</td>
                             <td>{client_info.work_count}</td>
-                            <td>{last_seen_str}</td>
+                            <td>{esc(last_seen_str)}</td>
                         </tr>
         """
 
@@ -1046,9 +1334,9 @@ async def admin_dashboard(db: Session = Depends(get_db)):
 
             html_content += f"""
                         <tr>
-                            <td><span class="number">{factor.factor}</span></td>
-                            <td><span class="number">{composite_display}</span></td>
-                            <td>{found_str}</td>
+                            <td><span class="number">{esc(factor.factor)}</span></td>
+                            <td><span class="number">{esc(composite_display)}</span></td>
+                            <td>{esc(found_str)}</td>
                         </tr>
             """
 
@@ -1091,12 +1379,39 @@ async def admin_dashboard(db: Session = Depends(get_db)):
 
         <script>
             function viewDetails(compositeId) {
-                location.href = `/api/v1/admin/composites/${compositeId}/details`;
+                const apiKey = sessionStorage.getItem('admin_api_key');
+                if (!apiKey) {
+                    window.location.href = '/api/v1/admin/login';
+                    return;
+                }
+
+                // Fetch the details page with auth header
+                fetch(`/api/v1/admin/composites/${compositeId}/details`, {
+                    headers: {
+                        'X-Admin-Key': apiKey
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Unauthorized');
+                    }
+                    return response.text();
+                })
+                .then(html => {
+                    document.open();
+                    document.write(html);
+                    document.close();
+                    history.pushState(null, '', `/api/v1/admin/composites/${compositeId}/details`);
+                })
+                .catch(() => {
+                    sessionStorage.removeItem('admin_api_key');
+                    window.location.href = '/api/v1/admin/login';
+                });
             }
 
             function removeComposite(compositeId) {
                 if (confirm('PERMANENTLY REMOVE this composite from the queue?\\n\\nThis will:\\n- Cancel any active work assignments\\n- Delete all ECM attempts and factors\\n- Remove the composite entirely\\n\\nThis action cannot be undone!')) {
-                    fetch(`/api/v1/admin/composites/${compositeId}`, {method: 'DELETE'})
+                    fetchWithAuth(`/api/v1/admin/composites/${compositeId}`, {method: 'DELETE'})
                         .then(response => response.json())
                         .then(data => {
                             if (data.status === 'removed') {
@@ -1114,7 +1429,7 @@ async def admin_dashboard(db: Session = Depends(get_db)):
 
             function cleanupExpired() {
                 if (confirm('Clean up expired work assignments?')) {
-                    fetch('/api/v1/admin/work/cleanup', {method: 'POST'})
+                    fetchWithAuth('/api/v1/admin/work/cleanup', {method: 'POST'})
                         .then(response => response.json())
                         .then(data => {
                             alert('Cleaned up ' + data.cleaned_up + ' expired assignments');
@@ -1125,7 +1440,7 @@ async def admin_dashboard(db: Session = Depends(get_db)):
 
             function calculateTLevels() {
                 if (confirm('Calculate t-levels for all composites using 4/13 * digits formula?')) {
-                    fetch('/api/v1/admin/composites/calculate-t-levels', {method: 'POST'})
+                    fetchWithAuth('/api/v1/admin/composites/calculate-t-levels', {method: 'POST'})
                         .then(response => response.json())
                         .then(data => {
                             alert(data.message || 'T-levels calculated successfully');
@@ -1139,7 +1454,7 @@ async def admin_dashboard(db: Session = Depends(get_db)):
 
             function recalculateAllTLevels() {
                 if (confirm('RECALCULATE ALL t-levels? This will replace current random t-level values with real calculations using the t-level executable.')) {
-                    fetch('/api/v1/admin/composites/recalculate-all-t-levels', {method: 'POST'})
+                    fetchWithAuth('/api/v1/admin/composites/recalculate-all-t-levels', {method: 'POST'})
                         .then(response => response.json())
                         .then(data => {
                             alert(data.message || 'All t-levels recalculated successfully');
@@ -1152,13 +1467,29 @@ async def admin_dashboard(db: Session = Depends(get_db)):
             }
 
             function refreshPage() {
-                location.reload();
+                // Reload with auth header
+                const apiKey = sessionStorage.getItem('admin_api_key');
+                if (!apiKey) {
+                    window.location.href = '/api/v1/admin/login';
+                    return;
+                }
+
+                fetchWithAuth('/api/v1/admin/dashboard')
+                    .then(response => response.text())
+                    .then(html => {
+                        document.open();
+                        document.write(html);
+                        document.close();
+                    })
+                    .catch(() => {
+                        window.location.href = '/api/v1/admin/login';
+                    });
             }
 
             // Simplified ECM coordination - focus on core functionality
 
-            // Auto-refresh every 30 seconds
-            setTimeout(() => location.reload(), 30000);
+            // Auto-refresh every 30 seconds using fetch to maintain auth
+            setTimeout(() => refreshPage(), 30000);
         </script>
     </body>
     </html>

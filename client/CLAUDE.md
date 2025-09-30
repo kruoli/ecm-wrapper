@@ -68,6 +68,21 @@ python3 ecm-wrapper.py --composite "123456789012345" --no-submit
 python3 yafu-wrapper.py --composite "123456789012345" --no-submit
 ```
 
+### Code Quality Checks
+When making code changes, always run both syntax and type checks:
+```bash
+# Basic syntax check (catches syntax errors only)
+python3 -m py_compile *.py
+
+# Type checking (catches type hint issues, undefined variables in annotations)
+python3 -m mypy --ignore-missing-imports *.py
+
+# OR use pylint for comprehensive linting
+pylint *.py
+```
+
+**Important**: `py_compile` alone is insufficient - it does not validate type hints or catch undefined names in type annotations. Always use mypy or pylint for thorough validation, especially after refactoring.
+
 ## Key Implementation Details
 
 ### Output Parsing

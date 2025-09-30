@@ -9,6 +9,7 @@ class ECMAttempt(Base, TimestampMixin):
     id = Column(Integer, primary_key=True, index=True)
     composite_id = Column(Integer, ForeignKey("composites.id"), nullable=False)
     client_id = Column(String(255), nullable=False, index=True)
+    client_ip = Column(String(45), nullable=True, index=True)  # IPv4 or IPv6
     
     # Method and parameters
     method = Column(String(50), nullable=False)  # 'ecm', 'pm1', 'pp1', 'qs', 'nfs'

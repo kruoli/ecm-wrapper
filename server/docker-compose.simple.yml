@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: ecm-postgres
+    environment:
+      POSTGRES_DB: ecm_distributed
+      POSTGRES_USER: ecm_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ecm_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecm_user -d ecm_distributed"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: ecm-api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgresql://ecm_user:${DB_PASSWORD}@postgres:5432/ecm_distributed
+      SECRET_KEY: ${SECRET_KEY}
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      T_LEVEL_BINARY_PATH: /app/bin/t-level
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ecm_network
+    restart: unless-stopped
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+networks:
+  ecm_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local

@@ -8,7 +8,7 @@ import tempfile
 import shutil
 import multiprocessing
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from base_wrapper import BaseWrapper
 from parsing_utils import parse_ecm_output, parse_ecm_output_multiple, count_ecm_steps_completed, Timeouts, ECMPatterns
@@ -128,6 +128,51 @@ def _run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optiona
 class ECMWrapper(BaseWrapper):
     def __init__(self, config_path: str):
         super().__init__(config_path)
+
+    def _log_and_store_factors(self, all_factors: List[Tuple[str, Optional[str]]],
+                               results: Dict[str, Any], composite: str, b1: int,
+                               b2: Optional[int], curves: int, method: str,
+                               program: str) -> Optional[str]:
+        """
+        Deduplicate factors, log them, and store in results dictionary.
+
+        Args:
+            all_factors: List of (factor, sigma) tuples
+            results: Results dictionary to update
+            composite: Composite number being factored
+            b1, b2, curves: ECM parameters
+            method: Method name (ecm, pm1, pp1)
+            program: Program name for logging
+
+        Returns:
+            First factor (for compatibility)
+        """
+        if not all_factors:
+            return None
+
+        # Deduplicate factors - same factor can be found by multiple curves
+        unique_factors = {}
+        for factor, sigma in all_factors:
+            if factor not in unique_factors:
+                unique_factors[factor] = sigma  # Keep first sigma found
+
+        # Log each unique factor once
+        for factor, sigma in unique_factors.items():
+            self.log_factor_found(composite, factor, b1, b2, curves,
+                                method=method, sigma=sigma, program=program)
+
+        # Store all unique factors for API submission
+        if 'factors_found' not in results:
+            results['factors_found'] = []
+        results['factors_found'].extend(unique_factors.keys())
+
+        # Set the main factor for compatibility (use first factor found)
+        main_factor = list(unique_factors.keys())[0]
+        results['factor_found'] = main_factor
+
+        self.logger.info(f"Factors found: {list(unique_factors.keys())}")
+
+        return main_factor
     
     def run_ecm(self, composite: str, b1: int, b2: Optional[int] = None,
                 curves: int = 100, sigma: Optional[int] = None,
@@ -189,39 +234,21 @@ class ECMWrapper(BaseWrapper):
                 batch_cmd.append(str(b2))
 
             try:
-                process = subprocess.Popen(
-                    batch_cmd,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True
-                )
-
-                # Send the composite number to stdin
-                process.stdin.write(composite)
-                process.stdin.close()
-
-                # Stream output live
-                output_lines = []
+                # Track progress in callback
                 batch_curves_completed = 0
-                while True:
-                    line = process.stdout.readline()
-                    if not line:
-                        break
-                    line = line.rstrip()
-                    if line:
-                        self.logger.info(f"ECM: {line}")
-                        output_lines.append(line)
 
-                        # Count completed steps for progress tracking
-                        if "Step 1 took" in line:
-                            batch_curves_completed += 1
-                            total_completed = curves_completed + batch_curves_completed
-                            if total_completed % 10 == 0:
-                                self.logger.info(f"Completed {total_completed}/{curves} curves")
+                def progress_callback(line, output_lines):
+                    nonlocal batch_curves_completed
+                    if "Step 1 took" in line:
+                        batch_curves_completed += 1
+                        total_completed = curves_completed + batch_curves_completed
+                        if total_completed % 10 == 0:
+                            self.logger.info(f"Completed {total_completed}/{curves} curves")
 
-                # Wait for process to complete
-                process.wait()
+                # Stream subprocess output
+                process, output_lines = self._stream_subprocess_output(
+                    batch_cmd, composite, "ECM", progress_callback
+                )
 
                 stdout = '\n'.join(output_lines)
                 results['raw_outputs'].append(stdout)
@@ -235,26 +262,9 @@ class ECMWrapper(BaseWrapper):
 
                     # Handle all factors found
                     program_name = f"GMP-ECM ({method.upper()})" + (" with GPU" if use_gpu else "")
+                    self._log_and_store_factors(all_factors, results, composite, b1, b2, curves, method, program_name)
 
-                    # Deduplicate factors - same factor can be found by multiple curves
-                    unique_factors = {}
-                    for factor, sigma in all_factors:
-                        if factor not in unique_factors:
-                            unique_factors[factor] = sigma  # Keep first sigma found
-
-                    # Log each unique factor once
-                    for factor, sigma in unique_factors.items():
-                        self.log_factor_found(composite, factor, b1, b2, curves, method=method, sigma=sigma, program=program_name)
-
-                    # Store all unique factors for API submission
-                    if 'factors_found' not in results:
-                        results['factors_found'] = []
-                    results['factors_found'].extend(unique_factors.keys())
-
-                    # Set the main factor for compatibility (use first factor found)
-                    main_factor = list(unique_factors.keys())[0]
-                    results['factor_found'] = main_factor
-                    self.logger.info(f"Factors found after {results['curves_completed']} curves: {list(unique_factors.keys())}")
+                    self.logger.info(f"Factors found after {results['curves_completed']} curves")
 
                     if not continue_after_factor:
                         break
@@ -323,7 +333,8 @@ class ECMWrapper(BaseWrapper):
             
             self.logger.info(f"Resuming from residue file: {residue_file}")
             stage1_factor = None  # No stage 1 run
-            actual_curves = self._extract_curve_count_from_residue_file(residue_file)
+            residue_info = self._parse_residue_file(residue_file)
+            actual_curves = residue_info['curve_count']
             
         else:
             # Determine residue file location
@@ -350,20 +361,7 @@ class ECMWrapper(BaseWrapper):
                 if stage1_factor:
                     # Log ALL unique factors found in Stage 1
                     if all_stage1_factors:
-                        # Deduplicate factors - same factor can be found by multiple curves
-                        unique_factors = {}
-                        for factor, sigma in all_stage1_factors:
-                            if factor not in unique_factors:
-                                unique_factors[factor] = sigma  # Keep first sigma found
-
-                        # Log each unique factor once
-                        for factor, sigma in unique_factors.items():
-                            self.log_factor_found(composite, factor, b1, b2, curves, method="ecm", sigma=sigma, program="GMP-ECM (ECM)")
-
-                        # Store all unique factors for API submission
-                        results['factors_found'] = list(unique_factors.keys())
-                        results['factor_found'] = stage1_factor  # Keep for compatibility
-
+                        self._log_and_store_factors(all_stage1_factors, results, composite, b1, b2, curves, "ecm", "GMP-ECM (ECM)")
                     else:
                         # Fallback to single factor logging
                         self.log_factor_found(composite, stage1_factor, b1, b2, curves, method="ecm", sigma=None, program="GMP-ECM (ECM)")
@@ -457,31 +455,13 @@ class ECMWrapper(BaseWrapper):
         if verbose:
             cmd.append('-v')
         cmd.extend(['-c', str(curves), str(b1), '0'])  # B2=0 for stage 1 only
-        
+
         try:
-            process = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True
+            # Stream subprocess output
+            process, output_lines = self._stream_subprocess_output(
+                cmd, composite, "Stage1"
             )
-            
-            process.stdin.write(composite)
-            process.stdin.close()
-            
-            output_lines = []
-            while True:
-                line = process.stdout.readline()
-                if not line:
-                    break
-                line = line.rstrip()
-                if line:
-                    self.logger.info(f"Stage1: {line}")
-                    output_lines.append(line)
-            
-            process.wait()
-            
+
             # Check for factors found in stage 1
             output = '\n'.join(output_lines)
             all_factors = parse_ecm_output_multiple(output)
@@ -506,7 +486,8 @@ class ECMWrapper(BaseWrapper):
         """Run Stage 2 with multiple CPU workers"""
 
         # Extract B1 from residue file to ensure consistency
-        actual_b1 = self._extract_b1_from_residue_file(residue_file)
+        residue_info = self._parse_residue_file(residue_file)
+        actual_b1 = residue_info['b1']
         if actual_b1 > 0 and actual_b1 != b1:
             self.logger.info(f"Using B1={actual_b1} from residue file (overriding parameter B1={b1})")
         b1_to_use = actual_b1 if actual_b1 > 0 else b1
@@ -916,9 +897,10 @@ class ECMWrapper(BaseWrapper):
             }
         
         # Extract composite number, curve count, and B1 from residue file
-        composite = self._extract_composite_from_residue_file(residue_path)
-        stage1_curves = self._extract_curve_count_from_residue_file(residue_path)
-        stage1_b1 = self._extract_b1_from_residue_file(residue_path)
+        residue_info = self._parse_residue_file(residue_path)
+        composite = residue_info['composite']
+        stage1_curves = residue_info['curve_count']
+        stage1_b1 = residue_info['b1']
         
         self.logger.info(f"Running Stage 2 on residue file: {residue_path}")
         if composite != "unknown":
@@ -971,53 +953,45 @@ class ECMWrapper(BaseWrapper):
         
         return results
 
-    def _extract_composite_from_residue_file(self, residue_path: Path) -> str:
-        """Extract composite number from ECM residue file."""
-        try:
-            with open(residue_path, 'r') as f:
-                # Read first line to extract N value
-                first_line = f.readline().strip()
-                if first_line:
-                    # Look for N=... in the structured residue format
-                    match = ECMPatterns.RESUME_N_PATTERN.search(first_line)
-                    if match:
-                        return match.group(1)
-        except Exception as e:
-            self.logger.warning(f"Could not extract composite from residue file: {e}")
-            
-        return "unknown"
+    def _parse_residue_file(self, residue_path: Path) -> Dict[str, Any]:
+        """
+        Parse ECM residue file and extract all metadata in a single pass.
 
-    def _extract_curve_count_from_residue_file(self, residue_path: Path) -> int:
-        """Extract the number of curves that were run in Stage 1 from residue file."""
+        Returns:
+            Dict with keys: composite, b1, curve_count
+        """
+        result = {
+            'composite': 'unknown',
+            'b1': 0,
+            'curve_count': 0
+        }
+
         try:
             with open(residue_path, 'r') as f:
-                # Count the number of lines (each line = one curve/residue)
-                curve_count = 0
+                first_line = f.readline().strip()
+
+                # Extract from first line
+                if first_line:
+                    n_match = ECMPatterns.RESUME_N_PATTERN.search(first_line)
+                    if n_match:
+                        result['composite'] = n_match.group(1)
+
+                    b1_match = ECMPatterns.RESUME_B1_PATTERN.search(first_line)
+                    if b1_match:
+                        result['b1'] = int(b1_match.group(1))
+
+                # Count curves (first line already consumed)
+                if first_line.startswith('METHOD=ECM'):
+                    result['curve_count'] = 1
+
                 for line in f:
-                    line = line.strip()
-                    if line and line.startswith('METHOD=ECM'):
-                        curve_count += 1
-                return curve_count
+                    if line.strip().startswith('METHOD=ECM'):
+                        result['curve_count'] += 1
+
         except Exception as e:
-            self.logger.warning(f"Could not extract curve count from residue file: {e}")
+            self.logger.warning(f"Could not parse residue file: {e}")
 
-        return 0
-
-    def _extract_b1_from_residue_file(self, residue_path: Path) -> int:
-        """Extract the B1 value that was used in Stage 1 from residue file."""
-        try:
-            with open(residue_path, 'r') as f:
-                # Read first line to extract B1 value
-                first_line = f.readline().strip()
-                if first_line:
-                    # Look for B1=... in the structured residue format
-                    match = ECMPatterns.RESUME_B1_PATTERN.search(first_line)
-                    if match:
-                        return int(match.group(1))
-        except Exception as e:
-            self.logger.warning(f"Could not extract B1 from residue file: {e}")
-
-        return 0
+        return result
 
     def _correlate_factor_to_sigma(self, factor: str, residue_path: Path) -> Optional[str]:
         """

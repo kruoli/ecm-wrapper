@@ -95,6 +95,39 @@ class YAFUPatterns:
     SIGMA_USING_FORMAT = re.compile(r'Using.*?sigma=(?:3:)?(\d+)')
 
 
+def extract_sigma_for_factor(output: str, factor: str, factor_position: Optional[int] = None) -> Optional[str]:
+    """
+    Extract sigma value associated with a factor using fallback chain.
+
+    Args:
+        output: Full program output
+        factor: Factor to find sigma for
+        factor_position: Optional position in output where factor was found
+
+    Returns:
+        Sigma string (e.g., "3:12345") or None
+    """
+    # Strategy 1: GPU format with specific factor
+    gpu_match = ECMPatterns.gpu_factor_search_pattern(factor).search(output)
+    if gpu_match and gpu_match.group(1):
+        return f"3:{gpu_match.group(1)}"
+
+    # Strategy 2: Look backwards from factor position for "Using ... sigma=" line
+    if factor_position is not None:
+        lines = output[:factor_position].split('\n')
+        for line in reversed(lines):
+            sigma_match = YAFUPatterns.SIGMA_USING_FORMAT.search(line)
+            if sigma_match:
+                return f"3:{sigma_match.group(1)}"
+
+    # Strategy 3: Global sigma parameter search
+    sigma_match = ECMPatterns.SIGMA_PARAM.search(output)
+    if sigma_match:
+        return sigma_match.group(1)
+
+    return None
+
+
 def parse_ecm_output_multiple(output: str) -> List[Tuple[str, Optional[str]]]:
     """
     Parse GMP-ECM output for multiple prime factors only.
@@ -110,10 +143,7 @@ def parse_ecm_output_multiple(output: str) -> List[Tuple[str, Optional[str]]]:
     if prime_matches:
         logger.debug(f"Found {len(prime_matches)} prime factors via PRIME_FACTOR pattern")
         for factor in prime_matches:
-            # For prime factors, we need to find the corresponding sigma
-            # Look for the GPU line that mentions this factor
-            gpu_match = ECMPatterns.gpu_factor_search_pattern(factor).search(output)
-            sigma = f"3:{gpu_match.group(1)}" if gpu_match and gpu_match.group(1) else None
+            sigma = extract_sigma_for_factor(output, factor)
             factors.append((factor, sigma))
         return factors
 
@@ -132,9 +162,7 @@ def parse_ecm_output_multiple(output: str) -> List[Tuple[str, Optional[str]]]:
         if standard_matches:
             logger.debug(f"Found {len(standard_matches)} factors via STANDARD_FACTOR pattern")
         for factor in standard_matches:
-            # Look for sigma in the output (simplified approach)
-            sigma_match = ECMPatterns.SIGMA_PARAM.search(output)
-            sigma = sigma_match.group(1) if sigma_match else None
+            sigma = extract_sigma_for_factor(output, factor)
             factors.append((factor, sigma))
 
     if factors:
@@ -162,22 +190,8 @@ def parse_ecm_output(output: str) -> Tuple[Optional[str], Optional[str]]:
     match = ECMPatterns.STANDARD_FACTOR.search(output)
     if match:
         factor = match.group(1)
-        # Look for the sigma from the "Using" line that's closest before the factor announcement
         factor_position = match.start()
-        lines = output[:factor_position].split('\n')
-
-        # Search backwards for the most recent "Using ... sigma=" line
-        sigma = None
-        for line in reversed(lines):
-            sigma_match = YAFUPatterns.SIGMA_USING_FORMAT.search(line)
-            if sigma_match:
-                sigma = f"3:{sigma_match.group(1)}"
-                break
-
-        # If no Using line found, fallback to parameter format
-        if not sigma:
-            sigma_match = ECMPatterns.SIGMA_PARAM.search(output)
-            sigma = sigma_match.group(1) if sigma_match else None
+        sigma = extract_sigma_for_factor(output, factor, factor_position)
         return factor, sigma
 
     return None, None
@@ -189,7 +203,7 @@ def parse_yafu_ecm_output(output: str) -> List[Tuple[str, Optional[str]]]:
     Returns list of (factor, sigma) tuples.
     """
     lines = output.split('\n')
-    factors = []
+    factors: List[Tuple[str, Optional[str]]] = []
 
     for line in lines:
         # Look for factor findings
@@ -223,7 +237,7 @@ def parse_yafu_auto_factors(output: str) -> List[Tuple[str, Optional[str]]]:
     """
     lines = output.split('\n')
     in_factor_section = False
-    factors = []
+    factors: List[Tuple[str, Optional[str]]] = []
 
     for line in lines:
         # Check for factor section start

@@ -44,6 +44,40 @@ def is_trivial_factor(factor: str, composite: str) -> bool:
     """Check if factor is trivial (1 or the number itself)."""
     return factor == "1" or factor == composite
 
+def verify_factor_divides(factor: str, composite: str) -> bool:
+    """
+    Verify that a factor actually divides the composite.
+
+    Args:
+        factor: Factor to verify (as string)
+        composite: The composite number (as string)
+
+    Returns:
+        True if factor divides composite evenly, False otherwise
+    """
+    if not validate_integer(factor) or not validate_integer(composite):
+        return False
+
+    # Check for trivial cases
+    if factor == "1":
+        return True  # 1 divides everything
+    if factor == composite:
+        return True  # Number divides itself
+
+    try:
+        factor_int = int(factor)
+        composite_int = int(composite)
+
+        # Check if factor is greater than composite
+        if factor_int > composite_int:
+            return False
+
+        # Check if composite is divisible by factor
+        return composite_int % factor_int == 0
+
+    except (ValueError, OverflowError):
+        return False
+
 def verify_complete_factorization(composite: str, factors: list[str]) -> bool:
     """
     Verify that the product of factors equals the composite.

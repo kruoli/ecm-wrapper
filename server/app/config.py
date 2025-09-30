@@ -31,11 +31,17 @@ class Settings(BaseSettings):
         description="Path to t-level executable binary"
     )
     
-    # Security (for future auth)
+    # Security
     secret_key: str = Field(
         default=os.getenv("SECRET_KEY", "dev-secret-key-change-in-production"),
         min_length=16,
         description="Secret key for cryptographic operations"
+    )
+
+    admin_api_key: str = Field(
+        default=os.getenv("ADMIN_API_KEY", "dev-admin-key-change-in-production"),
+        min_length=16,
+        description="API key for admin endpoints"
     )
     
     @validator("database_url")
@@ -49,6 +55,13 @@ class Settings(BaseSettings):
         if v == "dev-secret-key-change-in-production":
             import warnings
             warnings.warn("Using default secret key - change for production!", UserWarning)
+        return v
+
+    @validator("admin_api_key")
+    def validate_admin_api_key(cls, v):
+        if v == "dev-admin-key-change-in-production":
+            import warnings
+            warnings.warn("Using default admin API key - change for production!", UserWarning)
         return v
     
     class Config:

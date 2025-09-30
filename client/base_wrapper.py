@@ -331,6 +331,51 @@ class BaseWrapper:
         results['execution_time'] = time.time() - start_time
         return results
 
+    def _stream_subprocess_output(self, cmd: List[str], composite: Optional[str],
+                                   log_prefix: str, line_callback: Optional[Callable] = None) -> tuple[subprocess.Popen, List[str]]:
+        """
+        Stream subprocess output with live logging and optional per-line processing.
+
+        Args:
+            cmd: Command to execute
+            composite: Optional composite number to send to stdin
+            log_prefix: Prefix for log messages (e.g., "ECM", "Stage1")
+            line_callback: Optional function called for each line, receives (line, output_lines_so_far)
+
+        Returns:
+            Tuple of (process, output_lines)
+        """
+        process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+
+        # Send composite to stdin if provided
+        if composite:
+            process.stdin.write(composite)
+        process.stdin.close()
+
+        # Stream output
+        output_lines = []
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                break
+            line = line.rstrip()
+            if line:
+                self.logger.info(f"{log_prefix}: {line}")
+                output_lines.append(line)
+
+                # Call optional per-line callback
+                if line_callback:
+                    line_callback(line, output_lines)
+
+        process.wait()
+        return process, output_lines
+
     def get_program_version(self, program: str) -> str:
         """Get program version - to be implemented by subclasses."""
         return "unknown"

@@ -10,6 +10,11 @@ class YAFUWrapper(BaseWrapper):
         """Initialize YAFU wrapper with shared base functionality"""
         super().__init__(config_path)
 
+    def _add_yafu_threading(self, cmd: List[str]) -> None:
+        """Add threading parameter to YAFU command if configured."""
+        if 'threads' in self.config.get('programs', {}).get('yafu', {}):
+            cmd.extend(['-threads', str(self.config['programs']['yafu']['threads'])])
+
     def _build_yafu_ecm_cmd(self, method: str, b1: int, b2: Optional[int] = None,
                            curves: int = 100, composite: str = "") -> List[str]:
         """Build YAFU command for ECM/P-1/P+1 methods."""
@@ -57,10 +62,7 @@ class YAFUWrapper(BaseWrapper):
             # Force specific method: -method siqs, -method nfs, etc
             cmd.extend(['-method', method])
 
-        # Add threading if specified in config
-        if 'threads' in self.config.get('programs', {}).get('yafu', {}):
-            cmd.extend(['-threads', str(self.config['programs']['yafu']['threads'])])
-
+        self._add_yafu_threading(cmd)
         return cmd
 
     def run_yafu_ecm(self, composite: str, b1: int, b2: Optional[int] = None,
@@ -68,10 +70,7 @@ class YAFUWrapper(BaseWrapper):
         """Run YAFU in ECM/P-1/P+1 mode using unified base infrastructure."""
         # Build command with composite included
         cmd = self._build_yafu_ecm_cmd(method, b1, b2, curves, composite)
-
-        # Add threading if specified in config
-        if 'threads' in self.config.get('programs', {}).get('yafu', {}):
-            cmd.extend(['-threads', str(self.config['programs']['yafu']['threads'])])
+        self._add_yafu_threading(cmd)
 
         # Use unified subprocess execution with parsing
         results = self.run_subprocess_with_parsing(

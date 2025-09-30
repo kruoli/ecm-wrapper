@@ -26,6 +26,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"  # Expose API on host port 8000 for nginx proxy
     environment:
       # Database connection - password read from secret file at runtime
       POSTGRES_HOST: postgres
@@ -45,24 +47,6 @@ services:
       - postgres_password
       - api_secret_key
       - admin_api_key
-    restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`your-domain.com`)"
-      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
-
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf.prod:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
-    depends_on:
-      - api
-    networks:
-      - ecm_network
     restart: unless-stopped
 
 networks:

@@ -78,7 +78,7 @@ sleep 30
 
 # Check service health
 echo "🩺 Checking service health..."
-if curl -f http://localhost/health >/dev/null 2>&1; then
+if curl -f http://localhost:8000/health >/dev/null 2>&1; then
     echo "✅ API server is healthy"
 else
     echo "❌ API server health check failed"

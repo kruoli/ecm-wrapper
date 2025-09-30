@@ -10,6 +10,18 @@ DOMAIN=${2:-your-domain.com}
 
 echo "🚀 Deploying ECM Distributed Server to $ENVIRONMENT"
 
+# Detect docker-compose command (plugin vs standalone)
+if command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+elif docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+else
+    echo "❌ Error: Neither 'docker-compose' nor 'docker compose' found."
+    exit 1
+fi
+
+echo "📦 Using: $DOCKER_COMPOSE"
+
 # Check if running as root or with docker permissions
 if ! docker ps >/dev/null 2>&1; then
     echo "❌ Error: Cannot access Docker. Run with sudo or add user to docker group."
@@ -50,15 +62,15 @@ mv docker-compose.prod.tmp docker-compose.prod.yml.active
 
 # Pull latest images
 echo "📦 Pulling latest Docker images..."
-docker-compose -f docker-compose.prod.yml pull
+$DOCKER_COMPOSE -f docker-compose.prod.yml pull
 
 # Stop existing services
 echo "🛑 Stopping existing services..."
-docker-compose -f docker-compose.prod.yml.active down 2>/dev/null || true
+$DOCKER_COMPOSE -f docker-compose.prod.yml.active down 2>/dev/null || true
 
 # Build and start services
 echo "🏗️  Building and starting services..."
-docker-compose -f docker-compose.prod.yml.active up -d --build
+$DOCKER_COMPOSE -f docker-compose.prod.yml.active up -d --build
 
 # Wait for services to be healthy
 echo "⏳ Waiting for services to be ready..."
@@ -70,13 +82,13 @@ if curl -f http://localhost/health >/dev/null 2>&1; then
     echo "✅ API server is healthy"
 else
     echo "❌ API server health check failed"
-    docker-compose -f docker-compose.prod.yml logs api
+    $DOCKER_COMPOSE -f docker-compose.prod.yml.active logs api
     exit 1
 fi
 
 # Display status
 echo "📊 Service status:"
-docker-compose -f docker-compose.prod.yml.active ps
+$DOCKER_COMPOSE -f docker-compose.prod.yml.active ps
 
 echo "🎉 Deployment complete!"
 echo "📱 Dashboard: https://$DOMAIN/api/v1/dashboard/"
@@ -85,4 +97,4 @@ echo "🔍 Health Check: https://$DOMAIN/health"
 
 # Show logs
 echo "📝 Recent logs:"
-docker-compose -f docker-compose.prod.yml.active logs --tail=50
+$DOCKER_COMPOSE -f docker-compose.prod.yml.active logs --tail=50

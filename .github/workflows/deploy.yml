@@ -35,23 +35,43 @@ jobs:
 
     - name: Deploy to server
       run: |
-        ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+        ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} bash << 'ENDSSH'
           set -e
-          
-          # Navigate to deployment directory
-          cd /opt/ecm-distributed || { echo "Deployment directory not found"; exit 1; }
-          
+
+          # Create deployment directory if it doesn't exist
+          if [ ! -d "/opt/ecm-distributed" ]; then
+            echo "📁 Creating deployment directory..."
+            sudo mkdir -p /opt/ecm-distributed
+            sudo chown $USER:$USER /opt/ecm-distributed
+            cd /opt/ecm-distributed
+            git clone https://github.com/${{ github.repository }}.git .
+          else
+            echo "📂 Deployment directory exists"
+            cd /opt/ecm-distributed
+          fi
+
           # Pull latest changes
+          echo "📥 Pulling latest changes..."
           git fetch origin
           git reset --hard origin/main
-          
+
+          # Create secrets directory
+          mkdir -p server/secrets
+
+          # Write secrets from GitHub Actions
+          echo "🔐 Writing secrets..."
+          echo '${{ secrets.POSTGRES_PASSWORD }}' > server/secrets/postgres_password.txt
+          echo '${{ secrets.API_SECRET_KEY }}' > server/secrets/api_secret_key.txt
+          echo '${{ secrets.ADMIN_API_KEY }}' > server/secrets/admin_api_key.txt
+          chmod 600 server/secrets/*.txt
+
           # Set executable permissions
           chmod +x server/deploy.sh
-          
+
           # Deploy
           cd server
           ./deploy.sh ${{ github.event.inputs.environment || 'production' }} ${{ secrets.DOMAIN_NAME }}
-        EOF
+        ENDSSH
 
     - name: Verify deployment
       run: |

@@ -654,7 +654,8 @@ async def calculate_t_levels_for_all_composites(
             if composite.target_t_level is None or recalculate_all:
                 target_t = calculator.calculate_target_t_level(
                     composite.digit_length,
-                    special_form=None  # No auto-detection, projects can specify if needed
+                    special_form=None,  # No auto-detection, projects can specify if needed
+                    snfs_difficulty=composite.snfs_difficulty  # Use SNFS difficulty if available
                 )
                 composite.target_t_level = target_t
 

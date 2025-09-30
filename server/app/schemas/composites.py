@@ -13,8 +13,11 @@ class ECMWorkSummary(BaseModel):
     last_attempt: Optional[datetime]
 
 class CompositeStats(BaseModel):
-    composite: str = Field(..., description="The composite number")
+    composite: str = Field(..., description="The composite number (original form)")
+    current_composite: str = Field(..., description="Current composite being factored")
     digit_length: int = Field(..., description="Decimal digit length")
+    has_snfs_form: bool = Field(..., description="Whether number has SNFS polynomial form")
+    snfs_difficulty: Optional[int] = Field(None, description="GNFS-equivalent digit count for SNFS numbers")
     target_t_level: Optional[float] = Field(..., description="Target t-level")
     current_t_level: Optional[float] = Field(..., description="Current t-level achieved")
     priority: int = Field(..., description="Priority level")
@@ -26,7 +29,10 @@ class CompositeStats(BaseModel):
 class CompositeResponse(BaseModel):
     id: int
     number: str
+    current_composite: str
     digit_length: int
+    has_snfs_form: bool
+    snfs_difficulty: Optional[int]
     target_t_level: Optional[float]
     current_t_level: Optional[float]
     priority: int

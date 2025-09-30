@@ -3,11 +3,40 @@ from functools import lru_cache
 from pydantic import Field, validator
 from pydantic_settings import BaseSettings
 from typing import Optional
+from pathlib import Path
+
+def read_secret_file(file_path: str) -> Optional[str]:
+    """Read secret from file if it exists."""
+    try:
+        path = Path(file_path)
+        if path.exists():
+            return path.read_text().strip()
+    except Exception:
+        pass
+    return None
+
+def get_database_url() -> str:
+    """Construct database URL from environment or secret files."""
+    # Check if full DATABASE_URL is provided
+    if "DATABASE_URL" in os.environ:
+        return os.getenv("DATABASE_URL")
+
+    # Build from components (for Docker secrets)
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    db = os.getenv("POSTGRES_DB", "ecm_distributed")
+    user = os.getenv("POSTGRES_USER", "ecm_user")
+
+    # Try to read password from secret file, fallback to env var
+    password_file = os.getenv("POSTGRES_PASSWORD_FILE")
+    password = read_secret_file(password_file) if password_file else os.getenv("POSTGRES_PASSWORD", "ecm_password")
+
+    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 class Settings(BaseSettings):
     # Database
     database_url: str = Field(
-        default=os.getenv("DATABASE_URL", "postgresql://ecm_user:ecm_password@localhost:5432/ecm_distributed"),
+        default_factory=get_database_url,
         description="PostgreSQL connection string"
     )
     
@@ -33,13 +62,19 @@ class Settings(BaseSettings):
     
     # Security
     secret_key: str = Field(
-        default=os.getenv("SECRET_KEY", "dev-secret-key-change-in-production"),
+        default_factory=lambda: (
+            read_secret_file(os.getenv("SECRET_KEY_FILE")) if os.getenv("SECRET_KEY_FILE")
+            else os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
+        ),
         min_length=16,
         description="Secret key for cryptographic operations"
     )
 
     admin_api_key: str = Field(
-        default=os.getenv("ADMIN_API_KEY", "dev-admin-key-change-in-production"),
+        default_factory=lambda: (
+            read_secret_file(os.getenv("ADMIN_API_KEY_FILE")) if os.getenv("ADMIN_API_KEY_FILE")
+            else os.getenv("ADMIN_API_KEY", "dev-admin-key-change-in-production")
+        ),
         min_length=16,
         description="API key for admin endpoints"
     )

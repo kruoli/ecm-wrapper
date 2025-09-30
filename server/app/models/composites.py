@@ -5,8 +5,13 @@ class Composite(Base, TimestampMixin):
     __tablename__ = "composites"
 
     id = Column(Integer, primary_key=True, index=True)
-    number = Column(Text, nullable=False, unique=True)  # Store as string for arbitrary precision
+    number = Column(Text, nullable=False, unique=True)  # Original mathematical form (e.g., "2^1223-1")
+    current_composite = Column(Text, nullable=False)  # Current composite being factored (gets smaller as we find factors)
     digit_length = Column(Integer, nullable=False, index=True)
+
+    # SNFS tracking
+    has_snfs_form = Column(Boolean, default=False, nullable=False)  # Whether number has SNFS polynomial form
+    snfs_difficulty = Column(Integer, nullable=True)  # GNFS-equivalent digit count for SNFS numbers
 
     # Status fields
     is_prime = Column(Boolean, default=None, nullable=True)  # NULL until determined

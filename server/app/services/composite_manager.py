@@ -387,7 +387,9 @@ class CompositeManager:
 
         composite = Composite(
             number=number,
-            digit_length=digit_length
+            current_composite=number,  # Initially, current_composite equals number
+            digit_length=digit_length,
+            has_snfs_form=False  # Default to False, can be updated later
         )
 
         db.add(composite)

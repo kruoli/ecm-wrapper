@@ -32,10 +32,21 @@ if [ ! -f secrets/api_secret_key.txt ]; then
     chmod 600 secrets/api_secret_key.txt
 fi
 
-# Update domain in nginx config
+# Create SSL directory and generate self-signed cert if needed
+mkdir -p ssl
+if [ ! -f ssl/cert.pem ] || [ ! -f ssl/key.pem ]; then
+    echo "🔐 Generating self-signed SSL certificate..."
+    echo "⚠️  For production, replace with real certificates (Let's Encrypt recommended)"
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout ssl/key.pem -out ssl/cert.pem \
+        -subj "/C=US/ST=State/L=City/O=Organization/CN=$DOMAIN"
+fi
+
+# Update domain in nginx config (create temp file to avoid modifying source)
 echo "🌐 Configuring domain: $DOMAIN"
-sed -i "s/your-domain.com/$DOMAIN/g" nginx.conf
-sed -i "s/your-domain.com/$DOMAIN/g" docker-compose.prod.yml
+sed "s/your-domain.com/$DOMAIN/g" nginx.conf > nginx.conf.prod
+sed "s/your-domain.com/$DOMAIN/g" docker-compose.prod.yml > docker-compose.prod.tmp
+mv docker-compose.prod.tmp docker-compose.prod.yml.active
 
 # Pull latest images
 echo "📦 Pulling latest Docker images..."
@@ -43,11 +54,11 @@ docker-compose -f docker-compose.prod.yml pull
 
 # Stop existing services
 echo "🛑 Stopping existing services..."
-docker-compose -f docker-compose.prod.yml down
+docker-compose -f docker-compose.prod.yml.active down 2>/dev/null || true
 
 # Build and start services
 echo "🏗️  Building and starting services..."
-docker-compose -f docker-compose.prod.yml up -d --build
+docker-compose -f docker-compose.prod.yml.active up -d --build
 
 # Wait for services to be healthy
 echo "⏳ Waiting for services to be ready..."
@@ -65,7 +76,7 @@ fi
 
 # Display status
 echo "📊 Service status:"
-docker-compose -f docker-compose.prod.yml ps
+docker-compose -f docker-compose.prod.yml.active ps
 
 echo "🎉 Deployment complete!"
 echo "📱 Dashboard: https://$DOMAIN/api/v1/dashboard/"
@@ -74,4 +85,4 @@ echo "🔍 Health Check: https://$DOMAIN/health"
 
 # Show logs
 echo "📝 Recent logs:"
-docker-compose -f docker-compose.prod.yml logs --tail=50
+docker-compose -f docker-compose.prod.yml.active logs --tail=50

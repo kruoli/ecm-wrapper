@@ -51,7 +51,9 @@ class ECMParameterDecision:
         # Calculate or update target t-level if not set
         if composite.target_t_level is None:
             target_t = self.t_level_calc.calculate_target_t_level(
-                composite.digit_length, special_form=None  # No auto-detection for simplified system
+                composite.digit_length,
+                special_form=None,  # No auto-detection for simplified system
+                snfs_difficulty=composite.snfs_difficulty  # Use SNFS difficulty if available
             )
             composite.target_t_level = target_t
 

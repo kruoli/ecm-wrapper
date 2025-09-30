@@ -33,25 +33,33 @@ class TLevelCalculator:
             return False
 
     def calculate_target_t_level(self, digit_length: int,
-                                special_form: Optional[str] = None) -> float:
+                                special_form: Optional[str] = None,
+                                snfs_difficulty: Optional[int] = None) -> float:
         """
         Calculate target t-level for a composite based on its size and form.
 
-        Uses the standard formula: target_t = 4/13 * digits
-        With SNFS discount for special forms.
+        Uses the standard formula: target_t = 4/13 * effective_digits
+        Where effective_digits = min(digit_length, snfs_difficulty) if snfs_difficulty is set.
 
         Args:
-            digit_length: Number of decimal digits in the composite
-            special_form: Optional special form type ('fermat', 'mersenne', etc.)
+            digit_length: Number of decimal digits in the current composite
+            special_form: Optional special form type ('fermat', 'mersenne', etc.) - deprecated
+            snfs_difficulty: GNFS-equivalent digit count for SNFS numbers
 
         Returns:
             Target t-level as float
         """
-        # Base formula: 4/13 * digits
-        base_target = (4.0 / 13.0) * digit_length
+        # Use the easier of actual size or SNFS difficulty
+        effective_digits = digit_length
+        if snfs_difficulty is not None:
+            effective_digits = min(digit_length, snfs_difficulty)
+            logger.info(f"Using SNFS difficulty: min({digit_length}, {snfs_difficulty}) = {effective_digits} digits")
 
-        # Apply SNFS discount for special forms
-        if special_form:
+        # Base formula: 4/13 * effective_digits
+        base_target = (4.0 / 13.0) * effective_digits
+
+        # Apply SNFS discount for special forms (deprecated - prefer snfs_difficulty)
+        if special_form and snfs_difficulty is None:
             discount = self._get_snfs_discount(special_form, digit_length)
             target_t = base_target * (1.0 - discount)
             logger.info(f"Applied SNFS discount of {discount*100:.1f}% for {special_form} form")
@@ -61,7 +69,7 @@ class TLevelCalculator:
         # Reasonable bounds
         target_t = max(10.0, min(target_t, 85.0))
 
-        logger.info(f"Target t-level for {digit_length}-digit number: t{target_t:.1f}")
+        logger.info(f"Target t-level for {effective_digits}-digit number: t{target_t:.1f}")
         return target_t
 
     def _get_snfs_discount(self, special_form: str, digit_length: int) -> float:

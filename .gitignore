@@ -77,6 +77,12 @@ gmp-ecm
 *.sqlite
 *.sqlite3
 
+# Production deployment generated files
+server/secrets/
+server/ssl/
+server/nginx.conf.prod
+server/docker-compose.prod.yml.active
+
 # Archives
 *.zip
 *.tar.gz

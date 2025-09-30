@@ -70,17 +70,36 @@ def upgrade():
     op.create_table('ecm_attempts',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('composite_id', sa.Integer(), nullable=False),
-    sa.Column('client_id', sa.String(), nullable=False),
-    sa.Column('method', sa.String(), nullable=False),
-    sa.Column('curves_completed', sa.Integer(), nullable=False),
+    sa.Column('client_id', sa.String(255), nullable=False),
+    sa.Column('client_ip', sa.String(45), nullable=True),
+    sa.Column('method', sa.String(50), nullable=False),
     sa.Column('b1', sa.BigInteger(), nullable=False),
     sa.Column('b2', sa.BigInteger(), nullable=True),
     sa.Column('sigma', sa.BigInteger(), nullable=True),
+    sa.Column('curves_requested', sa.Integer(), nullable=False),
+    sa.Column('curves_completed', sa.Integer(), nullable=False),
+    sa.Column('work_hash', sa.String(64), nullable=True),
+    sa.Column('factor_found', sa.Text(), nullable=True),
+    sa.Column('execution_time_seconds', sa.Float(), nullable=True),
+    sa.Column('program', sa.String(50), nullable=False),
+    sa.Column('program_version', sa.String(50), nullable=True),
+    sa.Column('status', sa.String(20), nullable=False),
+    sa.Column('raw_output', sa.Text(), nullable=True),
+    sa.Column('assigned_at', sa.DateTime(), nullable=True),
+    sa.Column('started_at', sa.DateTime(), nullable=True),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
     sa.ForeignKeyConstraint(['composite_id'], ['composites.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('work_hash')
     )
+    op.create_index('ix_ecm_attempts_client_id', 'ecm_attempts', ['client_id'], unique=False)
+    op.create_index('ix_ecm_attempts_client_ip', 'ecm_attempts', ['client_ip'], unique=False)
     op.create_index('ix_ecm_attempts_composite_id', 'ecm_attempts', ['composite_id'], unique=False)
+    op.create_index('ix_ecm_attempts_composite_method', 'ecm_attempts', ['composite_id', 'method'], unique=False)
+    op.create_index('ix_ecm_attempts_client_status', 'ecm_attempts', ['client_id', 'status'], unique=False)
+    op.create_index('ix_ecm_attempts_factor_found', 'ecm_attempts', ['factor_found'], unique=False)
+    op.create_index('ix_ecm_attempts_work_hash', 'ecm_attempts', ['work_hash'], unique=False)
 
     # Create factors table
     op.create_table('factors',
@@ -122,7 +141,13 @@ def downgrade():
     op.drop_table('work_assignments')
     op.drop_index('ix_factors_composite_id', table_name='factors')
     op.drop_table('factors')
+    op.drop_index('ix_ecm_attempts_work_hash', table_name='ecm_attempts')
+    op.drop_index('ix_ecm_attempts_factor_found', table_name='ecm_attempts')
+    op.drop_index('ix_ecm_attempts_client_status', table_name='ecm_attempts')
+    op.drop_index('ix_ecm_attempts_composite_method', table_name='ecm_attempts')
     op.drop_index('ix_ecm_attempts_composite_id', table_name='ecm_attempts')
+    op.drop_index('ix_ecm_attempts_client_ip', table_name='ecm_attempts')
+    op.drop_index('ix_ecm_attempts_client_id', table_name='ecm_attempts')
     op.drop_table('ecm_attempts')
     op.drop_table('clients')
     op.drop_index('ix_composites_target_t_level', table_name='composites')

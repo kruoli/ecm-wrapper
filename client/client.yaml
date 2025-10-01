@@ -1,10 +1,10 @@
 api:
-  endpoint: http://localhost:8000/api/v1
+  endpoint: https://ecm.kyleaskine.com/api/v1
   retry_attempts: 3
   timeout: 30
 client:
-  description: Ryzen 9 9800X3D - 8 cores
-  id: kyleaskine-pcv2
+  username: KyleAskine
+  cpu_name: PC_V2
 execution:
   mode: single
   output_dir: data/outputs

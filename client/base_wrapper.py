@@ -25,7 +25,10 @@ class BaseWrapper:
             self.config = yaml.safe_load(f)
 
         self.setup_logging()
-        self.client_id = self.config['client']['id']
+        # Construct client_id from username and cpu_name
+        username = self.config['client']['username']
+        cpu_name = self.config['client']['cpu_name']
+        self.client_id = f"{username}-{cpu_name}"
         self.api_endpoint = self.config['api']['endpoint']
 
     def _validate_working_directory(self):

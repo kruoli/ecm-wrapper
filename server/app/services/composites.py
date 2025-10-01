@@ -26,6 +26,7 @@ class CompositeService:
 
         composite = Composite(
             number=number,
+            current_composite=number,  # Initially same as number until factors are found
             digit_length=digit_length
         )
         

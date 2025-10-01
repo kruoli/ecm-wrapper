@@ -15,9 +15,14 @@ class CompositeService:
         # Validate the number string
         if not validate_integer(number):
             raise ValueError(f"Invalid number format: {number}")
-        
-        # Check if composite already exists
-        existing = db.query(Composite).filter(Composite.number == number).first()
+
+        # Check if composite already exists - match by either number or current_composite
+        # This handles both:
+        # 1. number = "2^1223-1", current_composite = "123456..." (uploaded via admin)
+        # 2. number = "123456...", current_composite = "123456..." (submitted by client)
+        existing = db.query(Composite).filter(
+            (Composite.number == number) | (Composite.current_composite == number)
+        ).first()
         if existing:
             return existing, False
         

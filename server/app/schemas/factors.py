@@ -19,6 +19,7 @@ class FactorWithComposite(BaseModel):
 
     id: int
     composite_id: int
+    number: str = Field(..., description="Original number or mathematical form (e.g., '2^1223-1')")
     composite_number: str = Field(..., description="The composite number that was factored")
     factor: str = Field(..., description="The factor value")
     is_prime: Optional[bool] = Field(None, description="Whether factor is prime (if tested)")

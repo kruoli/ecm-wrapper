@@ -38,7 +38,8 @@ async def get_latest_factors(
         Factor.is_prime,
         Factor.found_by_attempt_id,
         Factor.created_at,
-        Composite.number.label('composite_number'),
+        Composite.number.label('number'),
+        Composite.current_composite.label('composite_number'),
         ECMAttempt.client_id,
         ECMAttempt.method
     ).join(
@@ -71,6 +72,7 @@ async def get_latest_factors(
         FactorWithComposite(
             id=r.id,
             composite_id=r.composite_id,
+            number=r.number,
             composite_number=r.composite_number,
             factor=r.factor,
             is_prime=r.is_prime,

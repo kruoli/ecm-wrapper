@@ -365,6 +365,7 @@ class CompositeManager:
             'composite': {
                 'id': composite.id,
                 'number': composite.number,
+                'current_composite': composite.current_composite,
                 'digit_length': composite.digit_length,
                 'target_t_level': composite.target_t_level,
                 'current_t_level': composite.current_t_level,

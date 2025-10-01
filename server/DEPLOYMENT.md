@@ -1,6 +1,8 @@
 # ECM Coordination Server - Deployment Guide
 
-## Quick Start with Docker (Recommended)
+> **For Production Deployment**: See [../PRODUCTION_DEPLOY.md](../PRODUCTION_DEPLOY.md) for automated GitHub Actions deployment to Digital Ocean.
+
+## Quick Start with Docker (Recommended - Local/Development)
 
 ### Prerequisites
 - Docker and Docker Compose installed

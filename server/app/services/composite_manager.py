@@ -10,6 +10,7 @@ from pathlib import Path
 from ..models.composites import Composite
 from ..models.attempts import ECMAttempt
 from ..models.work_assignments import WorkAssignment
+from ..models.projects import Project, ProjectComposite
 from ..utils.number_utils import calculate_digit_length, validate_integer
 
 logger = logging.getLogger(__name__)
@@ -80,9 +81,36 @@ class CompositeLoader:
                 except ValueError:
                     composite_data['priority'] = 0
 
+            # Handle specific SNFS and composite fields with proper type conversion
+            if 'current_composite' in row and row['current_composite']:
+                composite_data['current_composite'] = (
+                    CompositeLoader._extract_number(row['current_composite'])
+                )
+
+            if 'has_snfs_form' in row and row['has_snfs_form']:
+                value = (
+                    row['has_snfs_form'].lower()
+                    if isinstance(row['has_snfs_form'], str)
+                    else str(row['has_snfs_form'])
+                )
+                composite_data['has_snfs_form'] = value in ('true', '1', 'yes', 't', 'y')
+
+            if 'snfs_difficulty' in row and row['snfs_difficulty']:
+                try:
+                    composite_data['snfs_difficulty'] = int(row['snfs_difficulty'])
+                except ValueError:
+                    logger.warning(
+                        "Invalid snfs_difficulty at row %s: %s",
+                        row_num, row['snfs_difficulty']
+                    )
+
             # Add any other metadata
+            excluded_keys = [
+                number_column, priority_column, 'current_composite',
+                'has_snfs_form', 'snfs_difficulty'
+            ]
             for key, value in row.items():
-                if key not in [number_column, priority_column]:
+                if key not in excluded_keys:
                     composite_data[key] = value
 
             numbers.append(composite_data)
@@ -137,8 +165,14 @@ class CompositeManager:
     def __init__(self):
         self.loader = CompositeLoader()
 
-    def bulk_load_composites(self, db: Session, data_source: Union[str, List[str], List[Dict[str, Any]]],
-                           source_type: str = 'auto', default_priority: int = 0) -> Dict[str, Any]:
+    def bulk_load_composites(
+        self,
+        db: Session,
+        data_source: Union[str, List[str], List[Dict[str, Any]]],
+        source_type: str = 'auto',
+        default_priority: int = 0,
+        project_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Bulk load composites from various sources.
 
@@ -147,17 +181,39 @@ class CompositeManager:
             data_source: Data to load (file path, list of numbers, or list of dicts)
             source_type: 'file', 'csv', 'list', or 'auto'
             default_priority: Default priority for new composites
+            project_name: Optional project name to associate composites with
 
         Returns:
             Dictionary with loading statistics
         """
+        logger.info(
+            "bulk_load_composites called: source_type=%s, project_name=%s",
+            source_type, project_name
+        )
+
         stats = {
             'total_processed': 0,
             'new_composites': 0,
             'existing_composites': 0,
             'invalid_numbers': 0,
-            'errors': []
+            'errors': [],
+            'project_created': False,
+            'composites_added_to_project': 0,
+            'composites_already_in_project': 0
         }
+
+        # Get or create project if specified
+        project = None
+        if project_name:
+            project, created = self.get_or_create_project(db, project_name)
+            stats['project_created'] = created
+            stats['project_name'] = project_name
+            logger.info(
+                "Project '%s' %s (ID: %s)",
+                project_name,
+                "created" if created else "already exists",
+                project.id
+            )
 
         try:
             # Determine data type and load numbers
@@ -177,24 +233,54 @@ class CompositeManager:
                 raise ValueError(f"Unknown source type: {source_type}")
 
             stats['total_processed'] = len(numbers_data)
+            logger.info("Processing %d numbers from source", len(numbers_data))
 
             # Process each number
             for item in numbers_data:
                 try:
                     number = item['number']
-                    priority = item.get('priority', default_priority)
+                    current_composite = item.get('current_composite', None)
+                    has_snfs_form = item.get('has_snfs_form', False)
+                    snfs_difficulty = item.get('snfs_difficulty', None)
 
-                    composite, created = self._get_or_create_composite(db, number)
+                    composite, created = self._get_or_create_composite(
+                        db, number,
+                        current_composite=current_composite,
+                        has_snfs_form=has_snfs_form,
+                        snfs_difficulty=snfs_difficulty
+                    )
 
                     if created:
                         stats['new_composites'] += 1
-                        logger.info(f"Added new composite: {number} ({composite.digit_length} digits)")
+                        logger.info(
+                            "Created new composite: %s (%s digits) - ID: %s",
+                            number[:20] + "..." if len(number) > 20 else number,
+                            composite.digit_length,
+                            composite.id
+                        )
                     else:
                         stats['existing_composites'] += 1
+                        logger.info(
+                            "Found existing composite: %s - ID: %s",
+                            number[:20] + "..." if len(number) > 20 else number,
+                            composite.id
+                        )
+
+                    # Associate with project if specified
+                    if project:
+                        _, association_created = self.add_composite_to_project(
+                            db, composite.id, project.id, default_priority
+                        )
+                        if association_created:
+                            stats['composites_added_to_project'] += 1
+                        else:
+                            stats['composites_already_in_project'] += 1
 
                 except Exception as e:
                     stats['invalid_numbers'] += 1
-                    stats['errors'].append(f"Error processing {item.get('number', 'unknown')}: {str(e)}")
+                    error_msg = f"Error processing {item.get('number', 'unknown')[:50]}...: {str(e)}"
+                    stats['errors'].append(error_msg)
+                    logger.error(error_msg)
 
         except Exception as e:
             stats['errors'].append(f"Fatal error during bulk load: {str(e)}")
@@ -208,7 +294,7 @@ class CompositeManager:
         # Composite statistics
         total_composites = db.query(Composite).count()
         unfactored_composites = db.query(Composite).filter(
-            Composite.is_fully_factored == False
+            not Composite.is_fully_factored
         ).count()
 
         # Work assignment statistics
@@ -225,7 +311,7 @@ class CompositeManager:
             func.floor(Composite.digit_length / 10) * 10,
             func.count()
         ).filter(
-            Composite.is_fully_factored == False
+            not Composite.is_fully_factored
         ).group_by(
             func.floor(Composite.digit_length / 10)
         ).all()
@@ -372,24 +458,102 @@ class CompositeManager:
         else:
             raise ValueError("Unknown data source type")
 
-    def _get_or_create_composite(self, db: Session, number: str) -> Tuple[Composite, bool]:
-        """Get existing composite or create new one."""
-        if not validate_integer(number):
-            raise ValueError(f"Invalid number format: {number}")
+    def get_or_create_project(
+        self, db: Session, project_name: str, description: Optional[str] = None
+    ) -> Tuple[Project, bool]:
+        """
+        Get existing project or create new one.
 
-        # Check if composite already exists
+        Args:
+            db: Database session
+            project_name: Unique project name
+            description: Optional project description
+
+        Returns:
+            Tuple of (Project, created_flag)
+        """
+        existing = db.query(Project).filter(Project.name == project_name).first()
+        if existing:
+            return existing, False
+
+        project = Project(name=project_name, description=description)
+        db.add(project)
+        db.commit()
+        db.refresh(project)
+
+        logger.info("Created new project: %s", project_name)
+        return project, True
+
+    def add_composite_to_project(
+        self,
+        db: Session,
+        composite_id: int,
+        project_id: int,
+        priority: int = 0
+    ) -> Tuple[ProjectComposite, bool]:
+        """
+        Associate a composite with a project.
+
+        Args:
+            db: Database session
+            composite_id: ID of the composite
+            project_id: ID of the project
+            priority: Priority within this project (0-10 scale)
+
+        Returns:
+            Tuple of (ProjectComposite, created_flag)
+        """
+        # Check if association already exists
+        existing = db.query(ProjectComposite).filter(
+            and_(
+                ProjectComposite.composite_id == composite_id,
+                ProjectComposite.project_id == project_id
+            )
+        ).first()
+
+        if existing:
+            return existing, False
+
+        # Create new association
+        project_composite = ProjectComposite(
+            project_id=project_id,
+            composite_id=composite_id,
+            priority=priority
+        )
+
+        db.add(project_composite)
+        db.commit()
+        db.refresh(project_composite)
+
+        return project_composite, True
+
+    def _get_or_create_composite(self, db: Session, number: str,
+                                  current_composite: Optional[str] = None,
+                                  has_snfs_form: bool = False,
+                                  snfs_difficulty: Optional[int] = None) -> Tuple[Composite, bool]:
+        """Get existing composite or create new one."""
+        # Check if composite already exists (by number, which can be a formula)
         existing = db.query(Composite).filter(Composite.number == number).first()
         if existing:
             return existing, False
 
         # Create new composite
-        digit_length = calculate_digit_length(number)
+        # If current_composite is not provided, default to the original number
+        if current_composite is None:
+            current_composite = number
+
+        # Validate current_composite is an integer (not the number field!)
+        if not validate_integer(current_composite):
+            raise ValueError(f"Invalid current_composite format: {current_composite}")
+
+        digit_length = calculate_digit_length(current_composite)
 
         composite = Composite(
             number=number,
-            current_composite=number,  # Initially, current_composite equals number
+            current_composite=current_composite,
             digit_length=digit_length,
-            has_snfs_form=False  # Default to False, can be updated later
+            has_snfs_form=has_snfs_form,
+            snfs_difficulty=snfs_difficulty
         )
 
         db.add(composite)

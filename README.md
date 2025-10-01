@@ -64,10 +64,13 @@ ecm-wrapper/
 
 ### Server
 - **Work Coordination**: Assign ECM work to distributed clients
-- **T-Level Tracking**: Monitor progress toward factorization goals
+- **T-Level Tracking**: Monitor progress toward factorization goals with SNFS difficulty support
+- **SNFS Support**: Track special number form status and GNFS-equivalent difficulty
+- **Number Tracking**: Maintain link between original number form and current composite as factors are found
 - **Admin Dashboard**: Web-based management interface with secure login
 - **API Security**: Admin endpoints protected by API key authentication
 - **REST API**: Full OpenAPI documentation at `/docs`
+- **Automated Deployment**: GitHub Actions integration for production deployment
 
 ### Client
 - **GMP-ECM Support**: Run elliptic curve method factorization
@@ -77,7 +80,8 @@ ecm-wrapper/
 
 ## Documentation
 
-- **Server Deployment**: See [server/DEPLOYMENT.md](server/DEPLOYMENT.md)
+- **Production Deployment**: See [PRODUCTION_DEPLOY.md](PRODUCTION_DEPLOY.md) for automated deployment
+- **Local Server Setup**: See [server/DEPLOYMENT.md](server/DEPLOYMENT.md)
 - **Client Usage**: See [client/CLAUDE.md](client/CLAUDE.md)
 - **API Documentation**: Available at `/docs` when server is running
 

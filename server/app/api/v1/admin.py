@@ -14,6 +14,12 @@ from ...services.work_assignment import WorkAssignmentService
 # Removed family-related services for minimal ECM middleware
 from ...config import get_settings
 from ...dependencies import verify_admin_key
+from ...schemas.composites import (
+    BulkCompositeRequest,
+    ProjectCreate,
+    ProjectResponse,
+    ProjectStats
+)
 
 router = APIRouter()
 settings = get_settings()
@@ -33,6 +39,7 @@ async def upload_composites(
     default_priority: int = Form(0),
     number_column: str = Form("number"),
     priority_column: Optional[str] = Form(None),
+    project_name: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     _admin: bool = Depends(verify_admin_key)
 ):
@@ -41,12 +48,20 @@ async def upload_composites(
 
     Supports text files (one number per line) and CSV files with headers.
 
+    CSV files can include these columns:
+    - number (required): Original number or mathematical form
+    - current_composite (optional): Current composite being factored
+    - has_snfs_form (optional): Boolean (true/false/1/0/yes/no)
+    - snfs_difficulty (optional): GNFS-equivalent difficulty (integer)
+    - priority (optional): Integer priority level
+
     Args:
         file: Uploaded file containing numbers
         source_type: Type of file ('text', 'csv', or 'auto' to detect)
         default_priority: Default priority for new composites
         number_column: Column name for numbers in CSV files
         priority_column: Optional column name for priorities in CSV
+        project_name: Optional project name to associate composites with
         db: Database session
 
     Returns:
@@ -66,13 +81,19 @@ async def upload_composites(
         # Process based on file type
         if source_type == "csv":
             stats = composite_manager.bulk_load_composites(
-                db, content_str, source_type="csv", default_priority=default_priority
+                db, content_str,
+                source_type="csv",
+                default_priority=default_priority,
+                project_name=project_name
             )
         else:
             # Treat as text file - extract numbers from content
             lines = content_str.strip().split('\n')
             stats = composite_manager.bulk_load_composites(
-                db, lines, source_type="list", default_priority=default_priority
+                db, lines,
+                source_type="list",
+                default_priority=default_priority,
+                project_name=project_name
             )
 
         return {
@@ -93,6 +114,7 @@ async def upload_composites(
 async def bulk_add_composites(
     numbers: List[str],
     default_priority: int = 0,
+    project_name: Optional[str] = None,
     db: Session = Depends(get_db),
     _admin: bool = Depends(verify_admin_key)
 ):
@@ -102,6 +124,7 @@ async def bulk_add_composites(
     Args:
         numbers: List of number strings
         default_priority: Default priority for new composites
+        project_name: Optional project name to associate composites with
         db: Database session
 
     Returns:
@@ -109,7 +132,10 @@ async def bulk_add_composites(
     """
     try:
         stats = composite_manager.bulk_load_composites(
-            db, numbers, source_type="list", default_priority=default_priority
+            db, numbers,
+            source_type="list",
+            default_priority=default_priority,
+            project_name=project_name
         )
 
         return {
@@ -122,6 +148,194 @@ async def bulk_add_composites(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error processing numbers: {str(e)}"
         )
+
+
+@router.post("/admin/composites/bulk-structured")
+async def bulk_add_composites_structured(
+    request: BulkCompositeRequest,
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
+):
+    """
+    Add composites with full metadata including SNFS fields.
+
+    Supports:
+    - number: Original number or mathematical form
+    - current_composite: Current composite being factored (optional)
+    - has_snfs_form: Has SNFS polynomial form (default: false)
+    - snfs_difficulty: GNFS-equivalent digit count (optional)
+    - priority: Priority level (default: 0)
+
+    Args:
+        request: Structured composite data with metadata
+        db: Database session
+
+    Returns:
+        Addition statistics
+    """
+    try:
+        logger.info("Bulk structured upload: %d composites requested", len(request.composites))
+
+        # Convert Pydantic models to dictionaries for the composite manager
+        composites_data = [
+            {
+                'number': c.number,
+                'current_composite': c.current_composite,
+                'has_snfs_form': c.has_snfs_form,
+                'snfs_difficulty': c.snfs_difficulty,
+                'priority': c.priority if c.priority is not None else request.default_priority
+            }
+            for c in request.composites
+        ]
+
+        logger.info("Converted to %d composite data items", len(composites_data))
+
+        stats = composite_manager.bulk_load_composites(
+            db, composites_data,
+            source_type="list",
+            default_priority=request.default_priority,
+            project_name=request.project_name
+        )
+
+        logger.info("Bulk load complete: %s", stats)
+
+        return {
+            "input_count": len(request.composites),
+            **stats
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error processing composites: {str(e)}"
+        )
+
+
+# Project Management Endpoints
+
+@router.post("/admin/projects", response_model=ProjectResponse)
+async def create_project(
+    project: ProjectCreate,
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
+):
+    """
+    Create a new project.
+
+    Args:
+        project: Project creation data
+        db: Database session
+
+    Returns:
+        Created project details
+    """
+    from ...models.projects import Project
+
+    # Check if project already exists
+    existing = db.query(Project).filter(Project.name == project.name).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Project '{project.name}' already exists"
+        )
+
+    new_project = Project(
+        name=project.name,
+        description=project.description
+    )
+    db.add(new_project)
+    db.commit()
+    db.refresh(new_project)
+
+    return new_project
+
+
+@router.delete("/admin/projects/by-name/{project_name}")
+async def delete_project_by_name(
+    project_name: str,
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
+):
+    """
+    Delete a project by name and its composite associations (ADMIN).
+
+    Note: This does NOT delete the composites themselves, only the
+    project-composite associations.
+
+    Args:
+        project_name: Project name
+        db: Database session
+
+    Returns:
+        Deletion confirmation
+    """
+    from ...models.projects import Project, ProjectComposite
+
+    project = db.query(Project).filter(Project.name == project_name).first()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project '{project_name}' not found"
+        )
+
+    # Delete project-composite associations
+    db.query(ProjectComposite).filter(
+        ProjectComposite.project_id == project.id
+    ).delete()
+
+    # Delete project
+    db.delete(project)
+    db.commit()
+
+    return {
+        "message": f"Project '{project.name}' deleted successfully",
+        "project_id": project.id,
+        "project_name": project.name
+    }
+
+
+@router.delete("/admin/projects/{project_id}")
+async def delete_project_by_id(
+    project_id: int,
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
+):
+    """
+    Delete a project by ID and its composite associations (ADMIN).
+
+    Note: This does NOT delete the composites themselves, only the
+    project-composite associations.
+
+    Args:
+        project_id: Project ID
+        db: Database session
+
+    Returns:
+        Deletion confirmation
+    """
+    from ...models.projects import Project, ProjectComposite
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {project_id} not found"
+        )
+
+    # Delete project-composite associations
+    db.query(ProjectComposite).filter(
+        ProjectComposite.project_id == project_id
+    ).delete()
+
+    # Delete project
+    db.delete(project)
+    db.commit()
+
+    return {
+        "message": f"Project '{project.name}' deleted successfully",
+        "project_id": project_id,
+        "project_name": project.name
+    }
 
 
 @router.get("/admin/composites/status")
@@ -723,7 +937,9 @@ async def get_admin_summary(db: Session = Depends(get_db), _admin: bool = Depend
 
     # Basic counts
     total_composites = db.query(Composite).count()
-    factored_composites = db.query(Composite).filter(Composite.is_fully_factored == True).count()
+    factored_composites = db.query(Composite).filter(
+        Composite.is_fully_factored
+    ).count()
     active_work = db.query(WorkAssignment).filter(
         WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
     ).count()
@@ -744,7 +960,7 @@ async def get_admin_summary(db: Session = Depends(get_db), _admin: bool = Depend
     composites_with_target = db.query(Composite).filter(
         and_(
             Composite.target_t_level.isnot(None),
-            Composite.is_fully_factored == False
+            not Composite.is_fully_factored
         )
     ).count()
 
@@ -988,7 +1204,7 @@ async def admin_dashboard(
     # Only show unfactored composites with target t-levels set
     composites = db.query(Composite).filter(
         and_(
-            Composite.is_fully_factored == False,
+            not Composite.is_fully_factored,
             Composite.target_t_level.isnot(None)
         )
     ).all()

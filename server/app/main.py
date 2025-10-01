@@ -4,11 +4,18 @@ from fastapi.responses import Response
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+import logging
 
 from .config import get_settings
 from .database import engine
 from .models.base import Base
 from .api.v1.router import v1_router
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Create database tables
 Base.metadata.create_all(bind=engine)

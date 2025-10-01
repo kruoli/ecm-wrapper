@@ -304,7 +304,8 @@ class TLevelCalculator:
                     # Format: curves@B1,B2,param
                     # Format numbers to avoid decimals in scientific notation (use 11e7 not 1.1e+08)
                     b1_str = self._format_number_for_tlevel(attempt.b1)
-                    b2_str = self._format_number_for_tlevel(attempt.b2) if attempt.b2 else self._format_number_for_tlevel(attempt.b1 * 100)
+                    # Use actual b2 value (including 0), only default to b1*100 if b2 is None
+                    b2_str = self._format_number_for_tlevel(attempt.b2) if attempt.b2 is not None else self._format_number_for_tlevel(attempt.b1 * 100)
                     param = "3"  # Default parameter set (can be made configurable later)
 
                     curve_str = f"{attempt.curves_completed}@{b1_str},{b2_str},{param}"

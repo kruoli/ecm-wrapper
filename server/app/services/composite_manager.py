@@ -367,6 +367,8 @@ class CompositeManager:
                 'number': composite.number,
                 'current_composite': composite.current_composite,
                 'digit_length': composite.digit_length,
+                'has_snfs_form': composite.has_snfs_form,
+                'snfs_difficulty': composite.snfs_difficulty,
                 'target_t_level': composite.target_t_level,
                 'current_t_level': composite.current_t_level,
                 'priority': composite.priority,

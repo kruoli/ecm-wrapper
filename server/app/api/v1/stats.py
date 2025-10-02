@@ -4,7 +4,10 @@ from sqlalchemy import func
 from typing import List
 
 from ...database import get_db
-from ...schemas.composites import CompositeStats, EffortLevel, ECMWorkSummary
+from ...schemas.composites import (
+    CompositeStats, EffortLevel, ECMWorkSummary,
+    BatchStatusRequest, BatchStatusResponse, CompositeBatchStatus
+)
 from ...models import Composite, ECMAttempt, Factor, ProjectComposite, Project
 from ...services.composites import CompositeService
 
@@ -81,7 +84,10 @@ async def get_composite_stats(
     
     return CompositeStats(
         composite=comp.number,
+        current_composite=comp.current_composite,
         digit_length=comp.digit_length,
+        has_snfs_form=comp.has_snfs_form,
+        snfs_difficulty=comp.snfs_difficulty,
         target_t_level=comp.target_t_level,
         current_t_level=comp.current_t_level,
         priority=comp.priority,
@@ -90,3 +96,44 @@ async def get_composite_stats(
         ecm_work=ecm_work,
         projects=project_names
     )
+
+
+@router.post("/composites/batch-status", response_model=BatchStatusResponse)
+async def get_batch_composite_status(
+    request: BatchStatusRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Get t-level status for multiple composites in a single request.
+
+    Returns current and target t-levels for each composite number.
+    If a composite is not found in the database, returns found=False.
+    """
+    results = []
+
+    for number in request.numbers:
+        # Try to find composite by number
+        comp = db.query(Composite).filter(Composite.number == number).first()
+
+        if comp:
+            results.append(CompositeBatchStatus(
+                number=number,
+                target_t_level=comp.target_t_level,
+                current_t_level=comp.current_t_level,
+                digit_length=comp.digit_length,
+                has_snfs_form=comp.has_snfs_form,
+                snfs_difficulty=comp.snfs_difficulty,
+                found=True
+            ))
+        else:
+            results.append(CompositeBatchStatus(
+                number=number,
+                target_t_level=None,
+                current_t_level=None,
+                digit_length=None,
+                has_snfs_form=None,
+                snfs_difficulty=None,
+                found=False
+            ))
+
+    return BatchStatusResponse(composites=results)

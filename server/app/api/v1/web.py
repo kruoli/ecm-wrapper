@@ -362,6 +362,8 @@ async def get_composite_details_public(
                     <tr><th>Original Form</th><td class="number-display">{esc(composite['number'])}</td></tr>
                     <tr><th>Current Composite</th><td class="number-display">{esc(composite['current_composite'][:100])}{'...' if len(composite['current_composite']) > 100 else ''}</td></tr>
                     <tr><th>Digit Length</th><td>{composite['digit_length']}</td></tr>
+                    <tr><th>SNFS Possible</th><td>{'<span class="status-badge status-complete">Yes</span>' if composite.get('has_snfs_form') else '<span class="status-badge">No</span>'}</td></tr>
+                    <tr><th>GNFS Equivalent</th><td>{composite.get('snfs_difficulty') if composite.get('snfs_difficulty') else 'N/A'}</td></tr>
                     <tr><th>Priority</th><td>{composite['priority']}</td></tr>
                     <tr><th>Created</th><td>{esc(composite['created_at'])}</td></tr>
                     <tr><th>Last Updated</th><td>{esc(composite['updated_at'])}</td></tr>

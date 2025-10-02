@@ -105,3 +105,21 @@ class ProjectStats(BaseModel):
     total_composites: int
     unfactored_composites: int
     factored_composites: int
+
+class BatchStatusRequest(BaseModel):
+    """Schema for batch status request"""
+    numbers: List[str] = Field(..., description="List of composite numbers to check")
+
+class CompositeBatchStatus(BaseModel):
+    """Schema for individual composite status in batch response"""
+    number: str = Field(..., description="The composite number")
+    target_t_level: Optional[float] = Field(None, description="Target t-level")
+    current_t_level: Optional[float] = Field(None, description="Current t-level achieved")
+    digit_length: Optional[int] = Field(None, description="Decimal digit length")
+    has_snfs_form: Optional[bool] = Field(None, description="Whether number has SNFS form")
+    snfs_difficulty: Optional[int] = Field(None, description="GNFS-equivalent digit count for SNFS")
+    found: bool = Field(..., description="Whether the composite exists in database")
+
+class BatchStatusResponse(BaseModel):
+    """Schema for batch status response"""
+    composites: List[CompositeBatchStatus] = Field(..., description="Status for each composite")

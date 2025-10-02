@@ -120,7 +120,9 @@ async def bulk_add_composites_structured(
                 'current_composite': c.current_composite,
                 'has_snfs_form': c.has_snfs_form,
                 'snfs_difficulty': c.snfs_difficulty,
-                'priority': c.priority if c.priority is not None else request.default_priority
+                'priority': c.priority if c.priority is not None else request.default_priority,
+                'is_prime': c.is_prime,
+                'is_fully_factored': c.is_fully_factored
             }
             for c in request.composites
         ]

@@ -71,6 +71,12 @@ class CompositeInput(BaseModel):
         None, description="GNFS-equivalent digit count for SNFS numbers"
     )
     priority: int = Field(0, description="Priority level for work assignment")
+    is_prime: Optional[bool] = Field(
+        None, description="Whether the composite is actually prime"
+    )
+    is_fully_factored: Optional[bool] = Field(
+        None, description="Whether the composite is fully factored"
+    )
 
 class BulkCompositeRequest(BaseModel):
     """Schema for bulk composite upload"""

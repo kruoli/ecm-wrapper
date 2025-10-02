@@ -180,7 +180,11 @@ Essential tables for ECM coordination:
 - **Database setup**: `server/app/database.py` - SQLAlchemy engine and session
 - **Models**: `server/app/models/*.py` - Database table definitions
 - **API schemas**: `server/app/schemas/*.py` - Request/response validation
-- **Services**: `server/app/services/*.py` - Business logic layer
+- **API routes**: `server/app/api/v1/*.py` - Core API endpoints (submit, work, stats, factors)
+- **Admin routes**: `server/app/api/v1/admin/*.py` - Modular admin endpoints (dashboard, composites, work, projects, maintenance)
+- **Services**: `server/app/services/*.py` - Business logic layer (composite_manager, t_level_calculator)
+- **Utilities**: `server/app/utils/*.py` - Shared utilities (serializers, query_helpers, html_helpers)
+- **Templates**: `server/app/templates/` - Jinja2 HTML templates (base, admin, public, components)
 - **Migrations**: `server/migrations/` - Alembic database migrations
 
 ### Client Structure

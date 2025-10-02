@@ -195,6 +195,7 @@ class CompositeManager:
             'total_processed': 0,
             'new_composites': 0,
             'existing_composites': 0,
+            'updated_composites': 0,
             'invalid_numbers': 0,
             'errors': [],
             'project_created': False,
@@ -242,12 +243,18 @@ class CompositeManager:
                     current_composite = item.get('current_composite', None)
                     has_snfs_form = item.get('has_snfs_form', False)
                     snfs_difficulty = item.get('snfs_difficulty', None)
+                    is_prime = item.get('is_prime', None)
+                    is_fully_factored = item.get('is_fully_factored', None)
+                    priority = item.get('priority', None)
 
-                    composite, created = self._get_or_create_composite(
+                    composite, created, updated = self._get_or_create_composite(
                         db, number,
                         current_composite=current_composite,
                         has_snfs_form=has_snfs_form,
-                        snfs_difficulty=snfs_difficulty
+                        snfs_difficulty=snfs_difficulty,
+                        is_prime=is_prime,
+                        is_fully_factored=is_fully_factored,
+                        priority=priority
                     )
 
                     if created:
@@ -260,10 +267,13 @@ class CompositeManager:
                         )
                     else:
                         stats['existing_composites'] += 1
+                        if updated:
+                            stats['updated_composites'] += 1
                         logger.info(
-                            "Found existing composite: %s - ID: %s",
+                            "Found existing composite: %s - ID: %s%s",
                             number[:20] + "..." if len(number) > 20 else number,
-                            composite.id
+                            composite.id,
+                            " (updated)" if updated else ""
                         )
 
                     # Associate with project if specified
@@ -533,12 +543,60 @@ class CompositeManager:
     def _get_or_create_composite(self, db: Session, number: str,
                                   current_composite: Optional[str] = None,
                                   has_snfs_form: bool = False,
-                                  snfs_difficulty: Optional[int] = None) -> Tuple[Composite, bool]:
-        """Get existing composite or create new one."""
+                                  snfs_difficulty: Optional[int] = None,
+                                  is_prime: Optional[bool] = None,
+                                  is_fully_factored: Optional[bool] = None,
+                                  priority: Optional[int] = None) -> Tuple[Composite, bool, bool]:
+        """
+        Get existing composite or create new one. Updates fields if composite exists.
+
+        Returns:
+            Tuple of (Composite, created, updated)
+        """
         # Check if composite already exists (by number, which can be a formula)
         existing = db.query(Composite).filter(Composite.number == number).first()
         if existing:
-            return existing, False
+            # Update existing composite with new metadata
+            updated = False
+
+            if current_composite is not None and existing.current_composite != current_composite:
+                # Validate current_composite is an integer
+                if not validate_integer(current_composite):
+                    raise ValueError(f"Invalid current_composite format: {current_composite}")
+                existing.current_composite = current_composite
+                existing.digit_length = calculate_digit_length(current_composite)
+                updated = True
+
+            if existing.has_snfs_form != has_snfs_form:
+                existing.has_snfs_form = has_snfs_form
+                updated = True
+
+            if snfs_difficulty is not None and existing.snfs_difficulty != snfs_difficulty:
+                existing.snfs_difficulty = snfs_difficulty
+                updated = True
+
+            if is_prime is not None and existing.is_prime != is_prime:
+                existing.is_prime = is_prime
+                updated = True
+
+            if is_fully_factored is not None and existing.is_fully_factored != is_fully_factored:
+                existing.is_fully_factored = is_fully_factored
+                updated = True
+
+            if priority is not None and existing.priority != priority:
+                existing.priority = priority
+                updated = True
+
+            if updated:
+                db.commit()
+                db.refresh(existing)
+                logger.info(
+                    "Updated composite: %s - ID: %s",
+                    number[:20] + "..." if len(number) > 20 else number,
+                    existing.id
+                )
+
+            return existing, False, updated
 
         # Create new composite
         # If current_composite is not provided, default to the original number
@@ -556,11 +614,14 @@ class CompositeManager:
             current_composite=current_composite,
             digit_length=digit_length,
             has_snfs_form=has_snfs_form,
-            snfs_difficulty=snfs_difficulty
+            snfs_difficulty=snfs_difficulty,
+            is_prime=is_prime if is_prime is not None else False,
+            is_fully_factored=is_fully_factored if is_fully_factored is not None else False,
+            priority=priority if priority is not None else 0
         )
 
         db.add(composite)
         db.commit()
         db.refresh(composite)
 
-        return composite, True
+        return composite, True, False

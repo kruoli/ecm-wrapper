@@ -13,12 +13,25 @@ Both wrappers submit factorization results to a centralized API server and are d
 ## Core Architecture
 
 ### Configuration System
-- `client.yaml`: Central configuration file containing:
-  - Client identity and machine specs
-  - API endpoints and retry settings
-  - Program paths for ecm/yafu binaries
-  - Logging and output preferences
-  - Default factorization parameters
+- **`client.yaml`**: Default configuration (checked into git)
+  - Contains sensible defaults for all settings
+  - Works out of the box with generic paths
+  - Should not contain sensitive or machine-specific data
+
+- **`client.local.yaml`**: Local overrides (gitignored)
+  - Optional file for machine-specific settings
+  - Overrides values from client.yaml
+  - Use `client.local.yaml.example` as a template
+  - Contains:
+    - Your username and machine name
+    - Production API endpoints
+    - Full paths to ECM/YAFU binaries
+    - CPU/GPU specific settings
+
+Configuration loading:
+1. Loads `client.yaml` (defaults)
+2. Merges `client.local.yaml` if it exists (deep merge)
+3. Local settings override defaults
 
 ### Wrapper Classes
 - **ECMWrapper** (ecm-wrapper.py:14): Handles GMP-ECM execution with curve-by-curve control and two-stage processing
@@ -96,12 +109,15 @@ pylint *.py
 - Raw output preservation for debugging
 
 ### File Organization
-- Raw outputs saved to `data/outputs/` with timestamps
-- Logs written to `data/logs/ecm_client.log`
-- Factors logged to `data/factors_found.txt`
-- Residue files saved to `data/residues/`
-- Failed submissions saved to `data/results/`
-- Configuration validation on startup
+- **Raw outputs**: `data/outputs/` (configured via `execution.output_dir`)
+- **Logs**: `data/logs/ecm_client.log` (configured via `logging.file`)
+- **Factors found**: `data/factors_found.txt` (hardcoded)
+- **Residue files**: `data/residues/` (configured via `execution.residue_dir`)
+  - Auto-generated when using two-stage mode without `--save-residues`
+  - Filename format: `residue_<composite_hash>_<timestamp>.txt`
+  - Override with `--save-residues /path/to/custom.txt`
+- **Failed submissions**: `data/results/` (for retry)
+- All directories created automatically on first use
 
 ## Dependencies
 

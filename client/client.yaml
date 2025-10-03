@@ -1,34 +1,38 @@
 api:
-  endpoint: https://ecm.kyleaskine.com/api/v1
-  #endpoint: http://localhost:8000/api/v1
+  endpoint: http://localhost:8000/api/v1
   retry_attempts: 3
   timeout: 30
+
 client:
-  username: KyleAskine
-  cpu_name: PC_V2
+  username: default_user
+  cpu_name: default_machine
+
 execution:
-  mode: single
   output_dir: data/outputs
+  residue_dir: data/residues
   save_raw_output: true
+
 logging:
   file: data/logs/ecm_client.log
   level: INFO
+
 programs:
   gmp_ecm:
+    path: ecm  # Will use system PATH
     default_b1: 110000000
     default_b2: 500000000000
     default_curves: 1
     early_termination: true
-    gpu_curves: null
+    gpu_enabled: false
     gpu_device: 0
-    gpu_enabled: true
-    path: /home/kylea/ecm-master/ecm
+    gpu_curves: null
+    stage2_workers: 8
     pm1_b1: 2900000000
     pm1_b2: 1000000000000000
     pp1_b1: 110000000
     pp1_b2: 500000000000
-    stage2_workers: 8
+
   yafu:
+    path: yafu  # Will use system PATH
     default_b1: 50000
-    path: /home/kylea/yafu/yafu
     threads: 8

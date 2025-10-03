@@ -21,8 +21,16 @@ class BaseWrapper:
         """Initialize wrapper with configuration."""
         self._validate_working_directory()
 
+        # Load default config
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
+
+        # Load local overrides if they exist
+        local_config_path = Path(config_path).parent / 'client.local.yaml'
+        if local_config_path.exists():
+            with open(local_config_path, 'r') as f:
+                local_config = yaml.safe_load(f)
+                self.config = self._deep_merge(self.config, local_config)
 
         self.setup_logging()
         # Construct client_id from username and cpu_name
@@ -30,6 +38,16 @@ class BaseWrapper:
         cpu_name = self.config['client']['cpu_name']
         self.client_id = f"{username}-{cpu_name}"
         self.api_endpoint = self.config['api']['endpoint']
+
+    def _deep_merge(self, base: dict, override: dict) -> dict:
+        """Deep merge override dict into base dict."""
+        result = base.copy()
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = self._deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
 
     def _validate_working_directory(self):
         """Validate that we're running from the correct directory."""

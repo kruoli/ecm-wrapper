@@ -1,6 +1,7 @@
 """
 Admin dashboard and authentication routes.
 """
+import secrets
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, Request
@@ -121,9 +122,9 @@ async def admin_dashboard(
     Admin dashboard showing system status, work assignments, and management tools.
     This endpoint allows initial page load without auth, but JavaScript checks the key.
     """
-    # Verify auth via header
+    # Verify auth via header (constant-time comparison to prevent timing attacks)
     settings = get_settings()
-    if not x_admin_key or x_admin_key != settings.admin_api_key:
+    if not x_admin_key or not secrets.compare_digest(x_admin_key, settings.admin_api_key):
         return get_unauthorized_redirect_html()
 
     # Get summary statistics

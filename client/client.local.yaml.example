@@ -1,0 +1,27 @@
+# client.local.yaml.example
+# Copy this to client.local.yaml and customize for your environment
+# client.local.yaml is gitignored and will override settings from client.yaml
+
+api:
+  endpoint: https://ecm.kyleaskine.com/api/v1
+  # endpoint: http://localhost:8000/api/v1  # Uncomment for local testing
+
+client:
+  username: YourUsername
+  cpu_name: YourMachineName
+
+# Optional: customize output directories
+# execution:
+#   output_dir: /path/to/custom/outputs
+#   residue_dir: /path/to/custom/residues
+
+programs:
+  gmp_ecm:
+    path: /home/user/ecm-master/ecm  # Full path to your ECM binary
+    gpu_enabled: true
+    gpu_device: 0
+    stage2_workers: 16  # Adjust based on your CPU cores
+
+  yafu:
+    path: /home/user/yafu/yafu  # Full path to your YAFU binary
+    threads: 16  # Adjust based on your CPU cores

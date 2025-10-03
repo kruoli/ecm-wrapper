@@ -144,11 +144,15 @@ curl -X POST http://localhost:8000/api/v1/results/ecm \
 ## ECM Coordination Workflow
 
 1. **Project submits numbers**: Upload composites with target t-levels via API or admin interface
+   - Bulk upload via CSV/text file (`/admin/composites/upload`)
+   - Structured upload with metadata (`/admin/composites/bulk-structured`)
+   - Can update existing composites: `current_composite`, `priority`, `is_fully_factored`, `is_prime`, `has_snfs_form`, `snfs_difficulty`
 2. **Work assignment**: Clients request ECM work assignments with optimal B1/B2 parameters
 3. **Client execution**: Wrapper scripts execute GMP-ECM/YAFU binaries with assigned parameters
-4. **Progress tracking**: T-level progress updated as curves complete
+4. **Progress tracking**: T-level progress updated as curves complete via `/submit_result`
 5. **Factor discovery**: Numbers marked as factored when factors found
 6. **Result delivery**: Projects retrieve factorization results via API
+7. **Manual curve submission**: Upload ECM curves via `/submit_result` endpoint with full metadata
 
 ## Minimal Database Schema
 
@@ -181,11 +185,36 @@ Essential tables for ECM coordination:
 - **Models**: `server/app/models/*.py` - Database table definitions
 - **API schemas**: `server/app/schemas/*.py` - Request/response validation
 - **API routes**: `server/app/api/v1/*.py` - Core API endpoints (submit, work, stats, factors)
-- **Admin routes**: `server/app/api/v1/admin/*.py` - Modular admin endpoints (dashboard, composites, work, projects, maintenance)
-- **Services**: `server/app/services/*.py` - Business logic layer (composite_manager, t_level_calculator)
-- **Utilities**: `server/app/utils/*.py` - Shared utilities (serializers, query_helpers, html_helpers)
-- **Templates**: `server/app/templates/` - Jinja2 HTML templates (base, admin, public, components)
+- **Admin routes**: `server/app/api/v1/admin/*.py` - Modular admin endpoints
+  - `dashboard.py` - Admin dashboard and summary stats
+  - `composites.py` - Composite upload, bulk operations, CRUD
+  - `work.py` - Work assignment management
+  - `projects.py` - Project organization
+  - `maintenance.py` - T-level recalculation utilities
+- **Services**: `server/app/services/*.py` - Business logic layer
+  - `composite_manager.py` - Composite CRUD, bulk loading, updates
+  - `composites.py` - Core composite operations
+  - `factors.py` - Factor validation and management
+  - `t_level_calculator.py` - ECM t-level calculations
+- **Utilities**: `server/app/utils/*.py` - Shared utilities
+  - `serializers.py` - Database model to API dict conversion
+  - `query_helpers.py` - Reusable database query patterns
+  - `html_helpers.py` - Template formatting and HTML escaping
+- **Templates**: `server/app/templates/` - Jinja2 HTML templates
+  - `base.html` - Shared CSS and layout
+  - `admin/` - Admin dashboard templates
+  - `public/` - Public dashboard templates
+  - `components/` - Reusable UI components
 - **Migrations**: `server/migrations/` - Alembic database migrations
+
+### Security Features
+- **Admin authentication**: All admin endpoints require API key via `X-Admin-Key` header
+- **Timing attack protection**: Constant-time key comparison using `secrets.compare_digest()`
+- **File upload limits**: 10 MB maximum file size on bulk upload endpoints
+- **Input validation**: UTF-8 encoding validation, Pydantic schema validation
+- **Error sanitization**: Generic error messages to clients, detailed logging server-side
+- **SQL injection protection**: SQLAlchemy ORM with parameterized queries
+- **XSS protection**: Jinja2 auto-escaping with explicit `esc()` for HTML output
 
 ### Client Structure
 - **Main wrappers**: `client/ecm-wrapper.py`, `client/yafu-wrapper.py`

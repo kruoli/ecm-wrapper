@@ -2,6 +2,7 @@
 Composite management routes for admin.
 """
 import logging
+import secrets
 from typing import List, Optional
 
 from fastapi import (
@@ -31,6 +32,9 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 composite_manager = CompositeManager()
 
+# Security: Maximum file upload size (10 MB)
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024
+
 
 @router.post("/composites/upload")
 async def upload_composites(
@@ -50,7 +54,22 @@ async def upload_composites(
     """
     try:
         content = await file.read()
-        content_str = content.decode('utf-8')
+
+        # Security: Check file size limit
+        if len(content) > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE / (1024 * 1024):.0f} MB"
+            )
+
+        # Security: Validate UTF-8 encoding
+        try:
+            content_str = content.decode('utf-8')
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File must be UTF-8 encoded text"
+            )
 
         # Auto-detect file type
         if source_type == "auto":
@@ -76,9 +95,10 @@ async def upload_composites(
             **stats
         }
     except Exception as e:
+        logger.error("File upload error: %s", str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error processing file: {str(e)}"
+            detail="Error processing file. Please check the file format and try again."
         ) from e
 
 
@@ -98,9 +118,10 @@ async def bulk_add_composites(
         )
         return {"input_count": len(numbers), **stats}
     except Exception as e:
+        logger.error("Bulk add error: %s", str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error processing numbers: {str(e)}"
+            detail="Error processing numbers. Please check the input format."
         ) from e
 
 
@@ -135,9 +156,10 @@ async def bulk_add_composites_structured(
 
         return {"input_count": len(request.composites), **stats}
     except Exception as e:
+        logger.error("Bulk structured upload error: %s", str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error processing composites: {str(e)}"
+            detail="Error processing composites. Please check the data format."
         ) from e
 
 
@@ -150,9 +172,10 @@ async def get_queue_status(
     try:
         return composite_manager.get_work_queue_status(db)
     except Exception as e:
+        logger.error("Queue status error: %s", str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving status: {str(e)}"
+            detail="Error retrieving queue status"
         ) from e
 
 
@@ -181,7 +204,8 @@ async def get_composite_details_page(
 ):
     """Web page showing detailed information about a specific composite."""
     settings = get_settings()
-    if not x_admin_key or x_admin_key != settings.admin_api_key:
+    # Security: Constant-time comparison to prevent timing attacks
+    if not x_admin_key or not secrets.compare_digest(x_admin_key, settings.admin_api_key):
         return get_unauthorized_redirect_html()
 
     details = composite_manager.get_composite_details(db, composite_id)

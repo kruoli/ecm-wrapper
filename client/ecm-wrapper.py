@@ -343,11 +343,17 @@ class ECMWrapper(BaseWrapper):
                 residue_file.parent.mkdir(parents=True, exist_ok=True)
                 temp_cleanup = False
             else:
-                # Use temporary directory - ECM will create the file
-                temp_dir = tempfile.mkdtemp()
-                residue_file = Path(temp_dir) / "stage1_residues.txt"
-                temp_cleanup = True
-                self.logger.info(f"Using temporary residue file: {residue_file}")
+                # Use configured residue directory with auto-generated filename
+                residue_dir = Path(self.config['execution']['residue_dir'])
+                residue_dir.mkdir(parents=True, exist_ok=True)
+
+                # Generate filename: residue_<composite_hash>_<timestamp>.txt
+                import hashlib
+                composite_hash = hashlib.md5(composite.encode()).hexdigest()[:12]
+                timestamp = time.strftime('%Y%m%d_%H%M%S')
+                residue_file = residue_dir / f"residue_{composite_hash}_{timestamp}.txt"
+                temp_cleanup = False
+                self.logger.info(f"Using auto-generated residue file: {residue_file}")
             
             actual_curves = curves  # Initialize fallback
             try:

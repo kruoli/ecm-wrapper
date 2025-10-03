@@ -65,6 +65,7 @@ client/ecm_client.log
 # Config files with sensitive data
 client/client_production.yaml
 client/client_local.yaml
+client/client.local.yaml
 *.secrets.yaml
 
 # Compiled binaries and external programs

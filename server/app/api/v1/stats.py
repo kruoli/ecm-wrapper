@@ -1,7 +1,8 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
-from typing import List, Optional
+from sqlalchemy import and_
 
 from ...database import get_db
 from ...schemas.composites import (
@@ -21,7 +22,7 @@ async def get_composite_stats(
 ):
     """
     Get comprehensive statistics for a composite number.
-    
+
     Returns information about:
     - Composite properties (bit/digit length, factorization status)
     - All known factors
@@ -32,11 +33,11 @@ async def get_composite_stats(
     comp = CompositeService.get_composite_by_number(db, composite)
     if not comp:
         raise HTTPException(status_code=404, detail="Composite not found in database")
-    
+
     # Get all factors
     factors = db.query(Factor).filter(Factor.composite_id == comp.id).all()
     factors_list = [f.factor for f in factors]
-    
+
     # Determine status
     if comp.is_prime:
         status = "prime"
@@ -44,14 +45,14 @@ async def get_composite_stats(
         status = "fully_factored"
     else:
         status = "composite"
-    
+
     # Get ECM work summary
     attempts = db.query(ECMAttempt).filter(ECMAttempt.composite_id == comp.id).all()
-    
+
     total_attempts = len(attempts)
     total_curves = sum(attempt.curves_completed for attempt in attempts)
     last_attempt = max((attempt.created_at for attempt in attempts), default=None)
-    
+
     # Group efforts by B1 level
     effort_groups = {}
     for attempt in attempts:
@@ -59,30 +60,30 @@ async def get_composite_stats(
         if b1 not in effort_groups:
             effort_groups[b1] = 0
         effort_groups[b1] += attempt.curves_completed
-    
+
     effort_by_level = [
-        EffortLevel(b1=b1, curves=curves) 
+        EffortLevel(b1=b1, curves=curves)
         for b1, curves in sorted(effort_groups.items())
     ]
-    
+
     ecm_work = ECMWorkSummary(
         total_attempts=total_attempts,
         total_curves=total_curves,
         effort_by_level=effort_by_level,
         last_attempt=last_attempt
     )
-    
+
     # Get associated projects
     project_links = db.query(ProjectComposite).filter(
         ProjectComposite.composite_id == comp.id
     ).all()
-    
+
     project_names = []
     for link in project_links:
         project = db.query(Project).filter(Project.id == link.project_id).first()
         if project:
             project_names.append(project.name)
-    
+
     return CompositeStats(
         composite=comp.number,
         current_composite=comp.current_composite,
@@ -142,7 +143,7 @@ async def get_batch_composite_status(
 
 @router.get("/composites/top-progress", response_model=TopCompositesResponse)
 async def get_top_composites_by_progress(
-    limit: int = Query(50, ge=1, le=500, description="Maximum number of composites to return"),
+    limit: int = Query(50, ge=1, le=1000, description="Maximum number of composites to return"),
     project_name: Optional[str] = Query(None, description="Filter by project name"),
     min_priority: Optional[int] = Query(None, description="Minimum priority level"),
     include_factored: bool = Query(False, description="Include fully factored composites"),
@@ -155,7 +156,7 @@ async def get_top_composites_by_progress(
     with optional filtering by project and priority.
 
     Args:
-        limit: Maximum number of composites to return (default 50, max 500)
+        limit: Maximum number of composites to return (default 50, max 1000)
         project_name: Optional project name filter
         min_priority: Optional minimum priority filter
         include_factored: Include fully factored composites (default False)

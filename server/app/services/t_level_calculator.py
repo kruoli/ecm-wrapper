@@ -301,15 +301,21 @@ class TLevelCalculator:
             curve_strings = []
             for attempt in attempts:
                 if attempt.curves_completed > 0:
-                    # Format: curves@B1,B2,param
+                    # Format: curves@B1[,B2][,param]
                     # Format numbers to avoid decimals in scientific notation (use 11e7 not 1.1e+08)
                     b1_str = self._format_number_for_tlevel(attempt.b1)
-                    # Use actual b2 value (including 0), only default to b1*100 if b2 is None
-                    b2_str = self._format_number_for_tlevel(attempt.b2) if attempt.b2 is not None else self._format_number_for_tlevel(attempt.b1 * 100)
+
+                    # Build curve string - omit B2 if None (let t-level use GMP-ECM default)
                     # Use actual parametrization from attempt, default to 3 if not set
                     param = str(attempt.parametrization) if attempt.parametrization is not None else "3"
 
-                    curve_str = f"{attempt.curves_completed}@{b1_str},{b2_str},{param}"
+                    if attempt.b2 is not None:
+                        b2_str = self._format_number_for_tlevel(attempt.b2)
+                        curve_str = f"{attempt.curves_completed}@{b1_str},{b2_str},p={param}"
+                    else:
+                        # No B2 specified - let t-level binary use GMP-ECM defaults
+                        curve_str = f"{attempt.curves_completed}@{b1_str},p={param}"
+
                     curve_strings.append(curve_str)
 
             if not curve_strings:

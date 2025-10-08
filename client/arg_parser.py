@@ -11,9 +11,11 @@ from typing import Dict, Any, Optional
 def create_ecm_parser() -> argparse.ArgumentParser:
     """Create argument parser for ECM wrapper."""
     parser = argparse.ArgumentParser(description='ECM Wrapper Client')
-    
-    # Configuration
-    parser.add_argument('--config', default='client.yaml', help='Config file path')
+
+    # Configuration - prefer client.local.yaml if it exists
+    from pathlib import Path
+    default_config = 'client.local.yaml' if Path('client.local.yaml').exists() else 'client.yaml'
+    parser.add_argument('--config', default=default_config, help='Config file path')
     
     # Core parameters
     parser.add_argument('--composite', '-n', help='Number to factor')
@@ -62,9 +64,11 @@ def create_ecm_parser() -> argparse.ArgumentParser:
 def create_yafu_parser() -> argparse.ArgumentParser:
     """Create argument parser for YAFU wrapper."""
     parser = argparse.ArgumentParser(description='YAFU Wrapper Client')
-    
-    # Configuration
-    parser.add_argument('--config', default='client.yaml', help='Config file path')
+
+    # Configuration - prefer client.local.yaml if it exists
+    from pathlib import Path
+    default_config = 'client.local.yaml' if Path('client.local.yaml').exists() else 'client.yaml'
+    parser.add_argument('--config', default=default_config, help='Config file path')
     parser.add_argument('--composite', '-n', required=True, help='Number to factor')
     
     # Mode selection

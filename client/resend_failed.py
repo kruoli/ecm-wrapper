@@ -23,16 +23,29 @@ from base_wrapper import BaseWrapper
 class FailedResultsResender:
     """Handles resending of failed results from local logs."""
     
-    def __init__(self, config_path: str = "client.yaml"):
+    def __init__(self, config_path: str = None, dry_run: bool = False):
         """Initialize with configuration."""
+        # Prefer client.local.yaml if it exists, otherwise use client.yaml
+        if config_path is None:
+            if Path('client.local.yaml').exists():
+                config_path = 'client.local.yaml'
+            else:
+                config_path = 'client.yaml'
+
         self.config_path = Path(config_path)
         if not self.config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
-        
+
+        self.dry_run = dry_run
+
         with open(self.config_path, 'r') as f:
             self.config = yaml.safe_load(f)
-        
-        self.api_endpoint = f"{self.config['api']['base_url']}/api/v1"
+
+        # Handle both 'endpoint' (new format) and 'base_url' (old format)
+        if 'endpoint' in self.config['api']:
+            self.api_endpoint = self.config['api']['endpoint']
+        else:
+            self.api_endpoint = f"{self.config['api']['base_url']}/api/v1"
         
     def find_failed_results(self) -> List[Dict[str, Any]]:
         """Find results files that may have failed to submit."""
@@ -112,8 +125,12 @@ class FailedResultsResender:
         try:
             with open(result_file, 'r') as f:
                 data = json.load(f)
-            
-            # Convert saved data to API format
+
+            # If the saved file has the original api_payload, use it directly
+            if 'api_payload' in data:
+                return data['api_payload']
+
+            # Otherwise reconstruct from saved data (legacy format)
             submission = {
                 "composite": data.get("composite"),
                 "client_id": self.config['client']['id'],
@@ -124,6 +141,7 @@ class FailedResultsResender:
                     "b1": data.get("b1"),
                     "b2": data.get("b2"),
                     "curves": data.get("curves_requested"),
+                    "parametrization": data.get("parametrization", 3),
                     "sigma": data.get("sigma")
                 },
                 "results": {
@@ -133,9 +151,9 @@ class FailedResultsResender:
                 },
                 "raw_output": data.get("raw_output", "")
             }
-            
+
             return submission
-            
+
         except (json.JSONDecodeError, KeyError, FileNotFoundError) as e:
             print(f"❌ Error processing {result_file}: {e}")
             return None
@@ -143,12 +161,15 @@ class FailedResultsResender:
     def submit_result(self, submission: Dict[str, Any]) -> bool:
         """Submit a single result to the API."""
         url = f"{self.api_endpoint}/submit_result"
-        
+
+        # Get timeout from config, default to 30 seconds
+        timeout = self.config.get('api', {}).get('timeout', 30)
+
         try:
             response = requests.post(
                 url,
                 json=submission,
-                timeout=self.config['api']['timeout']
+                timeout=timeout
             )
             response.raise_for_status()
             
@@ -211,7 +232,10 @@ class FailedResultsResender:
             # Attempt submission
             if self.submit_result(submission):
                 stats["success"] += 1
-                self.mark_as_submitted(result_file)
+                if not self.dry_run:
+                    self.mark_as_submitted(result_file)
+                else:
+                    print("   [DRY RUN] File not marked as submitted")
             else:
                 stats["failed"] += 1
         
@@ -221,24 +245,42 @@ def main():
     """Main entry point."""
     print("📡 ECM Failed Results Resender")
     print("=" * 40)
-    
+
+    # Check for dry-run flag
+    dry_run = '--dry-run' in sys.argv or '-n' in sys.argv
+
+    if dry_run:
+        print("🔍 DRY RUN MODE - Files will not be marked as submitted")
+        print("=" * 40)
+
     if len(sys.argv) > 1 and sys.argv[1] in ['-h', '--help']:
         print("""
-Usage: python3 resend_failed.py [config_file]
+Usage: python3 resend_failed.py [options] [config_file]
 
 Resends ECM results that completed but failed to submit to the API server.
 The script looks for .json result files in data/results/ directory that
 are marked as not submitted.
 
+Options:
+  --dry-run, -n  Test submission without marking files as submitted
+  -h, --help     Show this help message
+
 Arguments:
-  config_file    Path to client.yaml (default: client.yaml)
+  config_file    Path to client.yaml (default: client.local.yaml or client.yaml)
         """)
         return
     
-    config_file = sys.argv[1] if len(sys.argv) > 1 else "client.yaml"
-    
+    # Get config file (skip flag arguments)
+    config_file = None
+    for arg in sys.argv[1:]:
+        if not arg.startswith('-'):
+            config_file = arg
+            break
+
     try:
-        resender = FailedResultsResender(config_file)
+        resender = FailedResultsResender(config_file, dry_run=dry_run)
+        print(f"🌐 API Endpoint: {resender.api_endpoint}")
+        print()
         stats = resender.resend_failed_results()
         
         print("\n📊 Resend Summary:")

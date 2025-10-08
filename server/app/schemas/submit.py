@@ -7,7 +7,7 @@ class ParametersSchema(BaseModel):
     b2: Optional[int] = Field(None, description="Stage 2 bound (optional)")
     curves: Optional[int] = Field(None, description="Number of curves requested")
     parametrization: Optional[int] = Field(None, ge=0, le=3, description="ECM parametrization type (0, 1, 2, or 3)")
-    sigma: Optional[int] = Field(None, description="ECM curve parameter (can include parametrization like '3:12345')")
+    sigma: Optional[str] = Field(None, description="ECM curve parameter (can include parametrization like '3:12345' or just '12345')")
     a: Optional[int] = Field(None, description="PP1 base parameter")
 
 class ResultsSchema(BaseModel):

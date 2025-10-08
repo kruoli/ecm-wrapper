@@ -134,7 +134,7 @@
             <tr>
                 <td>{{ esc(attempt.method) }}</td>
                 <td>{{ "{:,}".format(attempt.b1) }}</td>
-                <td>{{ "{:,}".format(attempt.b2) }}</td>
+                <td>{{ "{:,}".format(attempt.b2) if attempt.b2 is not none else "GMP-ECM Default" }}</td>
                 <td>{{ "{:,}".format(attempt.curves_completed) }}</td>
                 <td class="number-display">{{ esc(attempt.factor_found) if attempt.factor_found else "None" }}</td>
                 <td>{{ esc(attempt.client_id) }}</td>

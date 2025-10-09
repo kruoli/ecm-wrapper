@@ -11,6 +11,8 @@ class Factor(Base, TimestampMixin):
     is_prime = Column(Boolean, default=None, nullable=True)  # NULL until primality tested
     found_by_attempt_id = Column(Integer, ForeignKey("ecm_attempts.id"), nullable=True)
     sigma = Column(BigInteger, nullable=True)  # Sigma value that found this factor (ECM only)
+    group_order = Column(Text, nullable=True)  # Elliptic curve group order (ECM only)
+    group_order_factorization = Column(Text, nullable=True)  # Factorization of group order
     
     # Relationships
     composite = relationship("Composite")

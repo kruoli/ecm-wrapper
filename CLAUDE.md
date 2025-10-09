@@ -33,6 +33,10 @@ cd client/scripts/
 ./run_batch.sh                    # ECM batch
 ./run_pm1_batch.sh               # GMP-ECM P-1 batch
 ./run_pm1_batch_yafu.sh          # YAFU P-1 batch
+
+# Resend failed submissions
+python3 resend_failed.py --dry-run  # Test without marking files
+python3 resend_failed.py            # Submit and mark as completed
 ```
 
 ### Server Development
@@ -118,7 +122,10 @@ curl -X POST http://localhost:8000/api/v1/results/ecm \
 - **T-Level Services** (server/app/services/): T-level calculation and progress tracking
 
 ### Configuration System
-- **client.yaml**: Client configuration (API endpoints, binary paths, default parameters)
+- **client.yaml**: Default client configuration (API endpoints, binary paths, default parameters)
+- **client.local.yaml**: Local overrides for client.yaml (gitignored, machine-specific settings)
+  - Automatically used if present, otherwise falls back to client.yaml
+  - Use `client.local.yaml.example` as template
 - **server/app/config.py**: Server configuration (database URL, API settings)
 - **docker-compose.yml**: Full system deployment configuration
 - **alembic.ini**: Database migration configuration
@@ -158,11 +165,18 @@ curl -X POST http://localhost:8000/api/v1/results/ecm \
 
 Essential tables for ECM coordination:
 - `composites`: Numbers with t-level progress (id, number, digit_length, target_t_level, current_t_level, is_prime, is_fully_factored, priority)
-- `ecm_attempts`: Individual ECM curve attempts with B1/B2 parameters
-- `factors`: Discovered factors with discovery methods
+- `ecm_attempts`: Individual ECM curve attempts with B1/B2 parameters and parametrization (0-3)
+- `factors`: Discovered factors with discovery methods and sigma values
 - `work_assignments`: Active work assignments to clients
 - `clients`: Registered client information and capabilities
 - `projects`: Optional organizational structure for campaigns
+
+### Key Schema Updates
+- **ecm_attempts.parametrization**: ECM parametrization type (0, 1, 2, or 3) - affects t-level calculations
+  - Parametrization 1: Montgomery curves (CPU default)
+  - Parametrization 3: Twisted Edwards curves (GPU default)
+- **factors.sigma**: Sigma value that found the factor (for reproducibility)
+- **ecm_attempts.b2**: Can be NULL (use GMP-ECM default) or 0 (stage 1 only)
 
 ## Binary Dependencies
 

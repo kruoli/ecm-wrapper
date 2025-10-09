@@ -140,9 +140,9 @@ async def submit_result(
                         detail=f"Invalid factor: {factor_str} does not divide the composite"
                     )
 
-                # Add factor to database
+                # Add factor to database (with parametrization for group order calculation)
                 factor, factor_created = FactorService.add_factor(
-                    db, composite.id, factor_str, attempt.id, sigma
+                    db, composite.id, factor_str, attempt.id, sigma, parametrization
                 )
                 factor_status = "new_factor" if factor_created else "known_factor"
 

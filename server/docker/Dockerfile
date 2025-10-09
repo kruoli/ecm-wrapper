@@ -2,9 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including PARI/GP
 RUN apt-get update && apt-get install -y \
     gcc \
+    pari-gp \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
@@ -17,9 +18,10 @@ COPY app/ app/
 COPY alembic.ini .
 COPY migrations/ migrations/
 
-# Create bin directory and copy t-level executable
+# Create bin directory and copy binaries and scripts
 RUN mkdir -p /app/bin
 COPY bin/t-level /app/bin/t-level
+COPY bin/group.gp /app/bin/group.gp
 RUN chmod +x /app/bin/t-level
 
 # Run database migrations on startup

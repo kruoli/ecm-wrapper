@@ -8,44 +8,25 @@ and retries the submission.
 
 import json
 import sys
-import os
 import glob
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-import requests
-import yaml
 from datetime import datetime
 
-# Add parent directory to path for imports
-sys.path.append(str(Path(__file__).parent))
+import requests
+
+# Import BaseWrapper to reuse config loading logic
 from base_wrapper import BaseWrapper
 
-class FailedResultsResender:
+class FailedResultsResender(BaseWrapper):
     """Handles resending of failed results from local logs."""
-    
-    def __init__(self, config_path: str = None, dry_run: bool = False):
-        """Initialize with configuration."""
-        # Prefer client.local.yaml if it exists, otherwise use client.yaml
-        if config_path is None:
-            if Path('client.local.yaml').exists():
-                config_path = 'client.local.yaml'
-            else:
-                config_path = 'client.yaml'
 
-        self.config_path = Path(config_path)
-        if not self.config_path.exists():
-            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+    def __init__(self, config_path: str = 'client.yaml', dry_run: bool = False):
+        """Initialize with configuration."""
+        # Use BaseWrapper's config loading (handles client.local.yaml merge)
+        super().__init__(config_path)
 
         self.dry_run = dry_run
-
-        with open(self.config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
-
-        # Handle both 'endpoint' (new format) and 'base_url' (old format)
-        if 'endpoint' in self.config['api']:
-            self.api_endpoint = self.config['api']['endpoint']
-        else:
-            self.api_endpoint = f"{self.config['api']['base_url']}/api/v1"
         
     def find_failed_results(self) -> List[Dict[str, Any]]:
         """Find results files that may have failed to submit."""
@@ -131,9 +112,10 @@ class FailedResultsResender:
                 return data['api_payload']
 
             # Otherwise reconstruct from saved data (legacy format)
+            # Use client_id from BaseWrapper (already constructed as username-cpu_name)
             submission = {
                 "composite": data.get("composite"),
-                "client_id": self.config['client']['id'],
+                "client_id": self.client_id,
                 "method": data.get("method", "ecm"),
                 "program": data.get("program", "gmp-ecm"),
                 "program_version": data.get("program_version"),
@@ -266,12 +248,13 @@ Options:
   -h, --help     Show this help message
 
 Arguments:
-  config_file    Path to client.yaml (default: client.local.yaml or client.yaml)
+  config_file    Path to client.yaml (default: client.yaml)
+                 Note: client.local.yaml will be auto-merged if present
         """)
         return
-    
-    # Get config file (skip flag arguments)
-    config_file = None
+
+    # Get config file (skip flag arguments) - defaults to client.yaml
+    config_file = 'client.yaml'
     for arg in sys.argv[1:]:
         if not arg.startswith('-'):
             config_file = arg
@@ -282,15 +265,15 @@ Arguments:
         print(f"🌐 API Endpoint: {resender.api_endpoint}")
         print()
         stats = resender.resend_failed_results()
-        
+
         print("\n📊 Resend Summary:")
         print(f"   Total attempts: {stats['total']}")
         print(f"   ✅ Successful: {stats['success']}")
         print(f"   ❌ Failed: {stats['failed']}")
-        
+
         if stats['success'] > 0:
             print(f"\n🎉 Successfully resubmitted {stats['success']} results!")
-        
+
     except FileNotFoundError as e:
         print(f"❌ {e}")
         sys.exit(1)

@@ -121,6 +121,8 @@ def serialize_factor(factor, include_composite_details: bool = False) -> Dict[st
         "discovery_method": factor.discovery_method,
         "found_by_attempt_id": factor.found_by_attempt_id,
         "sigma": factor.sigma,
+        "group_order": factor.group_order,
+        "group_order_factorization": factor.group_order_factorization,
         "created_at": factor.created_at
     }
 

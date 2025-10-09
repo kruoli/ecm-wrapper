@@ -72,11 +72,16 @@ class BaseWrapper:
 
     def setup_logging(self):
         """Set up logging configuration."""
-        log_file = Path(self.config['logging']['file'])
+        # Get logging config with defaults
+        logging_config = self.config.get('logging', {})
+        log_file_path = logging_config.get('file', 'data/logs/ecm_client.log')
+        log_level = logging_config.get('level', 'INFO')
+
+        log_file = Path(log_file_path)
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
         logging.basicConfig(
-            level=getattr(logging, self.config['logging']['level']),
+            level=getattr(logging, log_level),
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
                 logging.FileHandler(log_file),

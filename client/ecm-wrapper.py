@@ -453,7 +453,9 @@ class ECMWrapper(BaseWrapper):
         
         factor_found = stage1_factor or stage2_factor
         if factor_found:
-            results['factor_found'] = factor_found
+            # Only set factor_found if not already set by _log_and_store_factors
+            if 'factor_found' not in results:
+                results['factor_found'] = factor_found
             stage_found = "Stage 1" if stage1_factor else "Stage 2"
             sigma_used = stage2_sigma if stage2_factor else None
             self.logger.info(f"Factor found in {stage_found}: {factor_found}")
@@ -912,8 +914,11 @@ class ECMWrapper(BaseWrapper):
             else:
                 parametrization = 3  # Default
 
-        results['factor_found'] = factor_found
-        results['sigma'] = factor_sigma  # Sigma that found the factor (if any)
+        # Only set factor_found and sigma if not already set by _log_and_store_factors
+        if 'factor_found' not in results:
+            results['factor_found'] = factor_found
+        if 'sigma' not in results:
+            results['sigma'] = factor_sigma  # Sigma that found the factor (if any)
         results['sigma_values'] = unique_sigma_values  # All sigma values used
         results['parametrization'] = parametrization
         results['curves_completed'] = actual_curves_completed

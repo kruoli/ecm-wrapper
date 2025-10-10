@@ -123,9 +123,14 @@ curl -X POST http://localhost:8000/api/v1/results/ecm \
 
 ### Configuration System
 - **client.yaml**: Default client configuration (API endpoints, binary paths, default parameters)
+  - Contains sensible defaults that work out of the box
+  - Checked into git for version control
 - **client.local.yaml**: Local overrides for client.yaml (gitignored, machine-specific settings)
-  - Automatically used if present, otherwise falls back to client.yaml
+  - Deep merges with client.yaml (local settings override defaults)
   - Use `client.local.yaml.example` as template
+  - Auto-detected by BaseWrapper and arg_parser
+  - **Important**: Always pass `client.yaml` as config path - BaseWrapper handles the merge
+- **resend_failed.py**: Inherits from BaseWrapper to reuse config loading logic
 - **server/app/config.py**: Server configuration (database URL, API settings)
 - **docker-compose.yml**: Full system deployment configuration
 - **alembic.ini**: Database migration configuration
@@ -158,6 +163,9 @@ curl -X POST http://localhost:8000/api/v1/results/ecm \
 3. **Client execution**: Wrapper scripts execute GMP-ECM/YAFU binaries with assigned parameters
 4. **Progress tracking**: T-level progress updated as curves complete via `/submit_result`
 5. **Factor discovery**: Numbers marked as factored when factors found
+   - **Group order calculation**: Elliptic curve group orders automatically calculated via PARI/GP
+   - Supports all parametrizations (0, 1, 2, 3) with proper curve construction
+   - Prime factorization of group order computed for mathematical analysis
 6. **Result delivery**: Projects retrieve factorization results via API
 7. **Manual curve submission**: Upload ECM curves via `/submit_result` endpoint with full metadata
 
@@ -166,7 +174,10 @@ curl -X POST http://localhost:8000/api/v1/results/ecm \
 Essential tables for ECM coordination:
 - `composites`: Numbers with t-level progress (id, number, digit_length, target_t_level, current_t_level, is_prime, is_fully_factored, priority)
 - `ecm_attempts`: Individual ECM curve attempts with B1/B2 parameters and parametrization (0-3)
-- `factors`: Discovered factors with discovery methods and sigma values
+- `factors`: Discovered factors with discovery methods, sigma values, and elliptic curve group orders
+  - `sigma`: Sigma value that found this factor (for reproducibility)
+  - `group_order`: Calculated elliptic curve group order (via PARI/GP)
+  - `group_order_factorization`: Prime factorization of the group order
 - `work_assignments`: Active work assignments to clients
 - `clients`: Registered client information and capabilities
 - `projects`: Optional organizational structure for campaigns
@@ -180,9 +191,15 @@ Essential tables for ECM coordination:
 
 ## Binary Dependencies
 
+### Client Dependencies
 - **GMP-ECM**: Configure path in client.yaml `programs.gmp_ecm.path`
 - **YAFU**: Configure path in client.yaml `programs.yafu.path`
 - Both programs must be compiled and accessible on client machines
+
+### Server Dependencies
+- **t-level binary**: Deployed to `server/bin/t-level` for t-level calculations
+- **PARI/GP**: Installed in Docker container for elliptic curve group order calculations
+- **group.gp script**: PARI/GP script deployed to `server/bin/group.gp` for FindGroupOrder function
 
 ## Result Parsing Patterns
 
@@ -210,6 +227,7 @@ Essential tables for ECM coordination:
   - `composites.py` - Core composite operations
   - `factors.py` - Factor validation and management
   - `t_level_calculator.py` - ECM t-level calculations
+  - `group_order.py` - Elliptic curve group order calculation using PARI/GP
 - **Utilities**: `server/app/utils/*.py` - Shared utilities
   - `serializers.py` - Database model to API dict conversion
   - `query_helpers.py` - Reusable database query patterns

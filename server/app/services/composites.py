@@ -81,7 +81,12 @@ class CompositeService:
     @staticmethod
     def update_t_level(db: Session, composite_id: int) -> bool:
         """
-        Recalculate and update the current t-level for a composite based on all ECM attempts.
+        Recalculate and update the current t-level and target t-level for a composite.
+
+        This recalculates both:
+        - Current t-level: Based on all ECM attempts completed
+        - Target t-level: Based on current composite length and SNFS difficulty
+
         Returns True if composite was found and updated, False otherwise.
         """
         try:
@@ -100,8 +105,16 @@ class CompositeService:
             calculator = TLevelCalculator()
             current_t_level = calculator.get_current_t_level_from_attempts(ecm_attempts)
 
+            # Recalculate target t-level based on current composite length and SNFS data
+            # This is important when factors are found and current_composite is updated
+            target_t_level = calculator.calculate_target_t_level(
+                digit_length=composite.digit_length,
+                snfs_difficulty=composite.snfs_difficulty
+            )
+
             # Update the composite
             composite.current_t_level = current_t_level
+            composite.target_t_level = target_t_level
             db.commit()
 
             return True

@@ -67,16 +67,20 @@ ecm-wrapper/
 - **T-Level Tracking**: Monitor progress toward factorization goals with SNFS difficulty support
 - **SNFS Support**: Track special number form status and GNFS-equivalent difficulty
 - **Number Tracking**: Maintain link between original number form and current composite as factors are found
+- **Group Order Calculation**: Automatic elliptic curve group order computation via PARI/GP for mathematical analysis
 - **Admin Dashboard**: Web-based management interface with secure login
 - **API Security**: Admin endpoints protected by API key authentication
 - **REST API**: Full OpenAPI documentation at `/docs`
 - **Automated Deployment**: GitHub Actions integration for production deployment
 
 ### Client
-- **GMP-ECM Support**: Run elliptic curve method factorization
+- **GMP-ECM Support**: Run elliptic curve method factorization with GPU support
 - **YAFU Support**: Run multiple factorization methods (ECM, P-1, P+1, SIQS, NFS)
+- **Multiple Factor Handling**: Properly submits all factors found with individual sigma values
+- **Parametrization Tracking**: Tracks ECM parametrization (0-3) for accurate t-level calculations
 - **Batch Processing**: Scripts for automated processing
-- **Result Submission**: Automatic submission to coordination server
+- **Result Submission**: Automatic submission to coordination server with retry on failure
+- **Failed Submission Recovery**: `resend_failed.py` script to retry failed submissions
 
 ## Documentation
 
@@ -127,7 +131,7 @@ ecm-wrapper/
 
 ### Server
 - Docker & Docker Compose (recommended)
-- OR: Python 3.11+ and PostgreSQL 15+
+- OR: Python 3.11+, PostgreSQL 15+, and PARI/GP (for group order calculations)
 
 ### Client
 - Python 3.8+

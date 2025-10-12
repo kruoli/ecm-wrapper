@@ -14,6 +14,9 @@ from typing import Dict, Any, Optional, List, Callable
 import requests
 import yaml
 
+from config_manager import ConfigManager
+from api_client import APIClient
+
 
 class BaseWrapper:
     """Base class for factorization wrappers with common functionality."""
@@ -22,16 +25,9 @@ class BaseWrapper:
         """Initialize wrapper with configuration."""
         self._validate_working_directory()
 
-        # Load default config
-        with open(config_path, 'r', encoding='utf-8') as f:
-            self.config = yaml.safe_load(f)
-
-        # Load local overrides if they exist
-        local_config_path = Path(config_path).parent / 'client.local.yaml'
-        if local_config_path.exists():
-            with open(local_config_path, 'r', encoding='utf-8') as f:
-                local_config = yaml.safe_load(f)
-                self.config = self._deep_merge(self.config, local_config)
+        # Load configuration using ConfigManager
+        config_manager = ConfigManager()
+        self.config = config_manager.load_config(config_path)
 
         self.setup_logging()
         # Construct client_id from username and cpu_name
@@ -40,15 +36,12 @@ class BaseWrapper:
         self.client_id = f"{username}-{cpu_name}"
         self.api_endpoint = self.config['api']['endpoint']
 
-    def _deep_merge(self, base: dict, override: dict) -> dict:
-        """Deep merge override dict into base dict."""
-        result = base.copy()
-        for key, value in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = self._deep_merge(result[key], value)
-            else:
-                result[key] = value
-        return result
+        # Initialize API client
+        self.api_client = APIClient(
+            api_endpoint=self.api_endpoint,
+            timeout=self.config['api']['timeout'],
+            retry_attempts=self.config['api']['retry_attempts']
+        )
 
     def _validate_working_directory(self):
         """Validate that we're running from the correct directory."""
@@ -121,153 +114,35 @@ class BaseWrapper:
     def submit_result(self, results: Dict[str, Any], project: Optional[str] = None,
                      program: str = "unknown") -> bool:
         """Submit results to API with retry logic."""
-        # Handle different result formats
-        factor_found = None
-        if 'factor_found' in results:
-            factor_found = results['factor_found']
-        elif 'factors_found' in results and results['factors_found']:
-            factor_found = results['factors_found'][0]  # Use first factor
+        # Build payload using APIClient
+        payload = self.api_client.build_submission_payload(
+            composite=results['composite'],
+            client_id=self.client_id,
+            method=results.get('method', 'ecm'),
+            program=program,
+            program_version=self.get_program_version(program),
+            results=results,
+            project=project
+        )
 
-        payload = {
-            'composite': results['composite'],
-            'project': project,
-            'client_id': self.client_id,
-            'method': results.get('method', 'ecm'),
-            'program': program,
-            'program_version': self.get_program_version(program),
-            'parameters': {
-                'b1': results.get('b1'),
-                'b2': results.get('b2'),
-                'curves': results.get('curves_requested'),
-                'parametrization': results.get('parametrization', 3),  # Default to param 3 (GMP-ECM default)
-                'sigma': results.get('sigma')
-            },
-            'results': {
-                'factor_found': factor_found,
-                'curves_completed': results.get('curves_completed', 0),
-                'execution_time': results.get('execution_time', 0)
-            },
-            'raw_output': results.get('raw_output', '')
-        }
+        # Submit using APIClient
+        success = self.api_client.submit_result(
+            payload=payload,
+            save_on_failure=True,
+            results_context=results
+        )
 
-        url = f"{self.api_endpoint}/submit_result"
-        retry_count = self.config['api']['retry_attempts']
+        # Submit additional factors if present and first submission succeeded
+        if success and 'factors_found' in results and len(results['factors_found']) > 1:
+            self.api_client.submit_multiple_factors(
+                results=results,
+                client_id=self.client_id,
+                program=program,
+                program_version=self.get_program_version(program),
+                project=project
+            )
 
-        # Log submission attempt (only in debug mode)
-        if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug(f"Submitting to {url}")
-            self.logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
-
-        for attempt in range(retry_count):
-            try:
-                response = requests.post(
-                    url,
-                    json=payload,
-                    timeout=self.config['api']['timeout']
-                )
-                if response.status_code != 200:
-                    print(f"❌ Server response ({response.status_code}): {response.text}")
-                response.raise_for_status()
-                self.logger.info(f"Successfully submitted results: {response.json()}")
-
-                # Submit additional factors if present
-                if ('factors_found' in results and
-                    len(results['factors_found']) > 1):
-                    self._submit_additional_factors(results, project, program)
-
-                return True
-            except requests.exceptions.RequestException as e:
-                error_details = ""
-                if hasattr(e, 'response') and e.response is not None:
-                    try:
-                        error_details = f" - Response: {e.response.text}"
-                    except:
-                        pass
-                self.logger.error(f"API submission failed (attempt {attempt + 1}): {e}{error_details}")
-                if attempt < retry_count - 1:
-                    time.sleep(2 ** attempt)  # Exponential backoff
-
-        # Save failed submission for later retry
-        self._save_failed_submission(results, payload)
-        self.logger.error(f"Failed to submit results after {retry_count} attempts")
-
-        return False
-
-    def _save_failed_submission(self, results: Dict[str, Any], payload: Dict[str, Any]):
-        """Save failed submission for later retry."""
-        try:
-            # Create data directory if it doesn't exist
-            data_dir = Path("data/results")
-            data_dir.mkdir(parents=True, exist_ok=True)
-
-            # Create filename with timestamp and composite hash
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            composite_hash = hashlib.md5(results['composite'].encode()).hexdigest()[:8]
-            filename = f"failed_submission_{timestamp}_{composite_hash}.json"
-
-            # Combine original results with API payload for context
-            save_data = {
-                **results,
-                'api_payload': payload,
-                'submitted': False,
-                'failed_at': datetime.datetime.now().isoformat(),
-                'retry_count': self.config['api']['retry_attempts']
-            }
-
-            filepath = data_dir / filename
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(save_data, f, indent=2)
-
-            self.logger.info(f"Saved failed submission to: {filepath}")
-
-        except Exception as e:
-            self.logger.error(f"Failed to save submission data: {e}")
-
-    def _submit_additional_factors(self, results: Dict[str, Any],
-                                  project: Optional[str], program: str):
-        """Submit additional factors found in the same run."""
-        # Get factor-to-sigma mapping if available
-        factor_sigmas = results.get('factor_sigmas', {})
-
-        for factor in results['factors_found'][1:]:
-            # Use the specific sigma for this factor, or fall back to the main sigma
-            factor_sigma = factor_sigmas.get(factor, results.get('sigma'))
-
-            payload = {
-                'composite': results['composite'],
-                'project': project,
-                'client_id': self.client_id,
-                'method': results.get('method', 'ecm'),
-                'program': program,
-                'program_version': self.get_program_version(program),
-                'parameters': {
-                    'b1': results.get('b1'),
-                    'b2': results.get('b2'),
-                    'curves': results.get('curves_requested'),
-                    'parametrization': results.get('parametrization', 3),
-                    'sigma': factor_sigma
-                },
-                'results': {
-                    'factor_found': factor,
-                    'curves_completed': 0,  # Additional factor from same run
-                    'execution_time': 0
-                },
-                'raw_output': f"Additional factor from same run: {factor}"
-            }
-
-            try:
-                response = requests.post(
-                    f"{self.api_endpoint}/submit_result",
-                    json=payload,
-                    timeout=self.config['api']['timeout']
-                )
-                if response.status_code != 200:
-                    self.logger.error(f"Additional factor submission failed ({response.status_code}): {response.text}")
-                else:
-                    result = response.json()
-                    self.logger.info(f"Submitted additional factor: {factor} - {result}")
-            except Exception as e:
-                self.logger.error(f"Failed to submit additional factor {factor}: {e}")
+        return success
 
     def create_base_results(self, composite: str, method: str = "ecm", **kwargs) -> Dict[str, Any]:
         """Create standardized results dictionary."""

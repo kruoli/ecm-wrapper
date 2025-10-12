@@ -414,6 +414,7 @@ class CompositeManager:
                     'method': attempt.method,
                     'b1': attempt.b1,
                     'b2': attempt.b2,
+                    'parametrization': attempt.parametrization,
                     'curves_completed': attempt.curves_completed,
                     'factor_found': attempt.factor_found,
                     'created_at': attempt.created_at,

@@ -1,11 +1,12 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func, desc
-from typing import List, Dict, Any, Optional, Tuple, Union
 import csv
 import io
-import re
 import logging
+import re
 from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple, Union
+
+from sqlalchemy.orm import Session
+from sqlalchemy import and_, func
 
 from ..models.composites import Composite
 from ..models.attempts import ECMAttempt
@@ -30,7 +31,7 @@ class CompositeLoader:
             List of valid composite numbers
         """
         numbers = []
-        with open(file_path, 'r') as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line or line.startswith('#'):  # Skip empty lines and comments

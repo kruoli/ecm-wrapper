@@ -2,8 +2,9 @@
 Jinja2 template configuration module.
 Provides a singleton templates instance that can be imported across the app.
 """
-from fastapi.templating import Jinja2Templates
 from pathlib import Path
+
+from fastapi.templating import Jinja2Templates
 
 from .utils.html_helpers import (
     esc,

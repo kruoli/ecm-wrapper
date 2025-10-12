@@ -73,12 +73,12 @@ class FactorService:
         db.refresh(new_factor)
 
         return new_factor, True
-    
+
     @staticmethod
     def get_factors_for_composite(db: Session, composite_id: int) -> List[Factor]:
         """Get all factors for a composite."""
         return db.query(Factor).filter(Factor.composite_id == composite_id).all()
-    
+
     @staticmethod
     def verify_factorization(db: Session, composite_id: int) -> bool:
         """
@@ -89,14 +89,14 @@ class FactorService:
             composite = db.query(Composite).filter(Composite.id == composite_id).first()
             if not composite:
                 return False
-            
+
             factors = FactorService.get_factors_for_composite(db, composite_id)
             if not factors:
                 return False
-            
+
             factor_strings = [factor.factor for factor in factors]
             return verify_complete_factorization(composite.number, factor_strings)
-            
+
         except Exception as e:
             # Log error but don't raise - verification failure should be handled gracefully
             return False

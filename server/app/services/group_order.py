@@ -5,11 +5,12 @@ Calculates elliptic curve group orders for ECM factors using PARI/GP.
 Based on the FindGroupOrder function for different ECM parametrizations.
 """
 
-import subprocess
 import logging
 import os
 from pathlib import Path
 from typing import Optional, Tuple
+
+from ..utils.process_executor import ExternalProgramExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,12 @@ class GroupOrderCalculator:
             script_path: Path to group.gp script (default: /app/bin/group.gp or ./bin/group.gp)
         """
         self.gp_binary = gp_binary
+
+        # Initialize executor for PARI/GP
+        self.executor = ExternalProgramExecutor(
+            gp_binary,
+            binary_name="PARI/GP"
+        )
 
         # Find the group.gp script
         if script_path:
@@ -89,33 +96,15 @@ class GroupOrderCalculator:
             script = f'{inline_script}FindGroupOrder({factor},{sigma_value},{parametrization})\nquit\n'
 
         try:
-            # Execute PARI/GP with explicit encoding
-            result = subprocess.run(
-                [self.gp_binary, "-q", "-f"],  # -q: quiet, -f: fast
-                input=script.encode('utf-8'),
-                capture_output=True,
-                timeout=30,  # 30 second timeout
+            # Execute PARI/GP using executor
+            success, group_order = self.executor.execute_and_get_last_line(
+                args=["-q", "-f"],  # -q: quiet, -f: fast
+                input_data=script,
+                timeout=30
             )
 
-            if result.returncode != 0:
-                stderr = result.stderr.decode('utf-8') if isinstance(result.stderr, bytes) else result.stderr
-                logger.error(f"PARI/GP error: {stderr}")
+            if not success or not group_order:
                 return None
-
-            # Parse output - last line should be the group order
-            stdout = result.stdout.decode('utf-8') if isinstance(result.stdout, bytes) else result.stdout
-            output = stdout.strip()
-            if not output:
-                logger.error("PARI/GP returned no output")
-                return None
-
-            # Extract the group order (last line of output)
-            lines = [line.strip() for line in output.split('\n') if line.strip()]
-            if not lines:
-                logger.error("No valid output from PARI/GP")
-                return None
-
-            group_order = lines[-1]
 
             # Try to factor the group order for interesting structure
             factorization = self._factor_group_order(group_order)
@@ -127,11 +116,6 @@ class GroupOrderCalculator:
 
             return (group_order, factorization)
 
-        except subprocess.TimeoutExpired:
-            logger.error(
-                f"PARI/GP timeout calculating group order for factor {factor[:20]}..."
-            )
-            return None
         except Exception as e:
             logger.error(
                 f"Error calculating group order for factor {factor[:20]}...: {e}"
@@ -151,25 +135,20 @@ class GroupOrderCalculator:
         script = f"factor({group_order})\nquit\n"
 
         try:
-            result = subprocess.run(
-                [self.gp_binary, "-q", "-f"],
-                input=script.encode('utf-8'),
-                capture_output=True,
+            # Execute PARI/GP factorization
+            success, lines = self.executor.execute_and_parse_lines(
+                args=["-q", "-f"],
+                input_data=script,
                 timeout=10,
+                filter_empty=True
             )
 
-            if result.returncode != 0:
-                return None
-
-            stdout = result.stdout.decode('utf-8') if isinstance(result.stdout, bytes) else result.stdout
-            output = stdout.strip()
-            if not output:
+            if not success or not lines:
                 return None
 
             # Parse PARI/GP matrix format: [2 5]\n[3 2]\n[5 2] means 2^5 * 3^2 * 5^2
             factors = []
-            for line in output.split('\n'):
-                line = line.strip()
+            for line in lines:
                 if line.startswith('[') and line.endswith(']'):
                     # Remove brackets and split
                     parts = line[1:-1].split()

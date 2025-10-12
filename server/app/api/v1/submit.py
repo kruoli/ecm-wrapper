@@ -83,7 +83,7 @@ async def submit_result(
             sigma,
             result_request.parameters.curves
         )
-        
+
         # Check for existing work
         existing_attempt = db.query(ECMAttempt).filter(ECMAttempt.work_hash == work_hash).first()
         if existing_attempt:
@@ -94,7 +94,7 @@ async def submit_result(
                 message="Duplicate work detected - using existing attempt",
                 factor_status="duplicate"
             )
-        
+
         # Create attempt record with IP logging
         attempt = ECMAttempt(
             composite_id=composite.id,
@@ -113,11 +113,11 @@ async def submit_result(
             work_hash=work_hash,
             client_ip=client_ip
         )
-        
+
         db.add(attempt)
         db.flush()  # Get ID without committing transaction
         db.refresh(attempt)
-        
+
         # Handle factor discovery
         factor_status = "no_factor"
         if result_request.results.factor_found:
@@ -149,7 +149,7 @@ async def submit_result(
                 # Check if we now have complete factorization
                 if FactorService.verify_factorization(db, composite.id):
                     CompositeService.mark_fully_factored(db, composite.id)
-        
+
         # Update t-level if this was an ECM attempt
         if result_request.method == 'ecm':
             try:
@@ -169,7 +169,7 @@ async def submit_result(
             message="Result logged successfully",
             factor_status=factor_status
         )
-        
+
     except HTTPException:
         # Re-raise HTTPExceptions (like validation errors) without modification
         db.rollback()

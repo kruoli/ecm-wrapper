@@ -1,16 +1,17 @@
 import os
 from functools import lru_cache
+from pathlib import Path
+from typing import Optional
+
 from pydantic import Field, validator
 from pydantic_settings import BaseSettings
-from typing import Optional
-from pathlib import Path
 
 def read_secret_file(file_path: str) -> Optional[str]:
     """Read secret from file if it exists."""
     try:
         path = Path(file_path)
         if path.exists():
-            return path.read_text().strip()
+            return path.read_text(encoding='utf-8').strip()
     except Exception:
         pass
     return None
@@ -39,17 +40,17 @@ class Settings(BaseSettings):
         default_factory=get_database_url,
         description="PostgreSQL connection string"
     )
-    
+
     # API
     api_title: str = "ECM Distributed Factorization API"
     api_version: str = "1.0.0"
     api_description: str = "API for coordinating distributed integer factorization"
-    
+
     # Server
     host: str = Field(default="0.0.0.0", description="Server bind address")
     port: int = Field(default=8000, ge=1, le=65535, description="Server port")
     reload: bool = False
-    
+
     # Work assignment
     default_work_timeout_minutes: int = Field(default=60, ge=1, le=1440, description="Work timeout in minutes")
     max_work_items_per_client: int = Field(default=5, ge=1, le=100, description="Max work items per client")
@@ -59,7 +60,7 @@ class Settings(BaseSettings):
         default=os.getenv("T_LEVEL_BINARY_PATH", "/app/bin/t-level"),
         description="Path to t-level executable binary"
     )
-    
+
     # Security
     secret_key: str = Field(
         default_factory=lambda: (
@@ -78,13 +79,13 @@ class Settings(BaseSettings):
         min_length=16,
         description="API key for admin endpoints"
     )
-    
+
     @validator("database_url")
     def validate_database_url(cls, v):
         if not v.startswith("postgresql://") and not v.startswith("postgresql+psycopg2://"):
             raise ValueError("database_url must be a PostgreSQL connection string")
         return v
-    
+
     @validator("secret_key")
     def validate_secret_key(cls, v):
         if v == "dev-secret-key-change-in-production":
@@ -98,7 +99,7 @@ class Settings(BaseSettings):
             import warnings
             warnings.warn("Using default admin API key - change for production!", UserWarning)
         return v
-    
+
     class Config:
         env_file = ".env"
         validate_assignment = True

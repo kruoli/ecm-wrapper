@@ -4,13 +4,12 @@ T-level calculation service for ECM factorization targets.
 Integrates with existing t-level software and provides target calculations
 based on composite size and special form detection.
 """
-import math
-import re
 import logging
-from typing import Optional, Tuple, Dict, Any
+import math
 from pathlib import Path
-import subprocess
-import json
+from typing import Optional, Dict, Any
+
+from ..utils.process_executor import ExternalProgramExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +21,13 @@ class TLevelCalculator:
         from ..config import get_settings
         settings = get_settings()
         self.T_LEVEL_BINARY = settings.t_level_binary_path
-        self.t_level_available = self._check_t_level_software()
 
-    def _check_t_level_software(self) -> bool:
-        """Check if external t-level software is available."""
-        try:
-            t_level_path = Path(self.T_LEVEL_BINARY)
-            return t_level_path.exists()
-        except Exception:
-            return False
+        # Initialize executor for t-level binary
+        self.executor = ExternalProgramExecutor(
+            self.T_LEVEL_BINARY,
+            binary_name="t-level"
+        )
+        self.t_level_available = self.executor.check_binary_exists()
 
     def calculate_target_t_level(self, digit_length: int,
                                 special_form: Optional[str] = None,
@@ -324,31 +321,24 @@ class TLevelCalculator:
             # Join with semicolons for multiple entries
             input_string = ";".join(curve_strings)
 
-            # Call external t-level calculator
-            result = subprocess.run(
-                [self.T_LEVEL_BINARY, "-q", input_string],
-                capture_output=True,
-                text=True,
-                timeout=30  # 30 second timeout
+            # Call external t-level calculator using executor
+            success, output = self.executor.execute_and_get_last_line(
+                args=["-q", input_string],
+                timeout=30
             )
 
-            if result.returncode == 0:
-                # Parse output: expected format is "t45.185"
-                output = result.stdout.strip()
-                if output.startswith('t'):
-                    t_level = float(output[1:])  # Remove 't' prefix and convert to float
-                    logger.info(f"External t-level calculation: {input_string} -> {output}")
-                    return t_level
-                else:
-                    logger.warning(f"Unexpected t-level output format: {output}")
-                    return 0.0
-            else:
-                logger.warning(f"T-level calculation failed: {result.stderr}")
+            if not success or not output:
                 return 0.0
 
-        except subprocess.TimeoutExpired:
-            logger.warning("T-level calculation timed out")
-            return 0.0
+            # Parse output: expected format is "t45.185"
+            if output.startswith('t'):
+                t_level = float(output[1:])  # Remove 't' prefix and convert to float
+                logger.info(f"External t-level calculation: {input_string} -> {output}")
+                return t_level
+            else:
+                logger.warning(f"Unexpected t-level output format: {output}")
+                return 0.0
+
         except Exception as e:
             logger.warning(f"External t-level calculation failed: {e}")
             return 0.0

@@ -10,7 +10,7 @@ class ECMAttempt(Base, TimestampMixin):
     composite_id = Column(Integer, ForeignKey("composites.id"), nullable=False)
     client_id = Column(String(255), nullable=False, index=True)
     client_ip = Column(String(45), nullable=True, index=True)  # IPv4 or IPv6
-    
+
     # Method and parameters
     method = Column(String(50), nullable=False)  # 'ecm', 'pm1', 'pp1', 'qs', 'nfs'
     b1 = Column(BigInteger, nullable=False)
@@ -18,29 +18,29 @@ class ECMAttempt(Base, TimestampMixin):
     parametrization = Column(Integer, nullable=True)  # ECM parametrization type (0, 1, 2, or 3)
     curves_requested = Column(Integer, nullable=False)
     curves_completed = Column(Integer, nullable=False)
-    
+
     # Duplicate detection hash
     work_hash = Column(String(64), nullable=True, index=True, unique=True)  # SHA-256 hash
-    
+
     # Results
     factor_found = Column(Text, nullable=True)  # NULL if no factor found
     execution_time_seconds = Column(Float, nullable=True)
-    
+
     # Program info
     program = Column(String(50), nullable=False)  # 'gmp-ecm', 'yafu', etc
     program_version = Column(String(50), nullable=True)
-    
+
     # Status and metadata
     status = Column(String(20), default='completed', nullable=False)  # 'running', 'completed', 'failed', 'timeout'
     raw_output = Column(Text, nullable=True)  # Store full output for debugging
-    
+
     # Work assignment fields
     assigned_at = Column(DateTime, nullable=True)
     started_at = Column(DateTime, nullable=True)
-    
+
     # Relationships
     composite = relationship("Composite")
-    
+
     @classmethod
     def generate_work_hash(cls, composite: str, method: str, b1: int, b2: int = None,
                           parametrization: int = None, sigma: int = None, curves: int = None) -> str:
@@ -71,7 +71,7 @@ class ECMAttempt(Base, TimestampMixin):
             hash_input += f":curves:{curves}"
 
         return hashlib.sha256(hash_input.encode()).hexdigest()
-    
+
     def set_work_hash(self, composite_number: str, sigma: int = None):
         """Set the work hash for this attempt.
 
@@ -83,7 +83,7 @@ class ECMAttempt(Base, TimestampMixin):
             composite_number, self.method, self.b1, self.b2,
             self.parametrization, sigma, self.curves_requested
         )
-    
+
     # Indexes for common queries
     __table_args__ = (
         Index('ix_ecm_attempts_composite_method', 'composite_id', 'method'),

@@ -13,11 +13,11 @@ class Factor(Base, TimestampMixin):
     sigma = Column(BigInteger, nullable=True)  # Sigma value that found this factor (ECM only)
     group_order = Column(Text, nullable=True)  # Elliptic curve group order (ECM only)
     group_order_factorization = Column(Text, nullable=True)  # Factorization of group order
-    
+
     # Relationships
     composite = relationship("Composite")
     attempt = relationship("ECMAttempt")
-    
+
     # Ensure no duplicate factors per composite
     __table_args__ = (
         UniqueConstraint('composite_id', 'factor', name='unique_composite_factor'),

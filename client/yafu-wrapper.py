@@ -95,7 +95,7 @@ class YAFUWrapper(BaseWrapper):
             self.save_raw_output(results, f'yafu-{method}')
 
         return results
-    
+
     def run_yafu_auto(self, composite: str, method: Optional[str] = None) -> Dict[str, Any]:
         """Run YAFU in automatic factorization mode using unified base infrastructure."""
         # Build command with composite included
@@ -121,10 +121,10 @@ class YAFUWrapper(BaseWrapper):
             self.save_raw_output(results, f'yafu-{method or "auto"}')
 
         return results
-    
-    
-    
-    
+
+
+
+
     def get_program_version(self, program: str) -> str:
         """Override base class method to get YAFU version"""
         return self.get_yafu_version()
@@ -143,16 +143,16 @@ class YAFUWrapper(BaseWrapper):
         except:
             pass
         return "unknown"
-    
+
 
 def main():
     from arg_parser import create_yafu_parser
 
     parser = create_yafu_parser()
     args = parser.parse_args()
-    
+
     wrapper = YAFUWrapper(args.config)
-    
+
     if args.mode in ['ecm', 'pm1', 'pp1']:
         # Use ECM/P-1/P+1 mode
         b1 = args.b1 or 50000  # Default B1 if not specified
@@ -170,7 +170,7 @@ def main():
             composite=args.composite,
             method=method
         )
-    
+
     # Submit results unless disabled or failed
     if not args.no_submit:
         # Only submit if we actually completed some curves (not a failure)

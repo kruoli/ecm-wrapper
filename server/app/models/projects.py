@@ -8,7 +8,7 @@ class Project(Base, TimestampMixin):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False, unique=True)
     description = Column(Text, nullable=True)
-    
+
     # Relationships
     composites = relationship("ProjectComposite", back_populates="project")
 
@@ -19,7 +19,7 @@ class ProjectComposite(Base):
     composite_id = Column(Integer, ForeignKey("composites.id"), primary_key=True)
     priority = Column(Integer, default=0, nullable=False)  # 0-10 scale
     added_at = Column(DateTime, server_default=func.now(), nullable=False)
-    
+
     # Relationships
     project = relationship("Project", back_populates="composites")
     composite = relationship("Composite")

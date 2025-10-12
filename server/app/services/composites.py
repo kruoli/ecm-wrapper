@@ -25,7 +25,7 @@ class CompositeService:
         ).first()
         if existing:
             return existing, False
-        
+
         # Create new composite
         digit_length = calculate_digit_length(number)
 
@@ -34,18 +34,18 @@ class CompositeService:
             current_composite=number,  # Initially same as number until factors are found
             digit_length=digit_length
         )
-        
+
         db.add(composite)
         db.commit()
         db.refresh(composite)
-        
+
         return composite, True
-    
+
     @staticmethod
     def get_composite_by_number(db: Session, number: str) -> Optional[Composite]:
         """Get composite by number string."""
         return db.query(Composite).filter(Composite.number == number).first()
-    
+
     @staticmethod
     def mark_fully_factored(db: Session, composite_id: int) -> bool:
         """
@@ -61,7 +61,7 @@ class CompositeService:
         except Exception as e:
             db.rollback()
             raise ValueError(f"Failed to mark composite {composite_id} as fully factored: {str(e)}")
-    
+
     @staticmethod
     def mark_prime(db: Session, composite_id: int) -> bool:
         """

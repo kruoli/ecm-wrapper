@@ -2,33 +2,34 @@
 """
 Base wrapper class containing shared functionality for ECM and YAFU wrappers.
 """
-import yaml
-import time
-import logging
-import requests
 import datetime
-import json
 import hashlib
+import json
+import logging
+import subprocess
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
-import subprocess
+
+import requests
+import yaml
 
 
 class BaseWrapper:
     """Base class for factorization wrappers with common functionality."""
-    
+
     def __init__(self, config_path: str):
         """Initialize wrapper with configuration."""
         self._validate_working_directory()
 
         # Load default config
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
 
         # Load local overrides if they exist
         local_config_path = Path(config_path).parent / 'client.local.yaml'
         if local_config_path.exists():
-            with open(local_config_path, 'r') as f:
+            with open(local_config_path, 'r', encoding='utf-8') as f:
                 local_config = yaml.safe_load(f)
                 self.config = self._deep_merge(self.config, local_config)
 
@@ -89,7 +90,7 @@ class BaseWrapper:
             ]
         )
         self.logger = logging.getLogger(__name__)
-    
+
     def log_factor_found(self, composite: str, factor: str, b1: Optional[int],
                         b2: Optional[int], curves: Optional[int],
                         method: str = "ecm", sigma: Optional[str] = None,
@@ -98,8 +99,8 @@ class BaseWrapper:
         factors_file = Path("data/factors_found.txt")
         factors_file.parent.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        
-        with open(factors_file, 'a') as f:
+
+        with open(factors_file, 'a', encoding='utf-8') as f:
             f.write(f"\n{'='*80}\n")
             f.write(f"FACTOR FOUND: {timestamp}\n")
             f.write(f"{'='*80}\n")
@@ -112,12 +113,12 @@ class BaseWrapper:
                 f.write("\n")
             f.write(f"Program: {program} ({method.upper()} mode)\n")
             f.write(f"{'='*80}\n\n")
-        
+
         # Also log to console with highlight
         print(f"\n🎉 FACTOR FOUND: {factor}")
         print(f"📋 Logged to: {factors_file}")
-    
-    def submit_result(self, results: Dict[str, Any], project: Optional[str] = None, 
+
+    def submit_result(self, results: Dict[str, Any], project: Optional[str] = None,
                      program: str = "unknown") -> bool:
         """Submit results to API with retry logic."""
         # Handle different result formats
@@ -126,7 +127,7 @@ class BaseWrapper:
             factor_found = results['factor_found']
         elif 'factors_found' in results and results['factors_found']:
             factor_found = results['factors_found'][0]  # Use first factor
-        
+
         payload = {
             'composite': results['composite'],
             'project': project,
@@ -148,19 +149,19 @@ class BaseWrapper:
             },
             'raw_output': results.get('raw_output', '')
         }
-        
+
         url = f"{self.api_endpoint}/submit_result"
         retry_count = self.config['api']['retry_attempts']
-        
+
         # Log submission attempt (only in debug mode)
         if self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug(f"Submitting to {url}")
             self.logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
-        
+
         for attempt in range(retry_count):
             try:
                 response = requests.post(
-                    url, 
+                    url,
                     json=payload,
                     timeout=self.config['api']['timeout']
                 )
@@ -168,12 +169,12 @@ class BaseWrapper:
                     print(f"❌ Server response ({response.status_code}): {response.text}")
                 response.raise_for_status()
                 self.logger.info(f"Successfully submitted results: {response.json()}")
-                
+
                 # Submit additional factors if present
-                if ('factors_found' in results and 
+                if ('factors_found' in results and
                     len(results['factors_found']) > 1):
                     self._submit_additional_factors(results, project, program)
-                
+
                 return True
             except requests.exceptions.RequestException as e:
                 error_details = ""
@@ -185,25 +186,25 @@ class BaseWrapper:
                 self.logger.error(f"API submission failed (attempt {attempt + 1}): {e}{error_details}")
                 if attempt < retry_count - 1:
                     time.sleep(2 ** attempt)  # Exponential backoff
-        
+
         # Save failed submission for later retry
         self._save_failed_submission(results, payload)
         self.logger.error(f"Failed to submit results after {retry_count} attempts")
-        
+
         return False
-    
+
     def _save_failed_submission(self, results: Dict[str, Any], payload: Dict[str, Any]):
         """Save failed submission for later retry."""
         try:
             # Create data directory if it doesn't exist
             data_dir = Path("data/results")
             data_dir.mkdir(parents=True, exist_ok=True)
-            
+
             # Create filename with timestamp and composite hash
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             composite_hash = hashlib.md5(results['composite'].encode()).hexdigest()[:8]
             filename = f"failed_submission_{timestamp}_{composite_hash}.json"
-            
+
             # Combine original results with API payload for context
             save_data = {
                 **results,
@@ -212,16 +213,16 @@ class BaseWrapper:
                 'failed_at': datetime.datetime.now().isoformat(),
                 'retry_count': self.config['api']['retry_attempts']
             }
-            
+
             filepath = data_dir / filename
-            with open(filepath, 'w') as f:
+            with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(save_data, f, indent=2)
-                
+
             self.logger.info(f"Saved failed submission to: {filepath}")
-            
+
         except Exception as e:
             self.logger.error(f"Failed to save submission data: {e}")
-    
+
     def _submit_additional_factors(self, results: Dict[str, Any],
                                   project: Optional[str], program: str):
         """Submit additional factors found in the same run."""
@@ -253,7 +254,7 @@ class BaseWrapper:
                 },
                 'raw_output': f"Additional factor from same run: {factor}"
             }
-            
+
             try:
                 response = requests.post(
                     f"{self.api_endpoint}/submit_result",
@@ -267,7 +268,7 @@ class BaseWrapper:
                     self.logger.info(f"Submitted additional factor: {factor} - {result}")
             except Exception as e:
                 self.logger.error(f"Failed to submit additional factor {factor}: {e}")
-    
+
     def create_base_results(self, composite: str, method: str = "ecm", **kwargs) -> Dict[str, Any]:
         """Create standardized results dictionary."""
         return {
@@ -413,30 +414,30 @@ class BaseWrapper:
     def get_program_version(self, program: str) -> str:
         """Get program version - to be implemented by subclasses."""
         return "unknown"
-    
+
     def save_raw_output(self, results: Dict[str, Any], program: str = "unknown"):
         """Save raw output to file for debugging."""
         output_dir = Path(self.config['execution']['output_dir'])
         output_dir.mkdir(exist_ok=True)
-        
+
         timestamp = time.strftime('%Y%m%d_%H%M%S')
         method = results.get('method', 'unknown')
         curves = results.get('curves_completed', 0)
         filename = output_dir / f"{program}_{method}_{timestamp}_{curves}curves.txt"
-        
-        with open(filename, 'w') as f:
+
+        with open(filename, 'w', encoding='utf-8') as f:
             f.write(f"Composite: {results['composite']}\n")
             if 'b1' in results:
                 f.write(f"B1: {results['b1']}, B2: {results.get('b2')}\n")
             f.write(f"Method: {method}\n")
             f.write(f"Program: {program}\n")
-            
+
             # Handle both single factor and multiple factors
             if 'factor_found' in results:
                 f.write(f"Factor found: {results['factor_found']}\n")
             elif 'factors_found' in results:
                 f.write(f"Factors found: {results['factors_found']}\n")
-                
+
             f.write(f"Curves completed: {results.get('curves_completed', 0)}\n")
             f.write(f"Execution time: {results.get('execution_time', 0):.2f}s\n\n")
             f.write(results.get('raw_output', ''))

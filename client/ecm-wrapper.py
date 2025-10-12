@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from base_wrapper import BaseWrapper
 from parsing_utils import parse_ecm_output, parse_ecm_output_multiple, count_ecm_steps_completed, Timeouts, ECMPatterns
+from residue_manager import ResidueFileManager
 
 def _run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optional[int],
                            curves: int, verbose: bool, method: str, ecm_path: str,
@@ -19,27 +20,27 @@ def _run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optiona
     """Global worker function for multiprocessing"""
     import subprocess
     import re
-    
+
     # Import the shared parsing function for worker processes
     from parsing_utils import parse_ecm_output as parse_ecm_output_local
-    
+
     # Build command for this worker
     cmd = [ecm_path]
-    
+
     # Add method-specific parameters
     if method == "pm1":
         cmd.append('-pm1')
     elif method == "pp1":
         cmd.append('-pp1')
-    
+
     if verbose:
         cmd.append('-v')
-    
+
     # Run specified number of curves
     cmd.extend(['-c', str(curves), str(b1)])
     if b2 is not None:
         cmd.append(str(b2))
-    
+
     try:
         print(f"Worker {worker_id} starting {curves} curves")
         process = subprocess.Popen(
@@ -49,24 +50,24 @@ def _run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optiona
             stderr=subprocess.STDOUT,
             text=True
         )
-        
+
         # Send composite number
         process.stdin.write(composite)
         process.stdin.close()
-        
+
         # Capture output
         output_lines = []
         curves_completed = 0
         factor_found = None
         sigma_found = None
         sigma_values = []  # Collect all sigma values used
-        
+
         while True:
             # Check stop event
             if stop_event.is_set():
                 process.terminate()
                 break
-                
+
             line = process.stdout.readline()
             if not line:
                 break
@@ -74,11 +75,11 @@ def _run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optiona
             if line:
                 print(f"Worker {worker_id}: {line}")
                 output_lines.append(line)
-                
+
                 # Track progress and check for factors
                 if "Step 1 took" in line:
                     curves_completed += 1
-                
+
                 # Collect sigma values from curve output
                 # Match both formats: "sigma=1:xxxx" and "-sigma 3:xxxx"
                 sigma_match = ECMPatterns.SIGMA_COLON_FORMAT.search(line) or ECMPatterns.SIGMA_DASH_FORMAT.search(line)
@@ -86,7 +87,7 @@ def _run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optiona
                     sigma_val = sigma_match.group(1)
                     if sigma_val not in sigma_values:
                         sigma_values.append(sigma_val)
-                
+
                 # Check for factor
                 if not factor_found:
                     factor, sigma = parse_ecm_output_local(line)
@@ -94,15 +95,15 @@ def _run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optiona
                         factor_found = factor
                         sigma_found = sigma
                         break  # Stop immediately when factor found
-        
+
         process.wait()
-        
+
         # If no factor found during streaming, check full output
         if not factor_found and not stop_event.is_set():
             full_output = '\n'.join(output_lines)
             factor_found, sigma_found = parse_ecm_output_local(full_output)
             curves_completed = curves  # All curves completed
-        
+
         result = {
             'worker_id': worker_id,
             'factor_found': factor_found,
@@ -111,9 +112,9 @@ def _run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optiona
             'curves_completed': curves_completed if not stop_event.is_set() else curves_completed,
             'raw_output': '\n'.join(output_lines)
         }
-        
+
         result_queue.put(result)
-        
+
     except Exception as e:
         print(f"Worker {worker_id} failed: {e}")
         result_queue.put({
@@ -128,6 +129,7 @@ def _run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optiona
 class ECMWrapper(BaseWrapper):
     def __init__(self, config_path: str):
         super().__init__(config_path)
+        self.residue_manager = ResidueFileManager()
 
     def _log_and_store_factors(self, all_factors: List[Tuple[str, Optional[str]]],
                                results: Dict[str, Any], composite: str, b1: int,
@@ -181,7 +183,7 @@ class ECMWrapper(BaseWrapper):
         self.logger.info(f"Factors found: {list(unique_factors.keys())}")
 
         return main_factor
-    
+
     def run_ecm(self, composite: str, b1: int, b2: Optional[int] = None,
                 curves: int = 100, sigma: Optional[int] = None,
                 use_gpu: bool = False, gpu_device: Optional[int] = None,
@@ -189,7 +191,7 @@ class ECMWrapper(BaseWrapper):
                 method: str = "ecm", continue_after_factor: bool = False) -> Dict[str, Any]:
         """Run GMP-ECM or P-1 and capture output"""
         ecm_path = self.config['programs']['gmp_ecm']['path']
-        
+
         # Build command base (without -c parameter, which will be added per batch)
         cmd_base = [ecm_path]
 
@@ -212,10 +214,10 @@ class ECMWrapper(BaseWrapper):
             cmd_base.extend(['-sigma', str(sigma)])
 
         # B1 and B2 will be added after -c parameter
-        
+
         method_name = method.upper() if method != "ecm" else "ECM"
         self.logger.info(f"Running {method_name} on {len(composite)}-digit number with B1={b1}, curves={curves}")
-        
+
         # Run ECM using optimized batch execution
         start_time = time.time()
         results = {
@@ -286,7 +288,7 @@ class ECMWrapper(BaseWrapper):
             except Exception as e:
                 self.logger.error(f"Error in batch starting at curve {curves_completed + 1}: {e}")
                 break
-        
+
         results['execution_time'] = time.time() - start_time
         results['raw_output'] = '\n'.join(results['raw_outputs'])
 
@@ -311,7 +313,7 @@ class ECMWrapper(BaseWrapper):
             self.save_raw_output(results, f'gmp-ecm-{method}')
 
         return results
-    
+
     def run_ecm_two_stage(self, composite: str, b1: int, b2: Optional[int] = None,
                          curves: int = 100, use_gpu: bool = True,
                          stage2_workers: int = 4, verbose: bool = False,
@@ -322,12 +324,12 @@ class ECMWrapper(BaseWrapper):
                          continue_after_factor: bool = False,
                          progress_interval: int = 0) -> Dict[str, Any]:
         """Run ECM using two-stage approach: GPU stage 1 + multi-threaded CPU stage 2"""
-        
+
         # Note: B2 can be None to use GMP-ECM defaults
-        
+
         stage1_desc = "GPU" if use_gpu else "CPU"
         self.logger.info(f"Running two-stage ECM: {stage1_desc} stage 1 ({curves} curves) + {stage2_workers} CPU workers for stage 2")
-        
+
         start_time = time.time()
         results = {
             'composite': composite,
@@ -341,7 +343,7 @@ class ECMWrapper(BaseWrapper):
             'two_stage': True,
             'stage2_workers': stage2_workers
         }
-        
+
         # Handle residue file location
         if resume_residues:
             # Resume from existing residues - skip stage 1
@@ -350,12 +352,12 @@ class ECMWrapper(BaseWrapper):
                 self.logger.error(f"Resume residue file not found: {residue_file}")
                 results['execution_time'] = time.time() - start_time
                 return results
-            
+
             self.logger.info(f"Resuming from residue file: {residue_file}")
             stage1_factor = None  # No stage 1 run
             residue_info = self._parse_residue_file(residue_file)
             actual_curves = residue_info['curve_count']
-            
+
         else:
             # Determine residue file location
             if save_residues:
@@ -372,7 +374,7 @@ class ECMWrapper(BaseWrapper):
                 timestamp = time.strftime('%Y%m%d_%H%M%S')
                 residue_file = Path(tempfile.gettempdir()) / f"residue_{composite_hash}_{timestamp}.txt"
                 self.logger.info(f"Using temporary residue file: {residue_file}")
-            
+
             actual_curves = curves  # Initialize fallback
             try:
                 # Stage 1: GPU or CPU execution with residue saving
@@ -396,7 +398,7 @@ class ECMWrapper(BaseWrapper):
                     results['raw_output'] = stage1_output
                     self.logger.info(f"Factor found in Stage 1: {stage1_factor}")
                     return results
-                
+
                 if not stage1_success:
                     self.logger.error("Stage 1 failed")
                     results['curves_completed'] = 0  # No valid results on failure
@@ -450,7 +452,7 @@ class ECMWrapper(BaseWrapper):
                 stage2_factor, stage2_sigma = stage2_result
         else:
             self.logger.info("Skipping Stage 2 (B2=0 - Stage 1 only mode)")
-        
+
         factor_found = stage1_factor or stage2_factor
         if factor_found:
             # Only set factor_found if not already set by _log_and_store_factors
@@ -475,13 +477,13 @@ class ECMWrapper(BaseWrapper):
         results['execution_time'] = time.time() - start_time
 
         return results
-    
+
     def _run_stage1(self, composite: str, b1: int, curves: int,
                    residue_file: Path, use_gpu: bool, verbose: bool,
                    gpu_device: Optional[int] = None, gpu_curves: Optional[int] = None) -> tuple[bool, Optional[str], int, str, List[tuple[str, Optional[str]]]]:
         """Run Stage 1 with GPU or CPU and save residues - returns (success, factor, actual_curves)"""
         ecm_path = self.config['programs']['gmp_ecm']['path']
-        
+
         cmd = [ecm_path, '-save', str(residue_file)]
         if use_gpu:
             cmd.insert(1, '-gpu')
@@ -510,13 +512,13 @@ class ECMWrapper(BaseWrapper):
             if curve_match:
                 actual_curves = int(curve_match.group(1))
                 self.logger.info(f"Stage 1 actually completed {actual_curves} curves")
-            
+
             return process.returncode == 0, factor, actual_curves, output, all_factors
-            
+
         except Exception as e:
             self.logger.error(f"Stage 1 GPU execution failed: {e}")
             return False, None, curves, "", []
-    
+
     def _run_stage2_multithread(self, residue_file: Path, b1: int, b2: int,
                                workers: int, verbose: bool, early_termination: bool = True,
                                progress_interval: int = 0) -> Optional[str]:
@@ -531,17 +533,17 @@ class ECMWrapper(BaseWrapper):
 
         # Split residue file into chunks for workers
         residue_chunks = self._split_residue_file(residue_file, workers)
-        
+
         if not residue_chunks:
             self.logger.error("Failed to split residue file")
             return None
-        
+
         factor_found = None
         factor_lock = threading.Lock()
         stop_event = threading.Event()
         running_processes = []
         process_lock = threading.Lock()
-        
+
         def worker_stage2(chunk_file: Path, worker_id: int) -> Optional[tuple[str, str]]:
             """Worker function for Stage 2 processing"""
             ecm_path = self.config['programs']['gmp_ecm']['path']
@@ -569,11 +571,11 @@ class ECMWrapper(BaseWrapper):
                     stderr=subprocess.STDOUT,
                     text=True
                 )
-                
+
                 # Register process for potential termination
                 with process_lock:
                     running_processes.append(process)
-                
+
                 # Stream output for progress tracking if progress_interval is set
                 if progress_interval > 0:
                     full_output = ""
@@ -654,14 +656,14 @@ class ECMWrapper(BaseWrapper):
                 with process_lock:
                     if process in running_processes:
                         running_processes.remove(process)
-        
+
         # Run workers in parallel
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = []
             for i, chunk_file in enumerate(residue_chunks):
                 future = executor.submit(worker_stage2, chunk_file, i+1)
                 futures.append(future)
-            
+
             # Wait for completion or first factor
             for future in as_completed(futures):
                 try:
@@ -672,7 +674,7 @@ class ECMWrapper(BaseWrapper):
                         break
                 except Exception as e:
                     self.logger.error(f"Worker thread error: {e}")
-            
+
             # Ensure all remaining processes are terminated
             with process_lock:
                 for process in running_processes:
@@ -682,7 +684,7 @@ class ECMWrapper(BaseWrapper):
                             process.wait(timeout=2)
                         except subprocess.TimeoutExpired:
                             process.kill()
-        
+
         # Cleanup temporary chunk files and directory
         chunk_dirs_to_cleanup = set()
         for chunk_file in residue_chunks:
@@ -700,61 +702,31 @@ class ECMWrapper(BaseWrapper):
                 self.logger.debug(f"Cleaned up chunk directory: {chunk_dir}")
             except:
                 pass
-        
+
         return factor_found
-    
+
     def _split_residue_file(self, residue_file: Path, num_chunks: int) -> List[Path]:
         """Split residue file into chunks for parallel processing"""
-        try:
-            with open(residue_file, 'r') as f:
-                lines = f.readlines()
+        # Create unique temporary directory for chunk files to avoid conflicts between concurrent jobs
+        import tempfile
+        chunk_dir = tempfile.mkdtemp(prefix="ecm_chunks_")
+        self.logger.debug(f"Creating chunks in temporary directory: {chunk_dir}")
 
-            if not lines:
-                return []
+        # Use ResidueFileManager to split the file
+        chunk_paths = self.residue_manager.split_into_chunks(
+            str(residue_file), num_chunks, chunk_dir
+        )
 
-            # Create unique temporary directory for chunk files to avoid conflicts between concurrent jobs
-            import tempfile
-            import os
-            chunk_dir = tempfile.mkdtemp(prefix="ecm_chunks_")
-            self.logger.debug(f"Creating chunks in temporary directory: {chunk_dir}")
+        # Convert string paths to Path objects
+        return [Path(p) for p in chunk_paths]
 
-            # Each residue typically spans multiple lines, but we'll split by line count
-            # This is a simple approach - GMP-ECM can handle partial residue files
-            chunk_size = max(1, len(lines) // num_chunks)
-            chunks = []
-
-            for i in range(num_chunks):
-                start_idx = i * chunk_size
-                if i == num_chunks - 1:  # Last chunk gets remaining lines
-                    end_idx = len(lines)
-                else:
-                    end_idx = (i + 1) * chunk_size
-
-                if start_idx >= len(lines):
-                    break
-
-                # Use unique temporary directory with process ID for chunk files
-                chunk_file = Path(chunk_dir) / f"residues_chunk_{os.getpid()}_{i+1}.txt"
-                with open(chunk_file, 'w') as f:
-                    f.writelines(lines[start_idx:end_idx])
-
-                if chunk_file.stat().st_size > 0:  # Only add non-empty chunks
-                    chunks.append(chunk_file)
-
-            self.logger.info(f"Split residue file into {len(chunks)} chunks in {chunk_dir}")
-            return chunks
-
-        except Exception as e:
-            self.logger.error(f"Failed to split residue file: {e}")
-            return []
-    
     def run_ecm_multiprocess(self, composite: str, b1: int, b2: Optional[int] = None,
                             curves: int = 100, workers: int = 4, verbose: bool = False,
                             method: str = "ecm", continue_after_factor: bool = False) -> Dict[str, Any]:
         """Run ECM using multi-process approach: each worker runs full ECM cycles"""
-        
+
         self.logger.info(f"Running multi-process ECM: {workers} workers, {curves} total curves")
-        
+
         start_time = time.time()
         results = {
             'composite': composite,
@@ -768,32 +740,32 @@ class ECMWrapper(BaseWrapper):
             'multiprocess': True,
             'workers': workers
         }
-        
+
         # Distribute curves across workers
         curves_per_worker = curves // workers
         remaining_curves = curves % workers
         worker_assignments = []
-        
+
         for worker_id in range(workers):
             worker_curves = curves_per_worker + (1 if worker_id < remaining_curves else 0)
             if worker_curves > 0:
                 worker_assignments.append((worker_id + 1, worker_curves))
-        
+
         self.logger.info(f"Curve distribution: {[f'Worker {w}: {c} curves' for w, c in worker_assignments]}")
-        
+
         # Run workers in parallel
         factor_found = None
         total_curves_completed = 0
-        
+
         # Use multiprocessing with a global function instead of ProcessPoolExecutor
         # to avoid pickling issues with instance methods
         import multiprocessing as mp
-        
+
         # Create shared variables for early termination
         manager = mp.Manager()
         result_queue = manager.Queue()
         stop_event = manager.Event()
-        
+
         # Start worker processes
         processes = []
         for worker_id, worker_curves in worker_assignments:
@@ -804,7 +776,7 @@ class ECMWrapper(BaseWrapper):
             )
             p.start()
             processes.append(p)
-        
+
         # Wait for results with improved synchronization
         factor_found = None
         factor_sigma = None
@@ -812,21 +784,21 @@ class ECMWrapper(BaseWrapper):
         total_curves_completed = 0
         completed_workers = 0
         results_received = []
-        
+
         # Use a shorter timeout and check processes more frequently
         while completed_workers < len(processes):
             got_result = False
-            
+
             # Try to get results from queue with short timeout
             try:
                 result = result_queue.get(timeout=0.5)
                 results_received.append(result)
                 total_curves_completed += result['curves_completed']
-                
+
                 # Collect sigma values from this worker
                 if 'sigma_values' in result:
                     all_sigma_values.extend(result['sigma_values'])
-                
+
                 if result['factor_found'] and not factor_found:
                     factor_found = result['factor_found']
                     factor_sigma = result.get('sigma_found')
@@ -838,11 +810,11 @@ class ECMWrapper(BaseWrapper):
                         stop_event.set()
                     else:
                         self.logger.info("Continuing all workers due to --continue-after-factor flag")
-                
+
                 got_result = True
             except:
                 pass  # Timeout or empty queue
-            
+
             # Check process status regardless of queue results
             active_processes = 0
             for i, p in enumerate(processes):
@@ -852,17 +824,17 @@ class ECMWrapper(BaseWrapper):
                     # Process finished - count it if we haven't already
                     if p.exitcode != 0:
                         self.logger.warning(f"Worker process {i+1} exited with code {p.exitcode}")
-            
+
             completed_workers = len(processes) - active_processes
-            
+
             # If no result was received and no processes are running, we might be done
             if not got_result and active_processes == 0:
                 break
-                
+
             # Brief sleep to prevent busy waiting
             if not got_result:
                 time.sleep(0.1)
-        
+
         # Final check for any remaining results in queue
         remaining_results = []
         try:
@@ -870,11 +842,11 @@ class ECMWrapper(BaseWrapper):
                 result = result_queue.get_nowait()
                 remaining_results.append(result)
                 total_curves_completed += result['curves_completed']
-                
+
                 # Collect sigma values from remaining results
                 if 'sigma_values' in result:
                     all_sigma_values.extend(result['sigma_values'])
-                
+
                 if result['factor_found'] and not factor_found:
                     factor_found = result['factor_found']
                     factor_sigma = result.get('sigma_found')
@@ -883,24 +855,24 @@ class ECMWrapper(BaseWrapper):
                         self.logger.info(f"Factor found with sigma: {factor_sigma}")
         except:
             pass  # Queue is empty
-        
+
         all_results = results_received + remaining_results
         self.logger.info(f"Collected results from {len(all_results)} worker(s)")
-        
+
         # If we got fewer results than processes, some workers may have failed
         if len(all_results) < len(processes):
             missing_workers = len(processes) - len(all_results)
             self.logger.warning(f"{missing_workers} worker(s) completed without reporting results")
-        
+
         # Clean up processes
         for p in processes:
             if p.is_alive():
                 p.terminate()
                 p.join(timeout=1)
-        
+
         # Recalculate total curves from actual results
         actual_curves_completed = sum(result['curves_completed'] for result in all_results)
-        
+
         # Remove duplicate sigma values and log summary
         unique_sigma_values = list(set(all_sigma_values))
         self.logger.info(f"Multiprocess run used {len(unique_sigma_values)} unique sigma values")
@@ -923,19 +895,19 @@ class ECMWrapper(BaseWrapper):
         results['parametrization'] = parametrization
         results['curves_completed'] = actual_curves_completed
         results['execution_time'] = time.time() - start_time
-        
+
         if factor_found:
             program_name = f"GMP-ECM ({method.upper()})"
             self.log_factor_found(composite, factor_found, b1, b2, curves, method=method, sigma=factor_sigma, program=program_name)
-        
+
         return results
-    
+
     def run_stage2_only(self, residue_file: str, b1: int, b2: int,
                        stage2_workers: int = 4, verbose: bool = False,
                        continue_after_factor: bool = False,
                        progress_interval: int = 0) -> Dict[str, Any]:
         """Run Stage 2 only on existing residue file"""
-        
+
         residue_path = Path(residue_file)
         if not residue_path.exists():
             self.logger.error(f"Residue file not found: {residue_path}")
@@ -945,13 +917,13 @@ class ECMWrapper(BaseWrapper):
                 'execution_time': 0,
                 'error': 'Residue file not found'
             }
-        
+
         # Extract composite number, curve count, and B1 from residue file
         residue_info = self._parse_residue_file(residue_path)
         composite = residue_info['composite']
         stage1_curves = residue_info['curve_count']
         stage1_b1 = residue_info['b1']
-        
+
         self.logger.info(f"Running Stage 2 on residue file: {residue_path}")
         if composite != "unknown":
             self.logger.info(f"Composite: {composite[:20]}...{composite[-20:]} ({len(composite)} digits)")
@@ -962,9 +934,9 @@ class ECMWrapper(BaseWrapper):
         self.logger.info(f"Using {stage2_workers} CPU workers, B1={actual_b1}, B2={b2}")
         if stage1_b1 > 0 and stage1_b1 != b1:
             self.logger.info(f"Note: Using B1={actual_b1} from residue file (overriding parameter B1={b1})")
-        
+
         start_time = time.time()
-        
+
         # Run stage 2 multithread
         early_termination = self.config['programs']['gmp_ecm'].get('early_termination', True) and not continue_after_factor
         if continue_after_factor:
@@ -972,15 +944,15 @@ class ECMWrapper(BaseWrapper):
         stage2_result = self._run_stage2_multithread(
             residue_path, actual_b1, b2, stage2_workers, verbose, early_termination, progress_interval
         )
-        
+
         # Extract factor and sigma from result
         factor_found = None
         sigma_found = None
         if stage2_result:
             factor_found, sigma_found = stage2_result
-        
+
         execution_time = time.time() - start_time
-        
+
         results = {
             'residue_file': residue_file,
             'composite': composite,
@@ -994,13 +966,13 @@ class ECMWrapper(BaseWrapper):
             'method': 'ecm',
             'raw_output': ''  # Stage 2 only doesn't have single raw output
         }
-        
+
         if factor_found:
             self.logger.info(f"Factor found in Stage 2: {factor_found}")
             self.log_factor_found(composite, factor_found, actual_b1, b2, stage1_curves, method="ecm", sigma=sigma_found, program="GMP-ECM (ECM-STAGE2)")
         else:
             self.logger.info("No factor found in Stage 2")
-        
+
         return results
 
     def _parse_residue_file(self, residue_path: Path) -> Dict[str, Any]:
@@ -1010,74 +982,42 @@ class ECMWrapper(BaseWrapper):
         Returns:
             Dict with keys: composite, b1, curve_count
         """
-        result = {
-            'composite': 'unknown',
-            'b1': 0,
-            'curve_count': 0
-        }
+        metadata = self.residue_manager.parse_metadata(str(residue_path))
 
-        try:
-            with open(residue_path, 'r') as f:
-                first_line = f.readline().strip()
-
-                # Extract from first line
-                if first_line:
-                    n_match = ECMPatterns.RESUME_N_PATTERN.search(first_line)
-                    if n_match:
-                        result['composite'] = n_match.group(1)
-
-                    b1_match = ECMPatterns.RESUME_B1_PATTERN.search(first_line)
-                    if b1_match:
-                        result['b1'] = int(b1_match.group(1))
-
-                # Count curves (first line already consumed)
-                if first_line.startswith('METHOD=ECM'):
-                    result['curve_count'] = 1
-
-                for line in f:
-                    if line.strip().startswith('METHOD=ECM'):
-                        result['curve_count'] += 1
-
-        except Exception as e:
-            self.logger.warning(f"Could not parse residue file: {e}")
-
-        return result
+        if metadata:
+            composite, b1, curve_count = metadata
+            return {
+                'composite': composite,
+                'b1': b1,
+                'curve_count': curve_count
+            }
+        else:
+            # Return default values on parse failure
+            return {
+                'composite': 'unknown',
+                'b1': 0,
+                'curve_count': 0
+            }
 
     def _correlate_factor_to_sigma(self, factor: str, residue_path: Path) -> Optional[str]:
         """
         Try to determine which sigma value found the factor by testing each residue.
         This is a fallback when ECM output doesn't contain sigma information.
         """
-        try:
-            factor_int = int(factor)
-            
-            with open(residue_path, 'r') as f:
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()
-                    if line and line.startswith('METHOD=ECM'):
-                        # Extract sigma from this residue line
-                        sigma_match = ECMPatterns.RESUME_SIGMA_PATTERN.search(line)
-                        if sigma_match:
-                            sigma = sigma_match.group(1)
+        sigma = self.residue_manager.correlate_factor_to_sigma(factor, str(residue_path))
 
-                            # Extract N from this line to verify it matches
-                            n_match = ECMPatterns.RESUME_N_PATTERN.search(line)
-                            if n_match:
-                                n = int(n_match.group(1))
-                                
-                                # Check if this factor divides N
-                                if n % factor_int == 0:
-                                    self.logger.info(f"Factor {factor} correlates to sigma {sigma} (line {line_num})")
-                                    return f"3:{sigma}"  # ECM format
-                            
-        except Exception as e:
-            self.logger.warning(f"Could not correlate factor to sigma: {e}")
-        
+        if sigma:
+            # Format as "3:sigma" (ECM format with parametrization 3)
+            # If sigma already contains parametrization prefix, use as-is
+            if ':' not in sigma:
+                return f"3:{sigma}"
+            return sigma
+
         return None
 
 
-    
-    
+
+
     def get_program_version(self, program: str) -> str:
         """Override base class method to get GMP-ECM version"""
         return self.get_ecm_version()
@@ -1095,7 +1035,7 @@ class ECMWrapper(BaseWrapper):
         except:
             pass
         return "unknown"
-    
+
 
 def main():
     from arg_parser import create_ecm_parser, validate_ecm_args, print_validation_errors
@@ -1109,7 +1049,7 @@ def main():
     # Validate arguments with config context
     errors = validate_ecm_args(args, wrapper.config)
     print_validation_errors(errors)
-    
+
     # Use shared argument processing utilities
     b1_default, b2_default = get_method_defaults(wrapper.config, args.method)
     b1 = args.b1 or b1_default
@@ -1124,7 +1064,7 @@ def main():
 
     # Resolve stage2 workers from config if not explicitly set
     stage2_workers = args.stage2_workers if hasattr(args, 'stage2_workers') and args.stage2_workers != 4 else get_stage2_workers_default(wrapper.config)
-    
+
     # Run ECM - choose mode based on arguments (validation already done by validate_ecm_args)
     if args.resume_residues:
         # Resume from existing residues - run stage 2 only
@@ -1179,7 +1119,7 @@ def main():
         # Standard mode
         if args.two_stage:
             print("Warning: Two-stage mode only available for ECM method, falling back to standard mode")
-        
+
         results = wrapper.run_ecm(
             composite=args.composite,
             b1=b1,
@@ -1192,7 +1132,7 @@ def main():
             method=args.method,
             continue_after_factor=args.continue_after_factor
         )
-    
+
     # Submit results unless disabled or failed
     if not args.no_submit:
         # Only submit if we actually completed some curves (not a failure)

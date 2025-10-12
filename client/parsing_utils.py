@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 # Timeout constants (seconds)
 class Timeouts:
     ECM_DEFAULT = 3600  # 1 hour
-    YAFU_ECM = 7200     # 2 hours  
+    YAFU_ECM = 7200     # 2 hours
     YAFU_AUTO = 14400   # 4 hours for NFS
 
 
@@ -66,25 +66,25 @@ class ECMPatterns:
 
 class YAFUPatterns:
     """Compiled regex patterns for YAFU output parsing."""
-    
+
     # Direct factor announcements
     FACTOR_FOUND = re.compile(r'found factor[:\s]+(\d+)', re.IGNORECASE)
-    
+
     # P/Q notation: "P39 = 123456789012345678901234567890123456789"
     PQ_NOTATION = re.compile(r'[PQ]\d+\s*=\s*(\d+)')
-    
+
     # Curves completion tracking
     CURVES_COMPLETED = re.compile(r'completed?\s+(\d+)\s+curves?', re.IGNORECASE)
-    
+
     # Curve progress: "curve X of Y"
     CURVE_PROGRESS = re.compile(r'curve\s+(\d+)\s+of\s+(\d+)', re.IGNORECASE)
-    
+
     # Factor section markers
     FACTOR_SECTION_START = re.compile(r'\*{3,}factors? found\*{3,}', re.IGNORECASE)
-    
-    # Factor lines in auto mode: "C123 = 456..." 
+
+    # Factor lines in auto mode: "C123 = 456..."
     AUTO_FACTOR = re.compile(r'[PCQ]\d+\s*=\s*(\d+)')
-    
+
     # Simple number lines (fallback)
     SIMPLE_NUMBER = re.compile(r'^\s*(\d+)\s*$')
 
@@ -421,11 +421,11 @@ def get_progress_summary(output: str, program_type: str, target_curves: Optional
 def extract_program_version(output: str, program_type: str) -> str:
     """
     Extract program version from help output.
-    
+
     Args:
         output: Program help/version output
         program_type: Either 'ecm' or 'yafu'
-    
+
     Returns:
         Version string or 'unknown'
     """

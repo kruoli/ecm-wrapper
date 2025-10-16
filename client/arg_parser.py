@@ -20,6 +20,8 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     parser.add_argument('--b1', type=int, help='B1 bound (overrides config)')
     parser.add_argument('--b2', type=int, help='B2 bound')
     parser.add_argument('--curves', '-c', type=int, help='Number of curves')
+    parser.add_argument('--tlevel', '-t', type=float, help='Target t-level (alternative to --curves, runs ECM iteratively)')
+    parser.add_argument('--batch-size', type=int, default=100, help='Batch size for t-level mode (default: 100)')
     parser.add_argument('--project', '-p', help='Project name')
     parser.add_argument('--no-submit', action='store_true', help='Do not submit to API')
 
@@ -95,6 +97,17 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
         Dictionary mapping argument names to error messages
     """
     errors = {}
+
+    # T-level mode validation
+    if hasattr(args, 'tlevel') and args.tlevel:
+        if args.curves:
+            errors['curves'] = "Cannot specify both --tlevel and --curves. Choose one."
+        if not args.composite:
+            errors['composite'] = "T-level mode requires composite number. Use --composite argument."
+        if args.b1:
+            errors['b1'] = "T-level mode automatically selects B1. Remove --b1 argument."
+        if args.stage2_only or args.resume_residues:
+            errors['mode'] = "T-level mode not compatible with stage2-only or resume-residues modes."
 
     # Mode compatibility checks
     if args.multiprocess and args.two_stage:

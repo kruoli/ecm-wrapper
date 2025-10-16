@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -73,7 +73,7 @@ async def find_composite_public(
 
     # Redirect to the canonical details page URL
     return RedirectResponse(
-        url=f"/api/v1/composites/{composite.id}/details",
+        url=f"/api/v1/dashboard/composites/{composite.id}/details",
         status_code=status.HTTP_302_FOUND
     )
 

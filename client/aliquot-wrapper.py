@@ -266,6 +266,9 @@ class AliquotWrapper(BaseWrapper):
         Strategy:
         1. Trial division up to 10^7 (very fast, catches small factors)
         2. ECM to 4/13 * digit_length t-level (finds medium factors)
+           - Uses new run_ecm_with_tlevel() which tracks actual t-level progress
+           - Automatically handles composite factors found during ECM
+           - Dynamically adjusts target when factors are found
         3. YAFU auto (handles remaining small-medium composites + primality)
         4. CADO-NFS if large composite remains (90+ digits)
 
@@ -315,68 +318,32 @@ class AliquotWrapper(BaseWrapper):
 
             return True, factorization, yafu_results
 
-        # Step 1: Run ECM to 4/13 * digit_length t-level
-        target_t_level = int((4.0 / 13.0) * digit_length)
-        self.logger.info(f"Running ECM pre-factorization to t{target_t_level}...")
+        # Step 1: Run ECM with t-level tracking to 4/13 * cofactor_digits
+        target_t_level = (4.0 / 13.0) * cofactor_digits
+        self.logger.info(f"Running ECM pre-factorization to t{target_t_level:.1f}...")
 
-        # Get ECM B1 from t-level (approximate)
-        # This is a simplified lookup - you might want a more precise table
-        b1_table = {
-            20: 11000, 25: 50000, 30: 250000, 35: 1000000,
-            40: 3000000, 45: 11000000, 50: 43000000, 55: 110000000,
-            60: 260000000, 65: 850000000, 70: 2900000000
-        }
+        # Use new run_ecm_with_tlevel() method which:
+        # - Automatically selects B1 based on current cofactor size
+        # - Tracks actual t-level progress using t-level binary
+        # - Fully factors any composite factors found
+        # - Dynamically adjusts target when number shrinks
+        ecm_results = self.ecm.run_ecm_with_tlevel(
+            composite=str(current_composite),
+            target_tlevel=target_t_level,
+            batch_size=100,
+            workers=self.threads if self.threads else 1,
+            use_two_stage=False,  # Standard CPU mode for aliquot sequences
+            verbose=self.verbose
+        )
 
-        # Find closest t-level
-        b1 = b1_table.get(target_t_level)
-        if b1 is None:
-            # Interpolate or use closest
-            closest_t = min(b1_table.keys(), key=lambda x: abs(x - target_t_level))
-            b1 = b1_table[closest_t]
-
-        self.logger.info(f"Using B1={b1} for t{target_t_level}")
-
-        # Run ECM with enough curves for the target t-level
-        # Rough estimate: ~100-1000 curves depending on t-level
-        curves = max(100, target_t_level * 10)
-
-        self.logger.info(f"Calculated {curves} curves for t{target_t_level}")
-
-        # Run ECM on the cofactor (after trial division)
-        # Use multiprocess mode if threads specified, otherwise regular mode
-        if self.threads and self.threads > 1:
-            self.logger.info(f"Using multiprocess ECM with {self.threads} workers, {curves} total curves")
-            ecm_results = self.ecm.run_ecm_multiprocess(
-                composite=str(current_composite),
-                b1=b1,
-                b2=None,  # Use ECM default B2
-                curves=curves,
-                workers=self.threads,
-                verbose=self.verbose
-            )
-        else:
-            ecm_results = self.ecm.run_ecm(
-                composite=str(current_composite),
-                b1=b1,
-                b2=None,  # Use ECM default B2
-                curves=curves,
-                verbose=self.verbose
-            )
-
-        # Collect ECM factors (handle both singular and plural returns)
-        ecm_factors = ecm_results.get('factors_found', [])
-        if not ecm_factors and ecm_results.get('factor_found'):
-            # Multiprocess mode may return factor_found (singular)
-            ecm_factors = [ecm_results['factor_found']]
-
+        # Collect ECM factors (all are guaranteed to be prime)
+        ecm_factors = ecm_results.get('all_prime_factors', [])
         if ecm_factors:
-            self.logger.info(f"ECM found {len(ecm_factors)} factor(s): {ecm_factors}")
+            self.logger.info(f"ECM found {len(ecm_factors)} prime factor(s)")
             all_factors.extend(ecm_factors)
 
-            # Calculate cofactor
-            for factor in ecm_factors:
-                current_composite = current_composite // int(factor)
-
+            # Get final cofactor from ECM results
+            current_composite = int(ecm_results.get('final_cofactor', current_composite))
             self.logger.info(f"Cofactor after ECM: {current_composite} ({len(str(current_composite))} digits)")
 
         # Step 2: Check if fully factored or need further factorization
@@ -545,20 +512,33 @@ class AliquotWrapper(BaseWrapper):
 
             composite_id = id_match.group(1)
 
-            # Fetch full number from FactorDB
-            show_url = f"https://factordb.com/index.php?showid={composite_id}"
-            show_response = requests.get(show_url, timeout=30)
-            show_response.raise_for_status()
+            # Fetch full number from FactorDB API
+            api_url = f"https://factordb.com/api?id={composite_id}"
+            self.logger.info(f"Fetching full number from FactorDB API (ID: {composite_id})...")
 
-            # Extract full number from show page
-            number_match = re.search(r'<pre>([\d\s]+)</pre>', show_response.text)
-            if number_match:
-                composite_str = number_match.group(1).replace(' ', '').replace('\n', '')
-                composite = int(composite_str)
+            # Use cookie for authenticated requests (may help with rate limiting)
+            cookies = {"fdbuser": "49842c2d25d13890591f62931240e7ba"}
+            api_response = requests.get(api_url, cookies=cookies, timeout=30)
+            api_response.raise_for_status()
+
+            api_result = api_response.json()
+
+            # Extract composite number from API response
+            # API returns: {"id": "...", "status": "C"/"CF", "factors": [[prime, exp], ...]}
+            # Reconstruct the number from factors
+            if 'factors' in api_result and api_result['factors']:
+                # Reconstruct number: multiply all prime^exponent
+                composite = 1
+                for factor_pair in api_result['factors']:
+                    prime = int(factor_pair[0])
+                    exponent = int(factor_pair[1])
+                    composite *= prime ** exponent
+
+                composite_str = str(composite)
                 self.logger.info(f"FactorDB: Found iteration {iteration} with {len(composite_str)}-digit composite")
                 return (iteration, composite)
             else:
-                self.logger.warning("Could not extract full number from FactorDB")
+                self.logger.warning(f"Could not extract factors from FactorDB API (response: {api_result})")
                 return None
 
         except requests.RequestException as e:
@@ -827,7 +807,10 @@ Common test sequences:
             resume_iteration, resume_composite = result
             print(f"Resuming from FactorDB: iteration {resume_iteration}, {len(str(resume_composite))}-digit composite")
         else:
-            print("Failed to fetch from FactorDB, starting from scratch")
+            print("Failed to fetch from FactorDB. Exiting.")
+            print("To start from scratch, run without --resume-factordb flag.")
+            wrapper.cleanup_temp_files()
+            sys.exit(1)
     elif args.resume_iteration is not None and args.resume_composite:
         # Manual resume
         resume_iteration = args.resume_iteration

@@ -1060,6 +1060,316 @@ class ECMWrapper(BaseWrapper):
             pass
         return "unknown"
 
+    def _trial_division(self, n: int, limit: int = 10**7) -> Tuple[List[int], int]:
+        """
+        Fast trial division to find small prime factors.
+
+        Args:
+            n: Number to factor
+            limit: Trial division limit (default: 10^7)
+
+        Returns:
+            Tuple of (factors_found, cofactor)
+        """
+        factors = []
+        cofactor = n
+
+        # Trial division by 2
+        while cofactor % 2 == 0:
+            factors.append(2)
+            cofactor //= 2
+
+        # Trial division by 3
+        while cofactor % 3 == 0:
+            factors.append(3)
+            cofactor //= 3
+
+        # Trial division by 5
+        while cofactor % 5 == 0:
+            factors.append(5)
+            cofactor //= 5
+
+        # Trial division by odd numbers
+        i = 7
+        while i * i <= cofactor and i <= limit:
+            while cofactor % i == 0:
+                factors.append(i)
+                cofactor //= i
+            i += 2
+
+        return factors, cofactor
+
+    def _fully_factor_found_result(self, factor: str) -> List[str]:
+        """
+        Recursively factor a result from ECM until all prime factors found.
+        Handles composite factors by using trial division + YAFU.
+
+        Args:
+            factor: Factor found by ECM (may be composite)
+
+        Returns:
+            List of prime factors (as strings)
+        """
+        factor_int = int(factor)
+
+        # Trial division catches small factors quickly
+        small_primes, cofactor = self._trial_division(factor_int, limit=10**7)
+        all_primes = [str(p) for p in small_primes]
+
+        if cofactor == 1:
+            return all_primes
+
+        # Use YAFU to finish factorization (handles primality + factoring)
+        digit_length = len(str(cofactor))
+        self.logger.info(f"Cofactor remaining: C{digit_length}, using YAFU to complete factorization")
+
+        try:
+            # Import YAFUWrapper for factorization
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("yafu_wrapper", "yafu-wrapper.py")
+            yafu_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(yafu_module)
+
+            yafu = yafu_module.YAFUWrapper(self.config_path)
+            yafu_results = yafu.run_yafu_auto(composite=str(cofactor))
+
+            if yafu_results.get('success'):
+                yafu_factors = yafu_results.get('factors_found', [])
+                all_primes.extend(yafu_factors)
+            else:
+                self.logger.warning(f"YAFU factorization failed for {cofactor}")
+                # Return what we have so far + the cofactor
+                all_primes.append(str(cofactor))
+
+        except Exception as e:
+            self.logger.error(f"Error during factorization of {cofactor}: {e}")
+            # Return what we have + the unfactored cofactor
+            all_primes.append(str(cofactor))
+
+        return all_primes
+
+    def _calculate_tlevel(self, curve_history: List[str]) -> float:
+        """
+        Call t-level binary to calculate current t-level.
+
+        Args:
+            curve_history: List of curve strings like "100@1000000,p=1"
+
+        Returns:
+            Current t-level as float
+        """
+        import re
+
+        if not curve_history:
+            return 0.0
+
+        tlevel_path = self.config.get('programs', {}).get('t_level', {}).get('path', 'bin/t-level')
+
+        # Join curve strings with semicolons
+        curve_input = ";".join(curve_history)
+
+        try:
+            # Call t-level binary
+            result = subprocess.run(
+                [tlevel_path, '-q', curve_input],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            # Parse output: "t40.234"
+            match = re.search(r't([\d.]+)', result.stdout)
+            if match:
+                return float(match.group(1))
+
+            self.logger.warning(f"Failed to parse t-level from: {result.stdout}")
+            return 0.0
+
+        except Exception as e:
+            self.logger.error(f"Error calculating t-level: {e}")
+            return 0.0
+
+    def _get_b1_for_digit_length(self, digits: int) -> int:
+        """
+        Select appropriate B1 value based on digit length.
+        Uses GMP-ECM recommended parameters.
+
+        Args:
+            digits: Digit length of composite
+
+        Returns:
+            Recommended B1 value
+        """
+        # Based on GMP-ECM recommendations
+        if digits < 30: return 11000
+        elif digits < 40: return 50000
+        elif digits < 50: return 250000
+        elif digits < 60: return 1000000
+        elif digits < 70: return 3000000
+        elif digits < 80: return 11000000
+        elif digits < 90: return 43000000
+        elif digits < 100: return 110000000
+        elif digits < 110: return 260000000
+        elif digits < 120: return 850000000
+        else: return 2900000000
+
+    def run_ecm_with_tlevel(self, composite: str, target_tlevel: float,
+                           batch_size: int = 100, workers: int = 1,
+                           use_two_stage: bool = False, verbose: bool = False) -> Dict[str, Any]:
+        """
+        Run ECM in batches until target t-level reached.
+        Dynamically adjusts target t-level when factors found (number shrinks).
+        Fully factors any composite factors found.
+
+        Args:
+            composite: Number to factor
+            target_tlevel: Initial target t-level (e.g., 40.0)
+            batch_size: Curves per batch (default: 100)
+            workers: Number of parallel workers (default: 1)
+            use_two_stage: Use two-stage GPU mode (default: False)
+            verbose: Verbose output
+
+        Returns:
+            Results dict with:
+            - success: bool
+            - factors_found: List of all prime factors
+            - cofactor: Remaining cofactor (if any)
+            - current_tlevel: Final t-level achieved
+            - target_tlevel: Final target t-level
+            - curves_completed: Total curves run
+            - batches_run: Number of batches
+        """
+        current_composite = int(composite)
+        original_digits = len(str(current_composite))
+        all_prime_factors = []
+        curve_history = []
+        batches = 0
+        total_curves = 0
+
+        # Calculate initial target based on original size
+        current_target_t = target_tlevel
+        current_t = 0.0
+
+        self.logger.info(f"Starting ECM with t-level target: t{target_tlevel:.1f} on C{original_digits}")
+
+        start_time = time.time()
+
+        while current_t < current_target_t and current_composite > 1:
+            cofactor_digits = len(str(current_composite))
+
+            # Recalculate target t-level based on current cofactor size
+            # Formula: target_t = (4/13) * digit_length
+            recalculated_target = (4.0 / 13.0) * cofactor_digits
+
+            # If cofactor shrunk significantly, lower the target
+            if recalculated_target < current_target_t:
+                self.logger.info(f"Cofactor shrunk to C{cofactor_digits}, adjusting target: t{current_target_t:.1f} → t{recalculated_target:.1f}")
+                current_target_t = recalculated_target
+
+            # Select B1 based on current cofactor size
+            b1 = self._get_b1_for_digit_length(cofactor_digits)
+
+            # Determine parametrization based on execution mode
+            # p=1 for CPU, p=3 for GPU/two-stage
+            param = 3 if use_two_stage else 1
+
+            self.logger.info(f"Batch {batches+1}: {batch_size} curves @ B1={b1} on C{cofactor_digits} (t{current_t:.1f}/{current_target_t:.1f})")
+
+            # Run ECM batch
+            if use_two_stage:
+                # Use two-stage mode (GPU + CPU)
+                batch_results = self.run_ecm_two_stage(
+                    composite=str(current_composite),
+                    b1=b1,
+                    curves=batch_size,
+                    use_gpu=True,
+                    verbose=verbose
+                )
+            elif workers > 1:
+                # Use multiprocess mode
+                batch_results = self.run_ecm_multiprocess(
+                    composite=str(current_composite),
+                    b1=b1,
+                    curves=batch_size,
+                    workers=workers,
+                    verbose=verbose
+                )
+            else:
+                # Use standard mode
+                batch_results = self.run_ecm(
+                    composite=str(current_composite),
+                    b1=b1,
+                    curves=batch_size,
+                    verbose=verbose
+                )
+
+            curves_completed = batch_results.get('curves_completed', 0)
+            total_curves += curves_completed
+
+            # Record curves for t-level tracking
+            # Get actual parametrization from results
+            actual_param = batch_results.get('parametrization', param)
+            curve_string = f"{curves_completed}@{b1},p={actual_param}"
+            curve_history.append(curve_string)
+
+            # Calculate current t-level
+            current_t = self._calculate_tlevel(curve_history)
+            self.logger.info(f"Current t-level: t{current_t:.1f} / t{current_target_t:.1f}")
+
+            # Handle factors
+            raw_factors = batch_results.get('factors_found', [])
+            if not raw_factors and batch_results.get('factor_found'):
+                raw_factors = [batch_results['factor_found']]
+
+            if raw_factors:
+                self.logger.info(f"Found {len(raw_factors)} factor(s): {raw_factors}")
+
+                # Fully factor each result (handles composites)
+                for raw_factor in raw_factors:
+                    prime_factors = self._fully_factor_found_result(raw_factor)
+                    self.logger.info(f"Prime factorization of {raw_factor}: {prime_factors}")
+                    all_prime_factors.extend(prime_factors)
+
+                    # Divide out from current composite
+                    for prime in prime_factors:
+                        current_composite //= int(prime)
+
+                new_digits = len(str(current_composite))
+                self.logger.info(f"Cofactor after division: C{new_digits}")
+
+                # Check if fully factored
+                if current_composite == 1:
+                    self.logger.info("Number fully factored!")
+                    break
+
+            batches += 1
+
+        execution_time = time.time() - start_time
+
+        results = {
+            'success': True,
+            'factors_found': all_prime_factors,
+            'cofactor': str(current_composite) if current_composite > 1 else None,
+            'current_tlevel': current_t,
+            'target_tlevel': current_target_t,
+            'original_target_tlevel': target_tlevel,
+            'curves_completed': total_curves,
+            'batches_run': batches,
+            'execution_time': execution_time,
+            'method': 'ecm',
+            'original_digits': original_digits,
+            'final_cofactor_digits': len(str(current_composite)) if current_composite > 1 else 0
+        }
+
+        if all_prime_factors:
+            self.logger.info(f"Found {len(all_prime_factors)} prime factor(s): {all_prime_factors}")
+
+        if current_composite > 1:
+            self.logger.info(f"Cofactor remaining: {current_composite} (C{len(str(current_composite))})")
+            self.logger.info(f"Achieved t{current_t:.1f} / target t{current_target_t:.1f}")
+
+        return results
+
 
 def main():
     from arg_parser import create_ecm_parser, validate_ecm_args, print_validation_errors
@@ -1089,8 +1399,19 @@ def main():
     # Resolve stage2 workers from config if not explicitly set
     stage2_workers = args.stage2_workers if hasattr(args, 'stage2_workers') and args.stage2_workers != 4 else get_stage2_workers_default(wrapper.config)
 
+    # Check for T-level mode first (highest priority)
+    if hasattr(args, 'tlevel') and args.tlevel:
+        # T-level mode: run ECM iteratively until target t-level reached
+        results = wrapper.run_ecm_with_tlevel(
+            composite=args.composite,
+            target_tlevel=args.tlevel,
+            batch_size=args.batch_size,
+            workers=args.workers if args.multiprocess else 1,
+            use_two_stage=args.two_stage,
+            verbose=args.verbose
+        )
     # Run ECM - choose mode based on arguments (validation already done by validate_ecm_args)
-    if args.resume_residues:
+    elif args.resume_residues:
         # Resume from existing residues - run stage 2 only
         results = wrapper.run_stage2_only(
             residue_file=args.resume_residues,

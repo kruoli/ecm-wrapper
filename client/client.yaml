@@ -21,7 +21,7 @@ programs:
   gmp_ecm:
     path: ecm  # Will use system PATH
     default_b1: 110000000
-    default_b2: 500000000000
+    #default_b2: 500000000000  #Add back if you want this, otherwise gmp-ecm uses a default formula
     default_curves: 1
     early_termination: true
     gpu_enabled: false
@@ -42,3 +42,6 @@ programs:
     path: ~/cado-nfs/cado-nfs.py
     threads: 4
     working_dir: ~/cado-nfs  # Directory to run CADO-NFS from
+
+  t_level:
+    path: bin/t-level  # T-level calculator for ECM work tracking

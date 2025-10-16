@@ -47,6 +47,38 @@ class CompositeService:
         return db.query(Composite).filter(Composite.number == number).first()
 
     @staticmethod
+    def find_composite_by_identifier(db: Session, identifier: str) -> Optional[Composite]:
+        """
+        Find composite by ID, number (formula), or current_composite.
+
+        Args:
+            db: Database session
+            identifier: Can be:
+                - Numeric ID (e.g., "123")
+                - Formula/number (e.g., "2^1223-1")
+                - Current composite value (e.g., "179769313...")
+
+        Returns:
+            Composite if found, None otherwise
+        """
+        # Try to parse as ID first
+        try:
+            composite_id = int(identifier)
+            composite = db.query(Composite).filter(Composite.id == composite_id).first()
+            if composite:
+                return composite
+        except ValueError:
+            # Not a valid integer, continue to string search
+            pass
+
+        # Search by number (formula) or current_composite
+        composite = db.query(Composite).filter(
+            (Composite.number == identifier) | (Composite.current_composite == identifier)
+        ).first()
+
+        return composite
+
+    @staticmethod
     def mark_fully_factored(db: Session, composite_id: int) -> bool:
         """
         Mark composite as fully factored.

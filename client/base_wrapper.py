@@ -3,16 +3,11 @@
 Base wrapper class containing shared functionality for ECM and YAFU wrappers.
 """
 import datetime
-import hashlib
-import json
 import logging
 import subprocess
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
-
-import requests
-import yaml
 
 from config_manager import ConfigManager
 from api_client import APIClient
@@ -87,12 +82,22 @@ class BaseWrapper:
     def log_factor_found(self, composite: str, factor: str, b1: Optional[int],
                         b2: Optional[int], curves: Optional[int],
                         method: str = "ecm", sigma: Optional[str] = None,
-                        program: str = "unknown"):
-        """Log found factors to a dedicated factors file."""
+                        program: str = "unknown", quiet: bool = False):
+        """Log found factors to a dedicated factors file.
+
+        Args:
+            quiet: If True, skip console output (still logs to file)
+        """
+        # Check if factor logging is enabled in config
+        log_factors = self.config.get('logging', {}).get('log_factors_found', True)
+        if not log_factors:
+            return
+
         factors_file = Path("data/factors_found.txt")
         factors_file.parent.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+        # Write to text file
         with open(factors_file, 'a', encoding='utf-8') as f:
             f.write(f"\n{'='*80}\n")
             f.write(f"FACTOR FOUND: {timestamp}\n")
@@ -107,9 +112,50 @@ class BaseWrapper:
             f.write(f"Program: {program} ({method.upper()} mode)\n")
             f.write(f"{'='*80}\n\n")
 
-        # Also log to console with highlight
-        print(f"\n🎉 FACTOR FOUND: {factor}")
-        print(f"📋 Logged to: {factors_file}")
+        # Also write to JSON file
+        import json
+        factors_json_file = Path("data/factors.json")
+
+        # Load existing entries
+        if factors_json_file.exists():
+            with open(factors_json_file, 'r', encoding='utf-8') as f:
+                try:
+                    factors_data = json.load(f)
+                except json.JSONDecodeError:
+                    factors_data = []
+        else:
+            factors_data = []
+
+        # Create new entry
+        entry = {
+            "timestamp": timestamp,
+            "composite": composite,
+            "composite_digits": len(composite),
+            "factor": factor,
+            "method": method.upper(),
+            "program": program
+        }
+
+        if b1 is not None:
+            entry["b1"] = b1
+        if b2 is not None:
+            entry["b2"] = b2
+        if curves is not None:
+            entry["curves"] = curves
+        if sigma is not None:
+            entry["sigma"] = sigma
+
+        factors_data.append(entry)
+
+        # Write back to JSON file
+        with open(factors_json_file, 'w', encoding='utf-8') as f:
+            json.dump(factors_data, f, indent=2, ensure_ascii=False)
+
+        # Also log to console with highlight (unless quiet mode)
+        if not quiet:
+            print(f"\n🎉 FACTOR FOUND: {factor}")
+            print(f"📋 Logged to: {factors_file}")
+            print(f"📋 JSON: {factors_json_file}")
 
     def submit_result(self, results: Dict[str, Any], project: Optional[str] = None,
                      program: str = "unknown") -> bool:
@@ -233,10 +279,23 @@ class BaseWrapper:
             process.kill()
             results['success'] = False
             results['timeout'] = True
-        except Exception as e:
-            self.logger.error(f"{method.upper()} execution failed: {e}")
+        except subprocess.SubprocessError as e:
+            self.logger.error(f"{method.upper()} subprocess execution failed: {e}")
             results['success'] = False
             results['error'] = str(e)
+        except (OSError, IOError) as e:
+            self.logger.error(f"{method.upper()} I/O error: {e}")
+            results['success'] = False
+            results['error'] = f"I/O error: {str(e)}"
+        except ValueError as e:
+            self.logger.error(f"{method.upper()} invalid parameter: {e}")
+            results['success'] = False
+            results['error'] = f"Invalid parameter: {str(e)}"
+        except Exception as e:
+            # Catch-all for unexpected errors - log with full traceback for debugging
+            self.logger.exception(f"{method.upper()} unexpected error: {e}")
+            results['success'] = False
+            results['error'] = f"Unexpected error: {type(e).__name__}"
 
         results['execution_time'] = time.time() - start_time
         return results
@@ -290,10 +349,10 @@ class BaseWrapper:
         """Get program version - to be implemented by subclasses."""
         return "unknown"
 
-    def save_raw_output(self, results: Dict[str, Any], program: str = "unknown"):
+    def save_raw_output(self, results: Dict[str, Any], program: str = "unknown") -> None:
         """Save raw output to file for debugging."""
         output_dir = Path(self.config['execution']['output_dir'])
-        output_dir.mkdir(exist_ok=True)
+        output_dir.mkdir(exist_ok=True, parents=True)
 
         timestamp = time.strftime('%Y%m%d_%H%M%S')
         method = results.get('method', 'unknown')

@@ -148,8 +148,11 @@ class APIClient:
             self.logger.info(f"Saved failed submission to: {filepath}")
             return str(filepath)
 
+        except (OSError, IOError) as e:
+            self.logger.error(f"Failed to save submission data - I/O error: {e}")
+            return None
         except Exception as e:
-            self.logger.error(f"Failed to save submission data: {e}")
+            self.logger.exception(f"Unexpected error saving submission data: {e}")
             return None
 
     def build_submission_payload(
@@ -279,8 +282,10 @@ class APIClient:
                     self.logger.info(f"Submitted additional factor: {factor} - {result}")
                     successful_submissions += 1
 
-            except Exception as e:
+            except requests.exceptions.RequestException as e:
                 self.logger.error(f"Failed to submit additional factor {factor}: {e}")
+            except Exception as e:
+                self.logger.exception(f"Unexpected error submitting additional factor {factor}: {e}")
 
         return successful_submissions
 

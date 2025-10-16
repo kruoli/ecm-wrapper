@@ -15,6 +15,7 @@ class Timeouts:
     ECM_DEFAULT = 3600  # 1 hour
     YAFU_ECM = 7200     # 2 hours
     YAFU_AUTO = 14400   # 4 hours for NFS
+    CADO_NFS = 28800    # 8 hours for large NFS jobs
 
 
 # Compiled regex patterns for performance
@@ -206,22 +207,20 @@ def parse_yafu_ecm_output(output: str) -> List[Tuple[str, Optional[str]]]:
     factors: List[Tuple[str, Optional[str]]] = []
 
     for line in lines:
-        # Look for factor findings
+        # Look for factor findings - capture ALL factors including duplicates
         match = YAFUPatterns.FACTOR_FOUND.search(line)
         if match:
             factor = match.group(1)
-            if factor not in [f[0] for f in factors]:
-                logger.debug(f"Found factor via FACTOR_FOUND pattern: {factor}")
-                factors.append((factor, None))  # YAFU doesn't report sigma
+            logger.debug(f"Found factor via FACTOR_FOUND pattern: {factor}")
+            factors.append((factor, None))  # YAFU doesn't report sigma
             continue
 
-        # Check P/Q format
+        # Check P/Q format - capture ALL factors including duplicates
         match = YAFUPatterns.PQ_NOTATION.search(line)
         if match:
             factor = match.group(1)
-            if factor not in [f[0] for f in factors]:
-                logger.debug(f"Found factor via PQ_NOTATION pattern: {factor}")
-                factors.append((factor, None))
+            logger.debug(f"Found factor via PQ_NOTATION pattern: {factor}")
+            factors.append((factor, None))
             continue
 
     if factors:
@@ -247,22 +246,20 @@ def parse_yafu_auto_factors(output: str) -> List[Tuple[str, Optional[str]]]:
             continue
 
         if in_factor_section:
-            # Parse factor lines
+            # Parse factor lines - capture ALL factors including duplicates
             match = YAFUPatterns.AUTO_FACTOR.search(line)
             if match:
                 factor = match.group(1)
-                if factor not in [f[0] for f in factors]:
-                    logger.debug(f"Found factor via AUTO_FACTOR pattern: {factor}")
-                    factors.append((factor, None))
+                logger.debug(f"Found factor via AUTO_FACTOR pattern: {factor}")
+                factors.append((factor, None))
                 continue
 
             # Handle simple number lines
             match = YAFUPatterns.SIMPLE_NUMBER.search(line)
             if match:
                 factor = match.group(1)
-                if factor not in [f[0] for f in factors]:
-                    logger.debug(f"Found factor via SIMPLE_NUMBER pattern: {factor}")
-                    factors.append((factor, None))
+                logger.debug(f"Found factor via SIMPLE_NUMBER pattern: {factor}")
+                factors.append((factor, None))
 
     if factors:
         logger.info(f"Parsed {len(factors)} factors from YAFU auto output")

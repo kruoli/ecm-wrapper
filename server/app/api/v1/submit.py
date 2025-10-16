@@ -175,8 +175,20 @@ async def submit_result(
         db.rollback()
         raise
     except ValueError as e:
+        # Client-side validation errors (safe to expose)
         db.rollback()
+        logger.warning(f"Validation error from {client_ip if 'client_ip' in locals() else 'unknown'}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+    except (TypeError, AttributeError) as e:
+        # Data structure errors (potentially from malformed requests)
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        logger.error(f"Data structure error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid request format")
+    except Exception as e:
+        # Unexpected errors - log with full details but return generic message to client
+        db.rollback()
+        logger.exception(f"Unexpected error in submit_result: {type(e).__name__}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error occurred while processing submission"
+        )

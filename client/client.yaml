@@ -15,6 +15,7 @@ execution:
 logging:
   file: data/logs/ecm_client.log
   level: INFO
+  log_factors_found: true  # Set to false to disable factor logging to factors_found.txt
 
 programs:
   gmp_ecm:
@@ -36,3 +37,8 @@ programs:
     path: yafu  # Will use system PATH
     default_b1: 50000
     threads: 8
+
+  cado_nfs:
+    path: ~/cado-nfs/cado-nfs.py
+    threads: 4
+    working_dir: ~/cado-nfs  # Directory to run CADO-NFS from

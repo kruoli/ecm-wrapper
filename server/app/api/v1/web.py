@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -45,6 +45,37 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
         "ECMAttempt": ECMAttempt,
         "Factor": Factor
     })
+
+
+@router.get("/composites/find")
+async def find_composite_public(
+    q: str,
+    db: Session = Depends(get_db)
+):
+    """Find composite by ID, number (formula), or current_composite value.
+
+    Args:
+        q: Search query - can be composite ID, number (e.g., "2^1223-1"),
+           or current_composite value
+
+    Returns:
+        Redirect to the composite's details page
+    """
+    from fastapi.responses import RedirectResponse
+    from ...services.composites import CompositeService
+
+    composite = CompositeService.find_composite_by_identifier(db, q)
+    if not composite:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Composite not found: {q}"
+        )
+
+    # Redirect to the canonical details page URL
+    return RedirectResponse(
+        url=f"/api/v1/composites/{composite.id}/details",
+        status_code=status.HTTP_302_FOUND
+    )
 
 
 @router.get("/composites/{composite_id}/details", response_class=HTMLResponse)

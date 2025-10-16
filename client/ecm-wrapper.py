@@ -285,8 +285,14 @@ class ECMWrapper(BaseWrapper):
                 curves_completed += curves_this_batch
                 results['curves_completed'] = curves_completed
 
+            except subprocess.SubprocessError as e:
+                self.logger.error(f"Subprocess error in batch starting at curve {curves_completed + 1}: {e}")
+                break
+            except (OSError, IOError) as e:
+                self.logger.error(f"I/O error in batch starting at curve {curves_completed + 1}: {e}")
+                break
             except Exception as e:
-                self.logger.error(f"Error in batch starting at curve {curves_completed + 1}: {e}")
+                self.logger.exception(f"Unexpected error in batch starting at curve {curves_completed + 1}: {e}")
                 break
 
         results['execution_time'] = time.time() - start_time
@@ -428,11 +434,23 @@ class ECMWrapper(BaseWrapper):
                 else:
                     self.logger.debug(f"Stage 1 residues in temporary file (will be auto-deleted): {residue_file}")
 
-            except Exception as e:
-                self.logger.error(f"Stage 1 execution failed: {e}")
-                results['curves_completed'] = 0  # No valid results on exception
+            except subprocess.SubprocessError as e:
+                self.logger.error(f"Stage 1 subprocess execution failed: {e}")
+                results['curves_completed'] = 0
                 results['execution_time'] = time.time() - start_time
-                results['raw_output'] = f"Stage 1 execution failed: {e}"
+                results['raw_output'] = f"Stage 1 subprocess failed: {e}"
+                return results
+            except (OSError, IOError) as e:
+                self.logger.error(f"Stage 1 I/O error: {e}")
+                results['curves_completed'] = 0
+                results['execution_time'] = time.time() - start_time
+                results['raw_output'] = f"Stage 1 I/O error: {e}"
+                return results
+            except Exception as e:
+                self.logger.exception(f"Stage 1 unexpected error: {e}")
+                results['curves_completed'] = 0
+                results['execution_time'] = time.time() - start_time
+                results['raw_output'] = f"Stage 1 unexpected error: {type(e).__name__}"
                 return results
 
         # Stage 2: Multi-threaded CPU execution (skip if B2=0)
@@ -515,8 +533,14 @@ class ECMWrapper(BaseWrapper):
 
             return process.returncode == 0, factor, actual_curves, output, all_factors
 
+        except subprocess.SubprocessError as e:
+            self.logger.error(f"Stage 1 subprocess error: {e}")
+            return False, None, curves, "", []
+        except (OSError, IOError) as e:
+            self.logger.error(f"Stage 1 I/O error: {e}")
+            return False, None, curves, "", []
         except Exception as e:
-            self.logger.error(f"Stage 1 GPU execution failed: {e}")
+            self.logger.exception(f"Stage 1 unexpected error: {e}")
             return False, None, curves, "", []
 
     def _run_stage2_multithread(self, residue_file: Path, b1: int, b2: int,

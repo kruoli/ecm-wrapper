@@ -10,19 +10,30 @@ class YAFUWrapper(BaseWrapper):
         """Initialize YAFU wrapper with shared base functionality"""
         super().__init__(config_path)
 
-    def _add_yafu_threading(self, cmd: List[str]) -> None:
-        """Add threading parameter to YAFU command if configured."""
-        if 'threads' in self.config.get('programs', {}).get('yafu', {}):
+    def _add_yafu_threading(self, cmd: List[str], threads: Optional[int] = None) -> None:
+        """Add threading parameter to YAFU command if configured.
+
+        Args:
+            cmd: Command list to append to
+            threads: Optional runtime thread override (uses config default if not specified)
+        """
+        if threads is not None:
+            cmd.extend(['-threads', str(threads)])
+        elif 'threads' in self.config.get('programs', {}).get('yafu', {}):
             cmd.extend(['-threads', str(self.config['programs']['yafu']['threads'])])
 
     def _build_yafu_ecm_cmd(self, method: str, b1: int, b2: Optional[int] = None,
-                           curves: int = 100, composite: str = "") -> List[str]:
-        """Build YAFU command for ECM/P-1/P+1 methods."""
+                           curves: int = 100, composite: str = "") -> tuple[List[str], str]:
+        """Build YAFU command for ECM/P-1/P+1 methods.
+
+        Returns:
+            Tuple of (command_list, stdin_input)
+        """
         yafu_path = self.config['programs']['yafu']['path']
 
-        # YAFU expects expression as first argument
+        # YAFU expects expression via stdin, not as argument
         method_input = self._build_yafu_method_input(composite, method)
-        cmd = [yafu_path, method_input]
+        cmd = [yafu_path]
 
         # Add method-specific parameters
         if method == "pm1":
@@ -39,7 +50,7 @@ class YAFUWrapper(BaseWrapper):
                 cmd.extend(['-B2ecm', str(b2)])
             cmd.extend(['-curves', str(curves)])
 
-        return cmd
+        return cmd, method_input
 
     def _build_yafu_method_input(self, composite: str, method: str) -> str:
         """Build YAFU method input string."""
@@ -50,26 +61,35 @@ class YAFUWrapper(BaseWrapper):
         else:  # ecm
             return f"ecm({composite})"
 
-    def _build_yafu_auto_cmd(self, method: Optional[str] = None, composite: str = "") -> List[str]:
-        """Build YAFU command for automatic factorization."""
+    def _build_yafu_auto_cmd(self, method: Optional[str] = None, composite: str = "", threads: Optional[int] = None) -> tuple[List[str], str]:
+        """Build YAFU command for automatic factorization.
+
+        Args:
+            method: Optional method to force (siqs, nfs, etc.)
+            composite: Number to factor
+            threads: Optional thread count override
+
+        Returns:
+            Tuple of (command_list, stdin_input)
+        """
         yafu_path = self.config['programs']['yafu']['path']
 
-        # YAFU expects expression as first argument
+        # YAFU expects expression via stdin, not as argument
         auto_input = f"factor({composite})"
-        cmd = [yafu_path, auto_input]
+        cmd = [yafu_path]
 
         if method:
             # Force specific method: -method siqs, -method nfs, etc
             cmd.extend(['-method', method])
 
-        self._add_yafu_threading(cmd)
-        return cmd
+        self._add_yafu_threading(cmd, threads)
+        return cmd, auto_input
 
     def run_yafu_ecm(self, composite: str, b1: int, b2: Optional[int] = None,
                      curves: int = 100, method: str = "ecm") -> Dict[str, Any]:
         """Run YAFU in ECM/P-1/P+1 mode using unified base infrastructure."""
-        # Build command with composite included
-        cmd = self._build_yafu_ecm_cmd(method, b1, b2, curves, composite)
+        # Build command and get stdin input
+        cmd, stdin_input = self._build_yafu_ecm_cmd(method, b1, b2, curves, composite)
         self._add_yafu_threading(cmd)
 
         # Use unified subprocess execution with parsing
@@ -82,7 +102,8 @@ class YAFUWrapper(BaseWrapper):
             curves=curves,
             b1=b1,
             b2=b2,
-            track_curves=True  # Enable curves tracking for YAFU
+            track_curves=True,  # Enable curves tracking for YAFU
+            input=stdin_input  # Pass expression via stdin
         )
 
         # Log found factors using base class functionality
@@ -96,10 +117,19 @@ class YAFUWrapper(BaseWrapper):
 
         return results
 
-    def run_yafu_auto(self, composite: str, method: Optional[str] = None) -> Dict[str, Any]:
-        """Run YAFU in automatic factorization mode using unified base infrastructure."""
-        # Build command with composite included
-        cmd = self._build_yafu_auto_cmd(method, composite)
+    def run_yafu_auto(self, composite: str, method: Optional[str] = None, threads: Optional[int] = None) -> Dict[str, Any]:
+        """Run YAFU in automatic factorization mode using unified base infrastructure.
+
+        Args:
+            composite: Number to factor
+            method: Optional method to force (siqs, nfs, etc.)
+            threads: Optional thread count override
+
+        Returns:
+            Results dictionary
+        """
+        # Build command and get stdin input
+        cmd, stdin_input = self._build_yafu_auto_cmd(method, composite, threads)
 
         # Use unified subprocess execution with parsing
         results = self.run_subprocess_with_parsing(
@@ -107,7 +137,8 @@ class YAFUWrapper(BaseWrapper):
             timeout=Timeouts.YAFU_AUTO,
             composite=composite,
             method=method or 'auto',
-            parse_function=parse_yafu_auto_factors
+            parse_function=parse_yafu_auto_factors,
+            input=stdin_input  # Pass expression via stdin
         )
 
         # Log found factors using base class functionality

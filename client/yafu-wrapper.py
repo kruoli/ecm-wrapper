@@ -23,17 +23,17 @@ class YAFUWrapper(BaseWrapper):
             cmd.extend(['-threads', str(self.config['programs']['yafu']['threads'])])
 
     def _build_yafu_ecm_cmd(self, method: str, b1: int, b2: Optional[int] = None,
-                           curves: int = 100, composite: str = "") -> tuple[List[str], str]:
+                           curves: int = 100, composite: str = "") -> List[str]:
         """Build YAFU command for ECM/P-1/P+1 methods.
 
         Returns:
-            Tuple of (command_list, stdin_input)
+            Command list with expression as first positional argument
         """
         yafu_path = self.config['programs']['yafu']['path']
 
-        # YAFU expects expression via stdin, not as argument
+        # YAFU expects expression as first positional argument
         method_input = self._build_yafu_method_input(composite, method)
-        cmd = [yafu_path]
+        cmd = [yafu_path, method_input]
 
         # Add method-specific parameters
         if method == "pm1":
@@ -50,18 +50,17 @@ class YAFUWrapper(BaseWrapper):
                 cmd.extend(['-B2ecm', str(b2)])
             cmd.extend(['-curves', str(curves)])
 
-        return cmd, method_input
+        return cmd
 
     def _build_yafu_method_input(self, composite: str, method: str) -> str:
-        """Build YAFU method input string."""
-        if method == "pm1":
-            return f"pm1({composite})"
-        elif method == "pp1":
-            return f"pp1({composite})"
-        else:  # ecm
-            return f"ecm({composite})"
+        """Build YAFU method input string.
 
-    def _build_yafu_auto_cmd(self, method: Optional[str] = None, composite: str = "", threads: Optional[int] = None) -> tuple[List[str], str]:
+        YAFU uses factor() for all methods - the actual method is controlled
+        by flags like -B1ecm, -B1pm1, -B1pp1.
+        """
+        return f'factor({composite})'
+
+    def _build_yafu_auto_cmd(self, method: Optional[str] = None, composite: str = "", threads: Optional[int] = None) -> List[str]:
         """Build YAFU command for automatic factorization.
 
         Args:
@@ -70,29 +69,30 @@ class YAFUWrapper(BaseWrapper):
             threads: Optional thread count override
 
         Returns:
-            Tuple of (command_list, stdin_input)
+            Command list with expression as first positional argument
         """
         yafu_path = self.config['programs']['yafu']['path']
 
-        # YAFU expects expression via stdin, not as argument
-        auto_input = f"factor({composite})"
-        cmd = [yafu_path]
+        # YAFU expects expression as first positional argument
+        auto_input = f'factor({composite})'
+        cmd = [yafu_path, auto_input]
 
         if method:
             # Force specific method: -method siqs, -method nfs, etc
             cmd.extend(['-method', method])
 
         self._add_yafu_threading(cmd, threads)
-        return cmd, auto_input
+
+        return cmd
 
     def run_yafu_ecm(self, composite: str, b1: int, b2: Optional[int] = None,
                      curves: int = 100, method: str = "ecm") -> Dict[str, Any]:
         """Run YAFU in ECM/P-1/P+1 mode using unified base infrastructure."""
-        # Build command and get stdin input
-        cmd, stdin_input = self._build_yafu_ecm_cmd(method, b1, b2, curves, composite)
+        # Build command with expression as first positional argument
+        cmd = self._build_yafu_ecm_cmd(method, b1, b2, curves, composite)
         self._add_yafu_threading(cmd)
 
-        # Use unified subprocess execution with parsing
+        # Use unified subprocess execution with parsing (no stdin needed)
         results = self.run_subprocess_with_parsing(
             cmd=cmd,
             timeout=Timeouts.YAFU_ECM,
@@ -102,9 +102,11 @@ class YAFUWrapper(BaseWrapper):
             curves=curves,
             b1=b1,
             b2=b2,
-            track_curves=True,  # Enable curves tracking for YAFU
-            input=stdin_input  # Pass expression via stdin
+            track_curves=True  # Enable curves tracking for YAFU
         )
+
+        # Store command for debugging
+        results['cmd'] = cmd
 
         # Log found factors using base class functionality
         if results.get('factors_found'):
@@ -128,18 +130,20 @@ class YAFUWrapper(BaseWrapper):
         Returns:
             Results dictionary
         """
-        # Build command and get stdin input
-        cmd, stdin_input = self._build_yafu_auto_cmd(method, composite, threads)
+        # Build command with expression as first positional argument
+        cmd = self._build_yafu_auto_cmd(method, composite, threads)
 
-        # Use unified subprocess execution with parsing
+        # Use unified subprocess execution with parsing (no stdin needed)
         results = self.run_subprocess_with_parsing(
             cmd=cmd,
             timeout=Timeouts.YAFU_AUTO,
             composite=composite,
             method=method or 'auto',
-            parse_function=parse_yafu_auto_factors,
-            input=stdin_input  # Pass expression via stdin
+            parse_function=parse_yafu_auto_factors
         )
+
+        # Store command for debugging
+        results['cmd'] = cmd
 
         # Log found factors using base class functionality
         if results.get('factors_found'):
@@ -202,15 +206,41 @@ def main():
             method=method
         )
 
+    # Print results summary
+    print(f"\n{'='*80}")
+    print(f"YAFU {results.get('method', 'unknown').upper()} Results")
+    print(f"{'='*80}")
+    print(f"Composite: {args.composite} ({len(args.composite)} digits)")
+    print(f"Curves completed: {results.get('curves_completed', 0)}")
+    print(f"Execution time: {results.get('execution_time', 0):.2f}s")
+
+    if results.get('factors_found'):
+        print(f"\n✓ Found {len(results['factors_found'])} factor(s):")
+        for factor in results['factors_found']:
+            print(f"  - {factor}")
+    else:
+        print("\n✗ No factors found")
+    print(f"{'='*80}")
+
+    # Debug: print raw output if verbose or no factors
+    if not results.get('factors_found') or (hasattr(args, 'verbose') and args.verbose):
+        print("\n=== RAW YAFU OUTPUT ===")
+        print(results.get('raw_output', '(no output)'))
+        print("=== END ===\n")
+
+        # Also print the command that was executed (for debugging)
+        if 'cmd' in results:
+            print("Command executed:", ' '.join(results['cmd']))
+
     # Submit results unless disabled or failed
     if not args.no_submit:
         # Only submit if we actually completed some curves (not a failure)
-        if results.get('curves_completed', 0) > 0:
+        if results.get('curves_completed', 0) > 0 or results.get('factors_found'):
             program_name = f'yafu-{results.get("method", "ecm")}'
             success = wrapper.submit_result(results, args.project, program_name)
             sys.exit(0 if success else 1)
         else:
-            wrapper.logger.warning("Skipping result submission due to failure (0 curves completed)")
+            wrapper.logger.warning("Skipping result submission due to failure")
             sys.exit(1)
 
 if __name__ == '__main__':

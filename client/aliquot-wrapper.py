@@ -19,15 +19,10 @@ from collections import Counter
 from base_wrapper import BaseWrapper
 import importlib.util
 
-# Import yafu-wrapper.py (Python can't import modules with hyphens normally)
-spec = importlib.util.spec_from_file_location("yafu_wrapper", "yafu-wrapper.py")
-yafu_module = importlib.util.module_from_spec(spec)
-sys.modules["yafu_wrapper"] = yafu_module
-spec.loader.exec_module(yafu_module)
-YAFUWrapper = yafu_module.YAFUWrapper
-
 # Import cado-wrapper.py
 spec = importlib.util.spec_from_file_location("cado_wrapper", "cado-wrapper.py")
+if spec is None or spec.loader is None:
+    raise ImportError("Failed to load cado-wrapper.py")
 cado_module = importlib.util.module_from_spec(spec)
 sys.modules["cado_wrapper"] = cado_module
 spec.loader.exec_module(cado_module)
@@ -35,6 +30,8 @@ CADOWrapper = cado_module.CADOWrapper
 
 # Import ecm-wrapper.py
 spec = importlib.util.spec_from_file_location("ecm_wrapper", "ecm-wrapper.py")
+if spec is None or spec.loader is None:
+    raise ImportError("Failed to load ecm-wrapper.py")
 ecm_module = importlib.util.module_from_spec(spec)
 sys.modules["ecm_wrapper"] = ecm_module
 spec.loader.exec_module(ecm_module)
@@ -47,10 +44,10 @@ class AliquotSequence:
     def __init__(self, start: int):
         self.start = start
         self.sequence = [start]
-        self.factorizations = {}
+        self.factorizations: Dict[int, Dict[int, int]] = {}
         self.terminated = False
-        self.cycle_start = None
-        self.cycle_length = None
+        self.cycle_start: Optional[int] = None
+        self.cycle_length: Optional[int] = None
 
     def add_term(self, term: int, factorization: Dict[int, int]):
         """Add a term to the sequence with its factorization."""
@@ -85,14 +82,14 @@ class AliquotSequence:
 
 
 class AliquotWrapper(BaseWrapper):
-    """Wrapper for computing aliquot sequences using YAFU or CADO-NFS."""
+    """Wrapper for computing aliquot sequences using CADO-NFS and ECM."""
 
-    def __init__(self, config_path: str, factorizer: str = 'yafu', hybrid_threshold: int = 100, threads: Optional[int] = None, verbose: bool = False):
+    def __init__(self, config_path: str, factorizer: str = 'cado', hybrid_threshold: int = 100, threads: Optional[int] = None, verbose: bool = False):
         """Initialize aliquot wrapper with specified factorization engine.
 
         Args:
             config_path: Path to configuration file
-            factorizer: Either 'yafu', 'cado', or 'hybrid' (default: 'yafu')
+            factorizer: Either 'cado' or 'hybrid' (default: 'cado')
             hybrid_threshold: Digit length threshold for switching to ECM+CADO (default: 100)
             threads: Optional thread/worker count for parallel execution
             verbose: Enable verbose output from factorization programs
@@ -103,18 +100,15 @@ class AliquotWrapper(BaseWrapper):
         self.threads = threads
         self.verbose = verbose
 
-        # Initialize all factorizers for hybrid mode
-        self.yafu = YAFUWrapper(config_path)
+        # Initialize factorizers
         self.cado = CADOWrapper(config_path)
         self.ecm = ECMWrapper(config_path)
 
         # Set primary factorizer
-        if factorizer == 'cado':
-            self.factorizer = self.cado
-        elif factorizer == 'hybrid':
+        if factorizer == 'hybrid':
             self.factorizer = None  # Will be selected dynamically
         else:
-            self.factorizer = self.yafu
+            self.factorizer = self.cado
 
     def parse_factorization(self, factors_found: List[str]) -> Dict[int, int]:
         """
@@ -173,14 +167,17 @@ class AliquotWrapper(BaseWrapper):
 
     def factor_number(self, n: int) -> Tuple[bool, Dict[int, int], Dict]:
         """
-        Factor a number completely using the selected factorization strategy.
+        Factor a number completely using the hybrid factorization strategy.
 
-        Strategy:
-        - Numbers < hybrid_threshold digits: Use YAFU
-        - Numbers >= hybrid_threshold digits (hybrid mode):
-          1. Run ECM to 4/13 * digit_length t-level
-          2. If fully factored, done
-          3. If cofactor remains, use CADO-NFS on cofactor
+        Strategy (always uses progressive approach, never jumps to SIQS/NFS):
+        1. Trial division up to 10^7 (very fast, catches small factors)
+        2. Progressive ECM in 3 phases (1/13, 2/13, 4/13 of digit length)
+           - Each phase uses optimal B1 values from GMP-ECM plans
+           - Stops early if fully factored or cofactor < hybrid_threshold
+        3. CADO-NFS only if cofactor remains after ECM
+
+        This ensures we ALWAYS attempt ECM before resorting to expensive
+        SIQS or NFS methods.
 
         Args:
             n: Number to factor
@@ -191,30 +188,8 @@ class AliquotWrapper(BaseWrapper):
         digit_length = len(str(n))
         self.logger.info(f"Factoring {n} ({digit_length} digits)...")
 
-        # Determine strategy
-        if self.factorizer_name == 'hybrid' and digit_length >= self.hybrid_threshold:
-            # Hybrid strategy: ECM pre-factorization + CADO-NFS
-            return self._factor_hybrid(n, digit_length)
-        elif self.factorizer_name == 'cado':
-            # Pure CADO-NFS
-            results = self.cado.run_cado_nfs(composite=str(n), threads=self.threads, verbose=self.verbose)
-        else:
-            # Pure YAFU
-            results = self.yafu.run_yafu_auto(composite=str(n), threads=self.threads)
-
-        if not results.get('success'):
-            self.logger.error(f"Factorization failed for {n}")
-            return False, {}, results
-
-        factors = results.get('factors_found', [])
-        if not factors:
-            self.logger.warning(f"No factors found for {n}")
-            return False, {}, results
-
-        factorization = self.parse_factorization(factors)
-        self.logger.info(f"Factorization: {self.format_factorization(factorization)}")
-
-        return True, factorization, results
+        # Always use hybrid strategy (trial division + progressive ECM + CADO if needed)
+        return self._factor_hybrid(n, digit_length)
 
     def _trial_division(self, n: int, limit: int = 10**7) -> Tuple[List[int], int]:
         """
@@ -261,16 +236,19 @@ class AliquotWrapper(BaseWrapper):
 
     def _factor_hybrid(self, n: int, digit_length: int) -> Tuple[bool, Dict[int, int], Dict]:
         """
-        Hybrid factorization: Trial division + ECM pre-factorization + YAFU + CADO-NFS.
+        Hybrid factorization: Trial division + Progressive ECM + CADO-NFS.
 
         Strategy:
         1. Trial division up to 10^7 (very fast, catches small factors)
-        2. ECM to 4/13 * digit_length t-level (finds medium factors)
-           - Uses new run_ecm_with_tlevel() which tracks actual t-level progress
-           - Automatically handles composite factors found during ECM
-           - Dynamically adjusts target when factors are found
-        3. YAFU auto (handles remaining small-medium composites + primality)
-        4. CADO-NFS if large composite remains (90+ digits)
+        2. Progressive ECM using run_ecm_with_tlevel:
+           - Target: 4/13 * digit_length (e.g., t30 for 98-digit number)
+           - Starts at t20, increments by 5 digits: t20 → t25 → t30 → t35 ...
+           - Uses Zimmermann's optimal B1 and curve counts at each level
+           - Automatically handles factors and cofactor reduction
+        3. CADO-NFS only for remaining cofactor after ECM completes
+
+        This progressive approach finds cheap factors first before investing
+        compute in higher B1 values, optimizing for aliquot factorization.
 
         Args:
             n: Number to factor
@@ -297,77 +275,62 @@ class AliquotWrapper(BaseWrapper):
         cofactor_digits = len(str(current_composite))
         self.logger.info(f"Cofactor after trial division: {current_composite} ({cofactor_digits} digits)")
 
-        # If cofactor dropped below hybrid threshold, skip ECM and use YAFU
-        if cofactor_digits < self.hybrid_threshold:
-            self.logger.info(f"Cofactor is now < {self.hybrid_threshold} digits, using YAFU directly")
-            yafu_results = self.yafu.run_yafu_auto(composite=str(current_composite), threads=self.threads)
-            yafu_factors = yafu_results.get('factors_found', [])
-            if yafu_factors:
-                all_factors.extend(yafu_factors)
-
+        # Check if cofactor is prime before attempting ECM
+        if self.ecm._is_probably_prime(current_composite):
+            self.logger.info(f"Cofactor C{cofactor_digits} is prime, factorization complete")
+            all_factors.append(str(current_composite))
             factorization = self.parse_factorization(all_factors)
+            return True, factorization, {'success': True, 'method': 'trial_division+primality_test'}
 
-            # Verify factorization
-            product = 1
-            for factor_str in all_factors:
-                product *= int(factor_str)
+        # Step 1: Progressive ECM (ALWAYS attempt ECM, regardless of size)
+        # Use ECM's run_ecm_with_tlevel which handles progressive approach automatically
+        cofactor_digits = len(str(current_composite))
+        target_t_level = (4.0 / 13.0) * cofactor_digits  # Target: 4/13 of digit length
 
-            if product != n:
-                self.logger.error(f"Factorization verification failed: {product} != {n}")
-                return False, {}, yafu_results
+        self.logger.info(f"Running progressive ECM to t{target_t_level:.1f} on C{cofactor_digits}")
 
-            return True, factorization, yafu_results
-
-        # Step 1: Run ECM with t-level tracking to 4/13 * cofactor_digits
-        target_t_level = (4.0 / 13.0) * cofactor_digits
-        self.logger.info(f"Running ECM pre-factorization to t{target_t_level:.1f}...")
-
-        # Use new run_ecm_with_tlevel() method which:
-        # - Automatically selects B1 based on current cofactor size
-        # - Tracks actual t-level progress using t-level binary
-        # - Fully factors any composite factors found
-        # - Dynamically adjusts target when number shrinks
         ecm_results = self.ecm.run_ecm_with_tlevel(
             composite=str(current_composite),
             target_tlevel=target_t_level,
-            batch_size=100,
             workers=self.threads if self.threads else 1,
-            use_two_stage=False,  # Standard CPU mode for aliquot sequences
             verbose=self.verbose
         )
 
         # Collect ECM factors (all are guaranteed to be prime)
-        ecm_factors = ecm_results.get('all_prime_factors', [])
+        ecm_factors = ecm_results.get('factors_found', [])
         if ecm_factors:
-            self.logger.info(f"ECM found {len(ecm_factors)} prime factor(s)")
+            self.logger.info(f"Progressive ECM found {len(ecm_factors)} prime factor(s)")
             all_factors.extend(ecm_factors)
 
             # Get final cofactor from ECM results
-            current_composite = int(ecm_results.get('final_cofactor', current_composite))
-            self.logger.info(f"Cofactor after ECM: {current_composite} ({len(str(current_composite))} digits)")
+            final_cofactor = ecm_results.get('final_cofactor')
+            if final_cofactor:
+                current_composite = int(final_cofactor)
+                self.logger.info(f"Cofactor after ECM: C{len(str(current_composite))}")
+            else:
+                # Fully factored
+                current_composite = 1
 
-        # Step 2: Check if fully factored or need further factorization
+        # Check if fully factored
         if current_composite == 1:
-            # Fully factored by ECM
-            self.logger.info("Fully factored by ECM")
+            self.logger.info("Fully factored by progressive ECM")
             factorization = self.parse_factorization(all_factors)
             return True, factorization, ecm_results
 
-        # If cofactor is still large (90+ digits), use CADO-NFS directly
+        # Check if cofactor is prime before using CADO-NFS
         cofactor_digits = len(str(current_composite))
-        if cofactor_digits >= 90:
-            self.logger.info(f"Cofactor is {cofactor_digits} digits, using CADO-NFS")
-            cado_results = self.cado.run_cado_nfs(composite=str(current_composite), threads=self.threads, verbose=self.verbose)
-            cado_factors = cado_results.get('factors_found', [])
-            if cado_factors:
-                all_factors.extend(cado_factors)
-        else:
-            # Small enough for YAFU to handle efficiently
-            self.logger.info(f"Cofactor is {cofactor_digits} digits, using YAFU")
-            yafu_results = self.yafu.run_yafu_auto(composite=str(current_composite), threads=self.threads)
-            yafu_factors = yafu_results.get('factors_found', [])
-            if yafu_factors:
-                all_factors.extend(yafu_factors)
+        if self.ecm._is_probably_prime(current_composite):
+            self.logger.info(f"Cofactor C{cofactor_digits} is prime, factorization complete")
+            all_factors.append(str(current_composite))
+            factorization = self.parse_factorization(all_factors)
+            return True, factorization, ecm_results
+
+        # Use CADO-NFS for remaining cofactor
+        self.logger.info(f"Cofactor is {cofactor_digits} digits (composite), using CADO-NFS")
+        cado_results = self.cado.run_cado_nfs(composite=str(current_composite), threads=self.threads, verbose=self.verbose)
+        cado_factors = cado_results.get('factors_found', [])
+        if cado_factors:
+            all_factors.extend(cado_factors)
 
         if not all_factors:
             self.logger.error("Hybrid factorization failed - no factors found")
@@ -550,69 +513,117 @@ class AliquotWrapper(BaseWrapper):
 
     def submit_to_factordb(self, n: int, factorization: Dict[int, int]) -> bool:
         """
-        Submit factorization to FactorDB.
+        Submit factorization to FactorDB using the reportfactor.php API.
 
-        FactorDB API documentation: http://factordb.com/api
-        Submission: GET request to http://factordb.com/index.php?query=<number>
-        Query factorization: GET request to http://factordb.com/api?query=<number>
+        Only submits NEW factors that FactorDB doesn't already have.
+        Skips the final cofactor (FactorDB will calculate it automatically).
 
         Args:
             n: Number that was factored
-            factorization: Prime factorization
+            factorization: Prime factorization as {prime: exponent}
 
         Returns:
             True if submission succeeded
         """
         import requests
 
-        # Build factor list with repetitions
-        factors = []
-        for prime, exp in sorted(factorization.items()):
-            factors.extend([str(prime)] * exp)
-
         # Reconstruct number from factors to verify
         product = 1
-        for f in factors:
-            product *= int(f)
+        for prime, exp in factorization.items():
+            product *= prime ** exp
 
         if product != n:
             self.logger.error(f"Factor verification failed: {product} != {n}")
             return False
 
         try:
-            # First query to see if number is already in database
-            query_url = f"http://factordb.com/api?query={n}"
-            self.logger.info(f"Querying FactorDB for {n}...")
+            # Use cookie for authenticated requests
+            cookies = {"fdbuser": "49842c2d25d13890591f62931240e7ba"}
 
-            response = requests.get(query_url, timeout=30)
-            response.raise_for_status()
+            # Step 1: Query FactorDB to see what factors they already have
+            query_url = f"https://factordb.com/api?query={n}"
+            query_response = requests.get(query_url, cookies=cookies, timeout=30)
+            query_response.raise_for_status()
+            fdb_data = query_response.json()
 
-            result = response.json()
+            # Parse existing factors from FactorDB
+            # Response format: {"id": "...", "status": "C"/"CF"/"FF", "factors": [["prime", exp], ...]}
+            existing_factors = {}
+            if 'factors' in fdb_data and fdb_data['factors']:
+                for factor_pair in fdb_data['factors']:
+                    prime = int(factor_pair[0])
+                    exp = int(factor_pair[1])
+                    existing_factors[prime] = existing_factors.get(prime, 0) + exp
 
-            # Check current factorization status
-            # Status codes: C=Composite, CF=Composite fully factored, FF=Composite factors found
-            status = result.get('status', 'Unknown')
+            # Step 2: Determine NEW factors to submit (exclude largest prime - the final cofactor)
+            sorted_primes = sorted(factorization.keys())
+            largest_prime = sorted_primes[-1] if sorted_primes else None
 
-            self.logger.info(f"FactorDB status for {n}: {status}")
-            print(f"  FactorDB status: {status}")
+            new_factors_to_submit = {}
+            for prime, exp in factorization.items():
+                # Skip the largest prime (final cofactor - FactorDB will calculate it)
+                if prime == largest_prime:
+                    continue
 
-            # If not fully factored, submit our factorization by visiting the URL
-            # FactorDB automatically processes factorizations from query parameters
-            if status != 'FF' and status != 'P':  # Not fully factored or prime
-                submit_url = f"http://factordb.com/index.php?query={n}"
-                self.logger.info(f"Submitting factorization to FactorDB: {self.format_factorization(factorization)}")
-                print(f"  Submitting: {self.format_factorization(factorization)}")
+                # Only submit if FactorDB doesn't have this factor yet
+                existing_exp = existing_factors.get(prime, 0)
+                if existing_exp < exp:
+                    # Submit the missing occurrences
+                    new_factors_to_submit[prime] = exp - existing_exp
 
-                submit_response = requests.get(submit_url, timeout=30)
-                submit_response.raise_for_status()
+            if not new_factors_to_submit:
+                self.logger.info(f"FactorDB: Already has all factors for {n} ({len(str(n))} digits)")
+                print(f"  FactorDB: Already has all factors")
+                print(f"  View at: https://factordb.com/index.php?query={n}")
+                return True
 
-                print(f"  FactorDB URL: {submit_url}")
+            # Step 3: Submit only the NEW factors
+            self.logger.info(f"FactorDB: Submitting {sum(new_factors_to_submit.values())} new factor(s) for {n} ({len(str(n))} digits)")
+            submission_url = "https://factordb.com/reportfactor.php"
+            success_count = 0
+
+            failed_factors = []
+            for prime, exp in sorted(new_factors_to_submit.items()):
+                # Submit each occurrence of this prime factor
+                for occurrence in range(exp):
+                    try:
+                        form_data = {
+                            "number": str(n),
+                            "factor": str(prime)
+                        }
+
+                        response = requests.post(
+                            submission_url,
+                            data=form_data,
+                            cookies=cookies,
+                            timeout=30
+                        )
+                        response.raise_for_status()
+                        success_count += 1
+                        self.logger.debug(f"FactorDB: Submitted factor {prime} for {n}")
+                    except requests.RequestException as factor_err:
+                        failed_factors.append((prime, str(factor_err)))
+                        self.logger.error(f"FactorDB: Failed to submit factor {prime} (occurrence {occurrence+1}/{exp}): {factor_err}")
+
+            if failed_factors:
+                self.logger.warning(f"FactorDB: Partial submission - {success_count} succeeded, {len(failed_factors)} failed for {n}")
+                print(f"  FactorDB: WARNING - {success_count} factor(s) submitted, {len(failed_factors)} failed")
+                print(f"  View at: https://factordb.com/index.php?query={n}")
+                return False
+
+            self.logger.info(f"FactorDB: Successfully submitted {success_count} factor(s) for {n} - https://factordb.com/index.php?query={n}")
+            print(f"  FactorDB: Submitted {success_count} NEW factor(s)")
+            print(f"  View at: https://factordb.com/index.php?query={n}")
 
             return True
 
         except requests.RequestException as e:
-            self.logger.error(f"FactorDB submission failed: {e}")
+            self.logger.error(f"FactorDB submission failed for {n}: {e}")
             print(f"  Error: Failed to submit to FactorDB - {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"FactorDB submission unexpected error for {n}: {e}")
+            print(f"  Error: Unexpected error submitting to FactorDB - {e}")
             return False
 
     def save_sequence(self, seq: AliquotSequence, output_file: Optional[Path] = None) -> Path:
@@ -658,18 +669,8 @@ class AliquotWrapper(BaseWrapper):
         return output_file
 
     def cleanup_temp_files(self):
-        """Clean up temporary files created by YAFU and CADO-NFS."""
+        """Clean up temporary files created by CADO-NFS."""
         import glob
-
-        # YAFU creates these files
-        yafu_temp_files = [
-            'factor.log',
-            'session.log',
-            'siqs.dat',
-            'ggnfs.log',
-            '*.fb',
-            '*.job'
-        ]
 
         # CADO-NFS working directory files (if run from client/)
         cado_temp_patterns = [
@@ -679,7 +680,7 @@ class AliquotWrapper(BaseWrapper):
         ]
 
         cleaned_files = []
-        for pattern in yafu_temp_files + cado_temp_patterns:
+        for pattern in cado_temp_patterns:
             for filepath in glob.glob(pattern):
                 try:
                     Path(filepath).unlink()
@@ -714,15 +715,18 @@ class AliquotWrapper(BaseWrapper):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Calculate aliquot sequences using YAFU or CADO-NFS for factorization',
+        description='Calculate aliquot sequences using CADO-NFS and ECM for factorization',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Calculate aliquot sequence starting from 276
   python3 aliquot-wrapper.py --start 276
 
-  # Use CADO-NFS for faster GNFS factorization
+  # Use pure CADO-NFS for all factorizations
   python3 aliquot-wrapper.py --start 276 --factorizer cado
+
+  # Use hybrid mode (ECM + CADO-NFS) for large numbers
+  python3 aliquot-wrapper.py --start 276 --factorizer hybrid
 
   # Calculate with more iterations
   python3 aliquot-wrapper.py --start 1248 --max-iterations 50
@@ -731,7 +735,7 @@ Examples:
   python3 aliquot-wrapper.py --start 138 --factordb
 
   # Quiet mode (no factor spam)
-  python3 aliquot-wrapper.py --start 276 --quiet-factors --factorizer cado
+  python3 aliquot-wrapper.py --start 276 --quiet-factors
 
   # Resume from FactorDB (fetches last known term automatically)
   python3 aliquot-wrapper.py --start 276 --resume-factordb --quiet-factors
@@ -766,8 +770,8 @@ Common test sequences:
                        help='Do not save sequence to file')
     parser.add_argument('--quiet-factors', action='store_true',
                        help='Disable factor logging to factors_found.txt (reduces spam for aliquot sequences)')
-    parser.add_argument('--factorizer', type=str, choices=['yafu', 'cado', 'hybrid'], default='hybrid',
-                       help='Factorization strategy: yafu, cado, or hybrid (default: hybrid - uses ECM+CADO for large numbers)')
+    parser.add_argument('--factorizer', type=str, choices=['cado', 'hybrid'], default='hybrid',
+                       help='Factorization strategy: cado (pure CADO-NFS) or hybrid (default: hybrid - uses ECM+CADO for large numbers)')
     parser.add_argument('--hybrid-threshold', type=int, default=100,
                        help='Digit length threshold for hybrid ECM+CADO strategy (default: 100)')
     parser.add_argument('--resume-factordb', action='store_true',
@@ -789,7 +793,6 @@ Common test sequences:
     # Override factor logging config if requested
     if args.quiet_factors:
         wrapper.config['logging']['log_factors_found'] = False
-        wrapper.yafu.config['logging']['log_factors_found'] = False
         wrapper.cado.config['logging']['log_factors_found'] = False
         wrapper.ecm.config['logging']['log_factors_found'] = False
 
@@ -831,6 +834,11 @@ Common test sequences:
         if success:
             seq.factorizations[resume_composite] = factorization
 
+            # Submit the resume composite factorization to FactorDB first
+            # This allows FactorDB to calculate the next term and maintain sequence linkage
+            if args.factordb and factorization:
+                wrapper.submit_to_factordb(resume_composite, factorization)
+
             # Continue from this point
             current = resume_composite
             for iteration in range(args.max_iterations):
@@ -855,6 +863,7 @@ Common test sequences:
                     seq.add_term(next_term, {})
                     break
 
+                # Submit to FactorDB
                 if args.factordb and factorization:
                     wrapper.submit_to_factordb(next_term, factorization)
 

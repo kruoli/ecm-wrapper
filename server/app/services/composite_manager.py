@@ -370,7 +370,15 @@ class CompositeManager:
         total_ecm_curves = sum(a.curves_completed for a in attempts if a.method == 'ecm')
         pm1_attempts = len([a for a in attempts if a.method == 'pm1'])
 
-        factors_found = [a.factor_found for a in attempts if a.factor_found]
+        # Deduplicate factors found (same factor may appear in multiple attempts)
+        # Sort numerically for consistent display
+        factors_found = sorted(set(a.factor_found for a in attempts if a.factor_found), key=lambda x: int(x))
+
+        # Get factors with full details (including group order info)
+        from ..models.factors import Factor
+        factors_with_details = db.query(Factor).filter(
+            Factor.composite_id == composite_id
+        ).all()
 
         return {
             'composite': {
@@ -421,6 +429,16 @@ class CompositeManager:
                     'client_id': attempt.client_id
                 }
                 for attempt in attempts[:10]  # Last 10 attempts
+            ],
+            'factors_with_group_orders': [
+                {
+                    'factor': f.factor,
+                    'sigma': f.sigma,
+                    'group_order': f.group_order,
+                    'group_order_factorization': f.group_order_factorization,
+                    'is_prime': f.is_prime
+                }
+                for f in factors_with_details if f.group_order is not None
             ]
         }
 

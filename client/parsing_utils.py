@@ -68,8 +68,8 @@ class ECMPatterns:
 class YAFUPatterns:
     """Compiled regex patterns for YAFU output parsing."""
 
-    # Direct factor announcements
-    FACTOR_FOUND = re.compile(r'found factor[:\s]+(\d+)', re.IGNORECASE)
+    # Direct factor announcements - handle both "found factor" and "found prpN factor"
+    FACTOR_FOUND = re.compile(r'found\s+(?:prp\d+\s+)?factor\s*[=:]\s*(\d+)', re.IGNORECASE)
 
     # P/Q notation: "P39 = 123456789012345678901234567890123456789"
     PQ_NOTATION = re.compile(r'[PQ]\d+\s*=\s*(\d+)')
@@ -309,7 +309,7 @@ def get_ecm_progress_estimate(output: str, target_curves: Optional[int] = None) 
     completed_curves = count_ecm_curves_completed(output)
     curve_times = get_ecm_curve_times(output)
 
-    progress = {
+    progress: Dict[str, Any] = {
         'curves_completed': completed_curves,
         'steps_completed': count_ecm_steps_completed(output),
         'has_factors': bool(ECMPatterns.PRIME_FACTOR.search(output) or

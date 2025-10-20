@@ -188,7 +188,8 @@ class ECMWrapper(BaseWrapper):
                 curves: int = 100, sigma: Optional[int] = None,
                 use_gpu: bool = False, gpu_device: Optional[int] = None,
                 gpu_curves: Optional[int] = None, verbose: bool = False,
-                method: str = "ecm", continue_after_factor: bool = False) -> Dict[str, Any]:
+                method: str = "ecm", continue_after_factor: bool = False,
+                quiet: bool = False) -> Dict[str, Any]:
         """Run GMP-ECM or P-1 and capture output"""
         ecm_path = self.config['programs']['gmp_ecm']['path']
 
@@ -270,9 +271,17 @@ class ECMWrapper(BaseWrapper):
                     actual_curves = count_ecm_steps_completed(stdout)
                     results['curves_completed'] = curves_completed + actual_curves
 
-                    # Handle all factors found
-                    program_name = f"GMP-ECM ({method.upper()})" + (" with GPU" if use_gpu else "")
-                    self._log_and_store_factors(all_factors, results, composite, b1, b2, curves, method, program_name)
+                    # Handle all factors found (skip logging if quiet mode)
+                    if not quiet:
+                        program_name = f"GMP-ECM ({method.upper()})" + (" with GPU" if use_gpu else "")
+                        self._log_and_store_factors(all_factors, results, composite, b1, b2, curves, method, program_name)
+                    else:
+                        # Store factors without logging
+                        if 'factors_found' not in results:
+                            results['factors_found'] = []
+                        results['factors_found'].extend([f[0] for f in all_factors])
+                        if not results.get('factor_found'):
+                            results['factor_found'] = all_factors[0][0]
 
                     self.logger.info(f"Factors found after {results['curves_completed']} curves")
 
@@ -299,8 +308,48 @@ class ECMWrapper(BaseWrapper):
         results['raw_output'] = '\n'.join(results['raw_outputs'])
 
         # Final deduplication of factors found across all batches
-        if 'factors_found' in results and results['factors_found']:
+        if 'factors_found' in results and results['factors_found'] and not quiet:
             results['factors_found'] = list(dict.fromkeys(results['factors_found']))  # Preserve order while deduplicating
+
+            # Fully factor any composite factors found
+            self.logger.info(f"Checking {len(results['factors_found'])} factor(s) for composites...")
+            all_prime_factors = []
+            for factor in results['factors_found']:
+                prime_factors = self._fully_factor_found_result(factor, quiet=True)
+                self.logger.info(f"Prime factorization of {factor}: {prime_factors}")
+                all_prime_factors.extend(prime_factors)
+
+            # Calculate remaining cofactor after dividing out all found primes
+            cofactor = int(composite)
+            for prime in all_prime_factors:
+                cofactor //= int(prime)
+
+            # Check if there's a remaining cofactor
+            if cofactor > 1:
+                cofactor_digits = len(str(cofactor))
+
+                # Test if cofactor is prime
+                if self._is_probably_prime(cofactor):
+                    self.logger.info(f"Remaining cofactor {cofactor} is prime")
+                    all_prime_factors.append(str(cofactor))
+                else:
+                    # Cofactor is composite - only auto-factor if small enough (ECM is fastest for <60 digits)
+                    if cofactor_digits < 60:
+                        self.logger.info(f"Remaining cofactor {cofactor} is composite - factoring...")
+                        cofactor_primes = self._fully_factor_found_result(str(cofactor), quiet=True)
+                        all_prime_factors.extend(cofactor_primes)
+                    else:
+                        self.logger.info(f"Remaining cofactor {cofactor} is composite (not auto-factoring)")
+
+            # Replace with fully factored results
+            results['factors_found'] = all_prime_factors
+            if all_prime_factors:
+                results['factor_found'] = all_prime_factors[0]
+
+            # Log each prime factor individually (only once, at top level)
+            program_name = f"GMP-ECM ({method.upper()})"
+            for prime in all_prime_factors:
+                self.log_factor_found(composite, prime, b1, b2, curves, method=method, sigma=results.get('sigma'), program=program_name)
 
         # Extract parametrization from raw output (look for "sigma=1:xxx" or "sigma=3:xxx")
         if 'parametrization' not in results:
@@ -910,19 +959,54 @@ class ECMWrapper(BaseWrapper):
             else:
                 parametrization = 3  # Default
 
-        # Only set factor_found and sigma if not already set by _log_and_store_factors
-        if 'factor_found' not in results:
-            results['factor_found'] = factor_found
+        # Fully factor any composite factors found
+        if factor_found:
+            self.logger.info(f"Raw factor found: {factor_found} - checking if composite...")
+            prime_factors = self._fully_factor_found_result(factor_found, quiet=True)
+            self.logger.info(f"Prime factorization: {prime_factors}")
+
+            # Calculate remaining cofactor after dividing out all found primes
+            cofactor = int(composite)
+            for prime in prime_factors:
+                cofactor //= int(prime)
+
+            # Check if there's a remaining cofactor
+            if cofactor > 1:
+                cofactor_digits = len(str(cofactor))
+
+                # Test if cofactor is prime
+                if self._is_probably_prime(cofactor):
+                    self.logger.info(f"Remaining cofactor {cofactor} is prime")
+                    prime_factors.append(str(cofactor))
+                else:
+                    # Cofactor is composite - only auto-factor if small enough (ECM is fastest for <60 digits)
+                    if cofactor_digits < 60:
+                        self.logger.info(f"Remaining cofactor {cofactor} is composite - factoring...")
+                        cofactor_primes = self._fully_factor_found_result(str(cofactor), quiet=True)
+                        prime_factors.extend(cofactor_primes)
+                    else:
+                        self.logger.info(f"Remaining cofactor {cofactor} is composite (not auto-factoring)")
+
+            # Store all prime factors
+            results['factors_found'] = prime_factors
+            results['factor_found'] = prime_factors[0]  # First prime factor
+
+            # Log each prime factor (only once, at top level)
+            program_name = f"GMP-ECM ({method.upper()})"
+            for prime in prime_factors:
+                self.log_factor_found(composite, prime, b1, b2, curves, method=method, sigma=factor_sigma, program=program_name)
+        else:
+            # No factors found
+            if 'factor_found' not in results:
+                results['factor_found'] = None
+
+        # Set sigma and parametrization
         if 'sigma' not in results:
             results['sigma'] = factor_sigma  # Sigma that found the factor (if any)
         results['sigma_values'] = unique_sigma_values  # All sigma values used
         results['parametrization'] = parametrization
         results['curves_completed'] = actual_curves_completed
         results['execution_time'] = time.time() - start_time
-
-        if factor_found:
-            program_name = f"GMP-ECM ({method.upper()})"
-            self.log_factor_found(composite, factor_found, b1, b2, curves, method=method, sigma=factor_sigma, program=program_name)
 
         return results
 
@@ -1099,54 +1183,141 @@ class ECMWrapper(BaseWrapper):
 
         return factors, cofactor
 
-    def _fully_factor_found_result(self, factor: str) -> List[str]:
+    def _fully_factor_found_result(self, factor: str, max_ecm_attempts: int = 5, quiet: bool = False) -> List[str]:
         """
         Recursively factor a result from ECM until all prime factors found.
-        Handles composite factors by using trial division + YAFU.
+        Handles composite factors by using trial division + ECM with increasing B1.
 
         Args:
             factor: Factor found by ECM (may be composite)
+            max_ecm_attempts: Maximum ECM attempts with increasing B1 (default: 5)
 
         Returns:
             List of prime factors (as strings)
         """
         factor_int = int(factor)
 
-        # Trial division catches small factors quickly
+        # Trial division catches small factors quickly (2, 3, 5, 7, ... up to 10^7)
         small_primes, cofactor = self._trial_division(factor_int, limit=10**7)
         all_primes = [str(p) for p in small_primes]
 
         if cofactor == 1:
             return all_primes
 
-        # Use YAFU to finish factorization (handles primality + factoring)
-        digit_length = len(str(cofactor))
-        self.logger.info(f"Cofactor remaining: C{digit_length}, using YAFU to complete factorization")
-
-        try:
-            # Import YAFUWrapper for factorization
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("yafu_wrapper", "yafu-wrapper.py")
-            yafu_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(yafu_module)
-
-            yafu = yafu_module.YAFUWrapper(self.config_path)
-            yafu_results = yafu.run_yafu_auto(composite=str(cofactor))
-
-            if yafu_results.get('success'):
-                yafu_factors = yafu_results.get('factors_found', [])
-                all_primes.extend(yafu_factors)
-            else:
-                self.logger.warning(f"YAFU factorization failed for {cofactor}")
-                # Return what we have so far + the cofactor
-                all_primes.append(str(cofactor))
-
-        except Exception as e:
-            self.logger.error(f"Error during factorization of {cofactor}: {e}")
-            # Return what we have + the unfactored cofactor
+        # Check if cofactor is prime using probabilistic test
+        if self._is_probably_prime(cofactor):
+            self.logger.info(f"Cofactor {cofactor} is prime")
             all_primes.append(str(cofactor))
+            return all_primes
+
+        # Cofactor is composite - use ECM with increasing B1
+        digit_length = len(str(cofactor))
+        self.logger.info(f"Cofactor remaining: C{digit_length}, using ECM to complete factorization")
+
+        current_cofactor = cofactor
+        for attempt in range(max_ecm_attempts):
+            if current_cofactor == 1:
+                break
+
+            # Select B1 based on cofactor size
+            cofactor_digits = len(str(current_cofactor))
+            b1 = self._get_b1_for_digit_length(cofactor_digits)
+
+            # Use more curves for smaller numbers (they're faster)
+            curves = max(10, 50 - (cofactor_digits // 2))
+
+            self.logger.info(f"ECM attempt {attempt+1}/{max_ecm_attempts} on C{cofactor_digits} with B1={b1}, {curves} curves")
+
+            try:
+                ecm_result = self.run_ecm(
+                    composite=str(current_cofactor),
+                    b1=b1,
+                    curves=curves,
+                    verbose=False,
+                    quiet=quiet
+                )
+
+                found_factors = ecm_result.get('factors_found', [])
+                if not found_factors and ecm_result.get('factor_found'):
+                    found_factors = [ecm_result['factor_found']]
+
+                if found_factors:
+                    self.logger.info(f"ECM found {len(found_factors)} factor(s): {found_factors}")
+
+                    # Recursively factor each found factor
+                    for found_factor in found_factors:
+                        sub_primes = self._fully_factor_found_result(found_factor, max_ecm_attempts, quiet=quiet)
+                        all_primes.extend(sub_primes)
+
+                        # Divide out from cofactor
+                        for prime in sub_primes:
+                            current_cofactor //= int(prime)
+
+                    # Check if fully factored
+                    if current_cofactor == 1:
+                        break
+
+                    # Check if remaining cofactor is prime
+                    if self._is_probably_prime(current_cofactor):
+                        self.logger.info(f"Remaining cofactor {current_cofactor} is prime")
+                        all_primes.append(str(current_cofactor))
+                        current_cofactor = 1
+                        break
+                else:
+                    self.logger.info(f"No factor found in attempt {attempt+1}")
+
+            except Exception as e:
+                self.logger.error(f"ECM factorization error: {e}")
+                break
+
+        # If we still have a composite cofactor after all attempts, return it as-is
+        if current_cofactor > 1:
+            self.logger.warning(f"Could not fully factor C{len(str(current_cofactor))}: {current_cofactor}")
+            all_primes.append(str(current_cofactor))
 
         return all_primes
+
+    def _is_probably_prime(self, n: int, trials: int = 10) -> bool:
+        """
+        Miller-Rabin primality test.
+
+        Args:
+            n: Number to test
+            trials: Number of trials (default: 10)
+
+        Returns:
+            True if probably prime, False if definitely composite
+        """
+        if n < 2:
+            return False
+        if n == 2 or n == 3:
+            return True
+        if n % 2 == 0:
+            return False
+
+        # Write n-1 as 2^r * d
+        r, d = 0, n - 1
+        while d % 2 == 0:
+            r += 1
+            d //= 2
+
+        # Witness loop
+        import random
+        for _ in range(trials):
+            a = random.randrange(2, n - 1)
+            x = pow(a, d, n)
+
+            if x == 1 or x == n - 1:
+                continue
+
+            for _ in range(r - 1):
+                x = pow(x, 2, n)
+                if x == n - 1:
+                    break
+            else:
+                return False
+
+        return True
 
     def _calculate_tlevel(self, curve_history: List[str]) -> float:
         """
@@ -1189,6 +1360,56 @@ class ECMWrapper(BaseWrapper):
             self.logger.error(f"Error calculating t-level: {e}")
             return 0.0
 
+    def _calculate_curves_for_target(self, current_tlevel: float, target_tlevel: float, b1: int) -> Optional[int]:
+        """
+        Calculate exact number of curves needed to reach target t-level from current t-level.
+
+        Args:
+            current_tlevel: Current t-level (e.g., 25.084)
+            target_tlevel: Target t-level (e.g., 28.7)
+            b1: B1 value to use
+
+        Returns:
+            Number of curves needed, or None if calculation failed
+        """
+        import re
+
+        tlevel_path = self.config.get('programs', {}).get('t_level', {}).get('path', 'bin/t-level')
+
+        try:
+            # Call t-level binary: t-level -w <current> -t <target> -b <b1>
+            result = subprocess.run(
+                [tlevel_path, '-w', str(current_tlevel), '-t', str(target_tlevel), '-b', str(b1)],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            # Parse output like:
+            # "Running the following will get you to t28.700:"
+            # "262@25e4"
+            lines = result.stdout.strip().split('\n')
+            for i, line in enumerate(lines):
+                if 'will get you to' in line:
+                    # Check next line for the recommendation
+                    if i + 1 < len(lines):
+                        next_line = lines[i + 1]
+                        match = re.search(r'(\d+)@', next_line)
+                        if match:
+                            return int(match.group(1))
+                # Also check if format is on same line
+                elif '@' in line and re.match(r'^\d+@', line.strip()):
+                    match = re.search(r'(\d+)@', line)
+                    if match:
+                        return int(match.group(1))
+
+            self.logger.warning(f"Failed to parse curve recommendation from t-level output: {result.stdout}")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error calculating curves for target: {e}")
+            return None
+
     def _get_b1_for_digit_length(self, digits: int) -> int:
         """
         Select appropriate B1 value based on digit length.
@@ -1213,148 +1434,195 @@ class ECMWrapper(BaseWrapper):
         elif digits < 120: return 850000000
         else: return 2900000000
 
+    def _get_optimal_b1_for_tlevel(self, target_tlevel: float) -> Tuple[int, int]:
+        """
+        Get optimal B1 value and expected curves for reaching a specific t-level.
+        Based on Zimmermann's table for GMP-ECM optimal plans.
+
+        Args:
+            target_tlevel: Target t-level in digits (e.g., 20, 25, 30, 35...)
+
+        Returns:
+            Tuple of (optimal_b1, expected_curves) for that t-level
+        """
+        # Zimmermann's optimal B1 values and expected curves for GMP-ECM 7
+        # Format: (digits, optimal_b1, expected_curves_ecm7)
+        # Source: https://members.loria.fr/PZimmermann/records/ecmnet.html
+        OPTIMAL_B1_TABLE = [
+            (20, 11000, 107),
+            (25, 50000, 261),
+            (30, 250000, 513),
+            (35, 1000000, 1071),
+            (40, 3000000, 2753),
+            (45, 11000000, 5208),
+            (50, 43000000, 8704),
+            (55, 110000000, 20479),
+            (60, 260000000, 47888),
+            (65, 850000000, 78923),
+            (70, 2900000000, 115153),
+            (75, 7600000000, 211681),
+            (80, 25000000000, 296479)
+        ]
+
+        # Find the closest entry (linear interpolation if between values)
+        if target_tlevel <= OPTIMAL_B1_TABLE[0][0]:
+            return (OPTIMAL_B1_TABLE[0][1], OPTIMAL_B1_TABLE[0][2])
+        if target_tlevel >= OPTIMAL_B1_TABLE[-1][0]:
+            return (OPTIMAL_B1_TABLE[-1][1], OPTIMAL_B1_TABLE[-1][2])
+
+        # Find surrounding entries and interpolate
+        for i in range(len(OPTIMAL_B1_TABLE) - 1):
+            digits1, b1_1, curves1 = OPTIMAL_B1_TABLE[i]
+            digits2, b1_2, curves2 = OPTIMAL_B1_TABLE[i + 1]
+
+            if digits1 <= target_tlevel <= digits2:
+                # Linear interpolation in log space for B1 (grows exponentially)
+                # Linear interpolation in linear space for curves
+                import math
+                log_b1_1 = math.log(b1_1)
+                log_b1_2 = math.log(b1_2)
+                fraction = (target_tlevel - digits1) / (digits2 - digits1)
+                log_b1 = log_b1_1 + fraction * (log_b1_2 - log_b1_1)
+                optimal_b1 = int(math.exp(log_b1))
+                expected_curves = int(curves1 + fraction * (curves2 - curves1))
+                return (optimal_b1, expected_curves)
+
+        # Fallback
+        return (OPTIMAL_B1_TABLE[-1][1], OPTIMAL_B1_TABLE[-1][2])
+
     def run_ecm_with_tlevel(self, composite: str, target_tlevel: float,
                            batch_size: int = 100, workers: int = 1,
-                           use_two_stage: bool = False, verbose: bool = False) -> Dict[str, Any]:
+                           use_two_stage: bool = False, verbose: bool = False,
+                           start_b1: Optional[int] = None) -> Dict[str, Any]:
         """
-        Run ECM in batches until target t-level reached.
-        Dynamically adjusts target t-level when factors found (number shrinks).
+        Run ECM progressively until target t-level reached.
+        Uses progressive approach: starts at t20 and increases by 5 digits each step.
         Fully factors any composite factors found.
 
         Args:
             composite: Number to factor
-            target_tlevel: Initial target t-level (e.g., 40.0)
-            batch_size: Curves per batch (default: 100)
+            target_tlevel: Target t-level in digits (e.g., 30.0, 40.0)
+            batch_size: DEPRECATED - uses optimal curve counts from Zimmermann table
             workers: Number of parallel workers (default: 1)
             use_two_stage: Use two-stage GPU mode (default: False)
             verbose: Verbose output
+            start_b1: DEPRECATED - uses optimal B1 from Zimmermann table
 
         Returns:
             Results dict with:
             - success: bool
-            - factors_found: List of all prime factors
-            - cofactor: Remaining cofactor (if any)
-            - current_tlevel: Final t-level achieved
-            - target_tlevel: Final target t-level
+            - factors_found: List of all prime factors (or empty if none found)
+            - final_cofactor: Remaining cofactor as string (or None if fully factored)
+            - all_prime_factors: Alias for factors_found
             - curves_completed: Total curves run
-            - batches_run: Number of batches
+            - execution_time: Time in seconds
         """
         current_composite = int(composite)
         original_digits = len(str(current_composite))
         all_prime_factors = []
-        curve_history = []
-        batches = 0
         total_curves = 0
+        curve_history = []  # Track all curves run for t-level calculation
 
-        # Calculate initial target based on original size
-        current_target_t = target_tlevel
-        current_t = 0.0
-
-        self.logger.info(f"Starting ECM with t-level target: t{target_tlevel:.1f} on C{original_digits}")
+        self.logger.info(f"Starting progressive ECM with target t{target_tlevel:.1f} on C{original_digits}")
 
         start_time = time.time()
 
-        while current_t < current_target_t and current_composite > 1:
+        # Start at t0, work our way up in steps of 5 digits (20, 25, 30, 35...)
+        current_t_level = 0.0
+        step_targets = []
+        t = 20.0
+        while t <= target_tlevel:
+            step_targets.append(t)
+            t += 5.0
+        # Add final target if it's not already a step
+        if target_tlevel not in step_targets:
+            step_targets.append(target_tlevel)
+
+        self.logger.info(f"Progressive steps: {' → '.join([f't{t:.1f}' for t in step_targets])}")
+
+        for step_target in step_targets:
+            if current_composite == 1:
+                break
+
             cofactor_digits = len(str(current_composite))
 
-            # Recalculate target t-level based on current cofactor size
-            # Formula: target_t = (4/13) * digit_length
-            recalculated_target = (4.0 / 13.0) * cofactor_digits
+            # Get optimal B1 for this step from Zimmermann table
+            optimal_b1, _ = self._get_optimal_b1_for_tlevel(step_target)
 
-            # If cofactor shrunk significantly, lower the target
-            if recalculated_target < current_target_t:
-                self.logger.info(f"Cofactor shrunk to C{cofactor_digits}, adjusting target: t{current_target_t:.1f} → t{recalculated_target:.1f}")
-                current_target_t = recalculated_target
+            # Calculate exact curves needed to reach this step from current position
+            curves_needed = self._calculate_curves_for_target(current_t_level, step_target, optimal_b1)
 
-            # Select B1 based on current cofactor size
-            b1 = self._get_b1_for_digit_length(cofactor_digits)
+            if curves_needed is None or curves_needed <= 0:
+                self.logger.warning(f"Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, using Zimmermann estimate")
+                # Fallback to Zimmermann table estimate
+                _, curves_needed = self._get_optimal_b1_for_tlevel(step_target)
 
-            # Determine parametrization based on execution mode
-            # p=1 for CPU, p=3 for GPU/two-stage
-            param = 3 if use_two_stage else 1
+            self.logger.info(f"Progressive ECM: t{current_t_level:.3f} → t{step_target:.1f} on C{cofactor_digits}, B1={optimal_b1}, {curves_needed} curves")
 
-            self.logger.info(f"Batch {batches+1}: {batch_size} curves @ B1={b1} on C{cofactor_digits} (t{current_t:.1f}/{current_target_t:.1f})")
-
-            # Run ECM batch
+            # Run ECM with exact number of curves at this B1
             if use_two_stage:
-                # Use two-stage mode (GPU + CPU)
                 batch_results = self.run_ecm_two_stage(
                     composite=str(current_composite),
-                    b1=b1,
-                    curves=batch_size,
+                    b1=optimal_b1,
+                    curves=curves_needed,
                     use_gpu=True,
                     verbose=verbose
                 )
             elif workers > 1:
-                # Use multiprocess mode
                 batch_results = self.run_ecm_multiprocess(
                     composite=str(current_composite),
-                    b1=b1,
-                    curves=batch_size,
+                    b1=optimal_b1,
+                    curves=curves_needed,
                     workers=workers,
                     verbose=verbose
                 )
             else:
-                # Use standard mode
                 batch_results = self.run_ecm(
                     composite=str(current_composite),
-                    b1=b1,
-                    curves=batch_size,
+                    b1=optimal_b1,
+                    curves=curves_needed,
                     verbose=verbose
                 )
 
             curves_completed = batch_results.get('curves_completed', 0)
             total_curves += curves_completed
 
-            # Record curves for t-level tracking
-            # Get actual parametrization from results
-            actual_param = batch_results.get('parametrization', param)
-            curve_string = f"{curves_completed}@{b1},p={actual_param}"
-            curve_history.append(curve_string)
-
-            # Calculate current t-level
-            current_t = self._calculate_tlevel(curve_history)
-            self.logger.info(f"Current t-level: t{current_t:.1f} / t{current_target_t:.1f}")
+            # Update curve history and calculate new t-level
+            param = batch_results.get('parametrization', 1)
+            curve_history.append(f"{curves_completed}@{optimal_b1},p={param}")
+            current_t_level = self._calculate_tlevel(curve_history)
+            self.logger.info(f"Reached t{current_t_level:.3f} after {curves_completed} curves")
 
             # Handle factors
-            raw_factors = batch_results.get('factors_found', [])
-            if not raw_factors and batch_results.get('factor_found'):
-                raw_factors = [batch_results['factor_found']]
+            found_factors = batch_results.get('factors_found', [])
+            if found_factors:
+                self.logger.info(f"Found {len(found_factors)} factor(s): {found_factors}")
+                all_prime_factors.extend(found_factors)
 
-            if raw_factors:
-                self.logger.info(f"Found {len(raw_factors)} factor(s): {raw_factors}")
-
-                # Fully factor each result (handles composites)
-                for raw_factor in raw_factors:
-                    prime_factors = self._fully_factor_found_result(raw_factor)
-                    self.logger.info(f"Prime factorization of {raw_factor}: {prime_factors}")
-                    all_prime_factors.extend(prime_factors)
-
-                    # Divide out from current composite
-                    for prime in prime_factors:
-                        current_composite //= int(prime)
+                # Divide out all found factors
+                for factor in found_factors:
+                    current_composite //= int(factor)
 
                 new_digits = len(str(current_composite))
-                self.logger.info(f"Cofactor after division: C{new_digits}")
+                self.logger.info(f"Cofactor reduced from C{cofactor_digits} to C{new_digits}")
 
                 # Check if fully factored
                 if current_composite == 1:
-                    self.logger.info("Number fully factored!")
+                    self.logger.info("Fully factored by progressive ECM")
                     break
-
-            batches += 1
+            else:
+                self.logger.info(f"No factors found at this step")
 
         execution_time = time.time() - start_time
 
         results = {
             'success': True,
             'factors_found': all_prime_factors,
-            'cofactor': str(current_composite) if current_composite > 1 else None,
-            'current_tlevel': current_t,
-            'target_tlevel': current_target_t,
-            'original_target_tlevel': target_tlevel,
+            'all_prime_factors': all_prime_factors,  # Alias for compatibility
+            'final_cofactor': str(current_composite) if current_composite > 1 else None,
+            'current_tlevel': current_t_level,
+            'target_tlevel': target_tlevel,
             'curves_completed': total_curves,
-            'batches_run': batches,
             'execution_time': execution_time,
             'method': 'ecm',
             'original_digits': original_digits,
@@ -1362,11 +1630,12 @@ class ECMWrapper(BaseWrapper):
         }
 
         if all_prime_factors:
-            self.logger.info(f"Found {len(all_prime_factors)} prime factor(s): {all_prime_factors}")
+            self.logger.info(f"Progressive ECM found {len(all_prime_factors)} prime factor(s): {all_prime_factors}")
 
         if current_composite > 1:
-            self.logger.info(f"Cofactor remaining: {current_composite} (C{len(str(current_composite))})")
-            self.logger.info(f"Achieved t{current_t:.1f} / target t{current_target_t:.1f}")
+            self.logger.info(f"Cofactor remaining: C{len(str(current_composite))} at t{current_t_level:.3f}/{target_tlevel:.1f}")
+        else:
+            self.logger.info(f"Fully factored at t{current_t_level:.3f}")
 
         return results
 

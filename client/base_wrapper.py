@@ -228,16 +228,20 @@ class BaseWrapper:
         try:
             self.logger.info(f"Running {method.upper()} on {len(composite)}-digit number with {' '.join(cmd[1:3])}")
 
+            # Only use stdin PIPE if we're sending input, otherwise inherit parent stdin
+            # (None allows programs like YAFU to detect they're running from a terminal)
+            program_input = kwargs.get('input')
+            stdin_mode = subprocess.PIPE if program_input else None
+
             process = subprocess.Popen(
                 cmd,
-                stdin=subprocess.PIPE,
+                stdin=stdin_mode,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True
             )
 
             # Send input and get output (only if input is specified)
-            program_input = kwargs.get('input')
             if program_input:
                 stdout, _ = process.communicate(input=program_input, timeout=timeout)
             else:
@@ -323,12 +327,16 @@ class BaseWrapper:
         )
 
         # Send composite to stdin if provided
-        if composite:
+        if composite and process.stdin:
             process.stdin.write(composite)
-        process.stdin.close()
+        if process.stdin:
+            process.stdin.close()
 
         # Stream output
-        output_lines = []
+        output_lines: List[str] = []
+        if not process.stdout:
+            return process, output_lines
+
         while True:
             line = process.stdout.readline()
             if not line:

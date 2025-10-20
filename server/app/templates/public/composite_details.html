@@ -117,6 +117,28 @@
     </div>
     {% endif %}
 
+    {% if factors_with_group_orders %}
+    <div class="card">
+        <h2>Factors with Elliptic Curve Group Order Data</h2>
+        <table>
+            <tr>
+                <th>Factor</th>
+                <th>Sigma</th>
+                <th>Group Order</th>
+                <th>Group Order Factorization</th>
+            </tr>
+            {% for f in factors_with_group_orders %}
+            <tr>
+                <td class="number-display">{{ esc(f.factor) }}</td>
+                <td>{{ "{:,}".format(f.sigma) if f.sigma else "N/A" }}</td>
+                <td class="number-display">{{ esc(f.group_order) if f.group_order else "N/A" }}</td>
+                <td class="number-display">{{ esc(f.group_order_factorization) if f.group_order_factorization else "N/A" }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    {% endif %}
+
     <div class="card">
         <h2>Recent ECM Attempts</h2>
         {% if recent_attempts %}

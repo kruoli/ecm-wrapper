@@ -2,8 +2,11 @@
 Maintenance and system administration routes.
 """
 import logging
+import threading
+import time
+from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
 
 from ....database import get_db
@@ -12,6 +15,16 @@ from ....utils.transactions import transaction_scope
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Global state for background task
+_recalculation_status = {
+    "running": False,
+    "started_at": None,
+    "progress": 0,
+    "total": 0,
+    "completed": False,
+    "result": None
+}
 
 
 @router.post("/composites/calculate-t-levels")
@@ -93,18 +106,156 @@ async def calculate_t_levels_for_all_composites(
     }
 
 
+def _recalculate_all_t_levels_background():
+    """
+    Background task to recalculate all t-levels.
+
+    Uses a new database session to avoid blocking the main request.
+    """
+    from ....models.composites import Composite
+    from ....models.attempts import ECMAttempt
+    from ....services.t_level_calculator import TLevelCalculator
+    from ....database import SessionLocal
+
+    global _recalculation_status
+
+    # Create a new database session for this background task
+    db = SessionLocal()
+
+    try:
+        calculator = TLevelCalculator()
+        composites = db.query(Composite).all()
+
+        _recalculation_status["total"] = len(composites)
+        _recalculation_status["progress"] = 0
+
+        updated_count = 0
+        current_t_updated = 0
+
+        logger.info(f"Starting background t-level recalculation for {len(composites)} composites")
+
+        for idx, composite in enumerate(composites, 1):
+            try:
+                # Calculate/update target t-level
+                target_t = calculator.calculate_target_t_level(
+                    composite.digit_length,
+                    special_form=None,
+                    snfs_difficulty=composite.snfs_difficulty
+                )
+                composite.target_t_level = target_t
+
+                # Recalculate current t-level from existing attempts
+                previous_attempts = db.query(ECMAttempt).filter(
+                    ECMAttempt.composite_id == composite.id
+                ).all()
+
+                current_t = calculator.get_current_t_level_from_attempts(previous_attempts)
+                if current_t != composite.current_t_level:
+                    composite.current_t_level = current_t
+                    current_t_updated += 1
+
+                updated_count += 1
+
+                # Commit very frequently and yield to allow other requests
+                if idx % 5 == 0:
+                    db.commit()
+                    _recalculation_status["progress"] = idx
+                    logger.info(f"T-level recalculation progress: {idx}/{len(composites)}")
+
+                    # Sleep briefly to yield control and allow other requests to process
+                    time.sleep(0.1)
+
+            except Exception as e:
+                logger.warning(f"Failed to update composite {composite.id}: {e}")
+                db.rollback()  # Rollback on error to avoid blocking
+                continue
+
+        # Final commit
+        db.commit()
+
+        _recalculation_status["progress"] = len(composites)
+        _recalculation_status["completed"] = True
+        _recalculation_status["result"] = {
+            "status": "completed",
+            "composites_updated": updated_count,
+            "current_t_levels_updated": current_t_updated,
+            "message": f"Recalculated all t-levels for {updated_count} composites. Updated {current_t_updated} current t-level values."
+        }
+
+        logger.info(f"Background t-level recalculation completed: {updated_count} composites updated")
+
+    except Exception as e:
+        logger.error(f"Background t-level recalculation failed: {e}")
+        _recalculation_status["completed"] = True
+        _recalculation_status["result"] = {
+            "status": "error",
+            "message": f"T-level recalculation failed: {str(e)}"
+        }
+    finally:
+        _recalculation_status["running"] = False
+        db.close()
+
+
 @router.post("/composites/recalculate-all-t-levels")
 async def recalculate_all_t_levels(
-    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks,
     _admin: bool = Depends(verify_admin_key)
 ):
     """
-    Force recalculation of ALL t-levels (both target and current) for all composites.
+    Start background recalculation of ALL t-levels (both target and current) for all composites.
 
-    This will replace any existing current t-level values with fresh calculations
-    using the real t-level executable.
+    This operation runs in the background to avoid blocking the server.
+    Use GET /admin/composites/recalculate-status to check progress.
 
     Returns:
-        Statistics about t-level recalculations performed
+        Status indicating the background task has started
     """
-    return await calculate_t_levels_for_all_composites(recalculate_all=True, db=db)
+    global _recalculation_status
+
+    if _recalculation_status["running"]:
+        return {
+            "status": "already_running",
+            "message": "T-level recalculation is already running",
+            "progress": _recalculation_status["progress"],
+            "total": _recalculation_status["total"]
+        }
+
+    # Reset status and start background task
+    _recalculation_status = {
+        "running": True,
+        "started_at": datetime.utcnow().isoformat(),
+        "progress": 0,
+        "total": 0,
+        "completed": False,
+        "result": None
+    }
+
+    # Start background task in a separate thread (FastAPI BackgroundTasks runs after response)
+    thread = threading.Thread(target=_recalculate_all_t_levels_background, daemon=True)
+    thread.start()
+
+    return {
+        "status": "started",
+        "message": "T-level recalculation started in background. Check /admin/composites/recalculate-status for progress.",
+        "started_at": _recalculation_status["started_at"]
+    }
+
+
+@router.get("/composites/recalculate-status")
+async def get_recalculation_status(
+    _admin: bool = Depends(verify_admin_key)
+):
+    """
+    Get the status of the background t-level recalculation task.
+
+    Returns:
+        Current status including progress and result
+    """
+    return {
+        "running": _recalculation_status["running"],
+        "started_at": _recalculation_status["started_at"],
+        "progress": _recalculation_status["progress"],
+        "total": _recalculation_status["total"],
+        "completed": _recalculation_status["completed"],
+        "result": _recalculation_status["result"]
+    }

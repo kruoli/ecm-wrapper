@@ -53,10 +53,12 @@ async def delete_attempt(
 
     # Delete the attempt
     db.delete(attempt)
-    db.commit()
 
-    # Recalculate t-level for the composite
+    # Recalculate t-level for the composite (both operations in one transaction)
     new_t_level = t_level_calc.recalculate_composite_t_level(db, composite)
+
+    # Commit both operations atomically
+    db.commit()
 
     return {
         "status": "deleted",

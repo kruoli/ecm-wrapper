@@ -274,6 +274,10 @@ async def set_composite_priority(
     success = composite_service.set_composite_priority(db, composite_id, priority)
     if not success:
         raise not_found_error("Composite")
+
+    # Commit the transaction to persist the priority change
+    db.commit()
+
     return {
         "composite_id": composite_id,
         "priority": priority,
@@ -293,6 +297,10 @@ async def mark_composite_complete(
     success = composite_service.mark_composite_complete(db, composite_id, reason)
     if not success:
         raise not_found_error("Composite")
+
+    # Commit the transaction to persist the completion status
+    db.commit()
+
     return {
         "composite_id": composite_id,
         "status": "marked_complete",
@@ -312,4 +320,8 @@ async def remove_composite(
     result = composite_service.delete_composite(db, composite_id, reason)
     if not result:
         raise not_found_error("Composite")
+
+    # Commit the transaction to persist the deletion
+    db.commit()
+
     return result

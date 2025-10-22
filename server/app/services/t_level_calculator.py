@@ -377,7 +377,7 @@ class TLevelCalculator:
 
         # Update composite
         composite.current_t_level = new_t_level
-        db.commit()
+        db.flush()  # Make changes visible within transaction
 
         logger.info(f"Recalculated t-level for composite {composite.id}: {new_t_level}")
         return new_t_level

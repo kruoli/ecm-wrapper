@@ -408,7 +408,7 @@
                 .then(data => {
                     if (data.status === 'removed') {
                         alert(`Composite ${compositeId} removed successfully.\\nCancelled ${data.cancelled_work_assignments} work assignments.`);
-                        location.reload();
+                        refreshPage();  // Use refreshPage() to maintain auth
                     } else {
                         alert('Error removing composite: ' + JSON.stringify(data));
                     }
@@ -425,7 +425,7 @@
                 .then(response => response.json())
                 .then(data => {
                     alert('Cleaned up ' + data.cleaned_up + ' expired assignments');
-                    location.reload();
+                    refreshPage();  // Use refreshPage() to maintain auth
                 });
         }
     }
@@ -436,7 +436,7 @@
                 .then(response => response.json())
                 .then(data => {
                     alert(data.message || 'T-levels calculated successfully');
-                    location.reload();
+                    refreshPage();  // Use refreshPage() to maintain auth
                 })
                 .catch(error => {
                     alert('Error calculating t-levels: ' + error);
@@ -445,15 +445,45 @@
     }
 
     function recalculateAllTLevels() {
-        if (confirm('RECALCULATE ALL t-levels? This will replace current random t-level values with real calculations using the t-level executable.')) {
+        if (confirm('RECALCULATE ALL t-levels? This will run in the background and may take several minutes.\n\nThis will replace current random t-level values with real calculations using the t-level executable.')) {
             fetchWithAuth('/api/v1/admin/composites/recalculate-all-t-levels', {method: 'POST'})
                 .then(response => response.json())
                 .then(data => {
-                    alert(data.message || 'All t-levels recalculated successfully');
-                    location.reload();
+                    if (data.status === 'started') {
+                        alert('T-level recalculation started in background.\n\nThe process will continue even if you navigate away from this page.\n\nCheck the browser console or server logs for progress.');
+
+                        // Poll for status updates
+                        const statusInterval = setInterval(() => {
+                            fetchWithAuth('/api/v1/admin/composites/recalculate-status')
+                                .then(response => response.json())
+                                .then(status => {
+                                    console.log(`T-level recalculation progress: ${status.progress}/${status.total}`);
+
+                                    if (status.completed) {
+                                        clearInterval(statusInterval);
+                                        if (status.result && status.result.status === 'completed') {
+                                            console.log('T-level recalculation completed!', status.result);
+                                            alert(`T-level recalculation completed!\n\n${status.result.message}`);
+                                            refreshPage();
+                                        } else if (status.result && status.result.status === 'error') {
+                                            console.error('T-level recalculation failed:', status.result);
+                                            alert(`T-level recalculation failed:\n\n${status.result.message}`);
+                                        }
+                                    }
+                                })
+                                .catch(error => {
+                                    console.error('Error checking status:', error);
+                                    clearInterval(statusInterval);
+                                });
+                        }, 5000); // Check every 5 seconds
+                    } else if (data.status === 'already_running') {
+                        alert(`T-level recalculation is already running.\n\nProgress: ${data.progress}/${data.total}`);
+                    } else {
+                        alert(data.message || 'T-level recalculation response: ' + JSON.stringify(data));
+                    }
                 })
                 .catch(error => {
-                    alert('Error recalculating t-levels: ' + error);
+                    alert('Error starting t-level recalculation: ' + error);
                 });
         }
     }
@@ -490,7 +520,7 @@
                 .then(data => {
                     if (data.status === 'deleted') {
                         alert(`Curve deleted successfully.\n\nT-level updated:\n  Before: t${data.old_t_level}\n  After: t${data.new_t_level}`);
-                        location.reload();
+                        refreshPage();  // Use refreshPage() to maintain auth
                     } else {
                         alert('Error deleting curve: ' + JSON.stringify(data));
                     }

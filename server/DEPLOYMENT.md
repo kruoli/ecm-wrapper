@@ -144,7 +144,8 @@ docker-compose -f docker-compose.simple.yml up -d --build
 
 6. **Start the server**
    ```bash
-   uvicorn app.main:app --host 0.0.0.0 --port 8000
+   # Use 2 workers to keep the server responsive during heavy background operations
+   uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
    ```
 
 7. **Access the dashboard**

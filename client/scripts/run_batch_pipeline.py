@@ -84,6 +84,11 @@ def gpu_worker(wrapper: ECMWrapper, numbers: list, b1: int, curves: int,
 
             # Run stage 1
             stage1_start = time.time()
+
+            # TEMPORARY: Hardcoded for testing specific curve
+            test_sigma = 4054176251
+            test_param = 3
+
             stage1_success, stage1_factor, actual_curves, stage1_output, all_factors = wrapper._run_stage1(
                 composite=number,
                 b1=b1,
@@ -92,26 +97,32 @@ def gpu_worker(wrapper: ECMWrapper, numbers: list, b1: int, curves: int,
                 use_gpu=use_gpu,
                 verbose=verbose,
                 gpu_device=gpu_device,
-                gpu_curves=gpu_curves
+                gpu_curves=gpu_curves,
+                sigma=test_sigma,
+                param=test_param
             )
             stage1_time = time.time() - stage1_start
 
             if stage1_factor:
                 logger.info(f"[GPU Thread] [{i}/{len(numbers)}] Factor found in stage 1: {stage1_factor}")
                 stats.increment_factors()
-                # Still pass to CPU thread for result submission
+                # Pass to CPU thread for result submission (no residue file needed)
+                stats.increment_stage1()
+                logger.info(f"[GPU Thread] [{i}/{len(numbers)}] Stage 1 complete in {stage1_time:.1f}s (factor found), "
+                           f"passing to CPU thread ({stats.get_summary()})")
+            else:
+                # Only check residue file if no factor found (stage 2 will run)
+                if not stage1_success:
+                    logger.error(f"[GPU Thread] [{i}/{len(numbers)}] Stage 1 failed for {number[:30]}...")
+                    continue
 
-            if not stage1_success:
-                logger.error(f"[GPU Thread] [{i}/{len(numbers)}] Stage 1 failed for {number[:30]}...")
-                continue
+                if not residue_file.exists() or residue_file.stat().st_size == 0:
+                    logger.error(f"[GPU Thread] [{i}/{len(numbers)}] No valid residue file generated")
+                    continue
 
-            if not residue_file.exists() or residue_file.stat().st_size == 0:
-                logger.error(f"[GPU Thread] [{i}/{len(numbers)}] No valid residue file generated")
-                continue
-
-            stats.increment_stage1()
-            logger.info(f"[GPU Thread] [{i}/{len(numbers)}] Stage 1 complete in {stage1_time:.1f}s, "
-                       f"passing to CPU thread ({stats.get_summary()})")
+                stats.increment_stage1()
+                logger.info(f"[GPU Thread] [{i}/{len(numbers)}] Stage 1 complete in {stage1_time:.1f}s, "
+                           f"passing to CPU thread ({stats.get_summary()})")
 
             # Pass to CPU thread (blocks if queue is full - natural backpressure)
             residue_queue.put({
@@ -261,14 +272,27 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
             stats.increment_stage2()
             logger.info(f"[CPU Thread] [{idx}/{total}] Complete ({stats.get_summary()})")
 
-            # Cleanup residue file
+            # Cleanup residue file (only if it exists - may not exist if factor found in stage 1)
             try:
-                residue_file.unlink()
-            except:
-                pass
+                if residue_file and residue_file.exists():
+                    residue_file.unlink()
+                    logger.debug(f"[CPU Thread] [{idx}/{total}] Cleaned up residue file: {residue_file.name}")
+                elif stage1_factor:
+                    logger.debug(f"[CPU Thread] [{idx}/{total}] No residue file to clean (factor found in stage 1)")
+                else:
+                    logger.warning(f"[CPU Thread] [{idx}/{total}] Residue file not found for cleanup: {residue_file}")
+            except Exception as e:
+                logger.error(f"[CPU Thread] [{idx}/{total}] Failed to cleanup residue file {residue_file}: {e}")
 
         except Exception as e:
             logger.error(f"[CPU Thread] Error processing work item: {e}")
+            # Try to cleanup residue file even on error
+            try:
+                if 'residue_file' in locals() and residue_file and residue_file.exists():
+                    residue_file.unlink()
+                    logger.debug(f"[CPU Thread] Cleaned up residue file after error: {residue_file.name}")
+            except:
+                pass  # Don't let cleanup errors hide the original error
 
         finally:
             residue_queue.task_done()

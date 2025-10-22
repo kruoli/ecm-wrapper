@@ -22,14 +22,18 @@ class Timeouts:
 class ECMPatterns:
     """Compiled regex patterns for ECM output parsing."""
 
-    # GPU format: "GPU: factor 12345 found in Step 1 with curve 0 (-sigma 3:2126921240)"
-    GPU_FACTOR = re.compile(r'GPU: factor (\d+) found in Step \d+ with curve \d+(?: \(-sigma 3:(\d+)\))?')
+    # Pattern 1: Prime factor announcements (most reliable - highest priority)
+    # Example: "Found prime factor of 14 digits: 59460190057621"
+    PRIME_FACTOR = re.compile(r'Found prime factor of \d+ digits: (\d+)', re.IGNORECASE)
 
-    # Standard format: "Factor found in step 1: 67280421310721"
-    STANDARD_FACTOR = re.compile(r'Factor found in step \d+: (\d+)')
+    # Pattern 2: GPU format with sigma (very specific)
+    # Example: "GPU: factor 12345 found in Step 1 with curve 0 (-sigma 3:2126921240)"
+    GPU_FACTOR = re.compile(r'GPU: factor (\d+) found in Step \d+ with curve \d+(?: \(-sigma 3:(\d+)\))?', re.IGNORECASE)
 
-    # Prime factor lines: "Found prime factor of 14 digits: 59460190057621"
-    PRIME_FACTOR = re.compile(r'Found prime factor of \d+ digits: (\d+)')
+    # Pattern 3: Standard format (with optional asterisk prefix for stage 2)
+    # Example: "Factor found in step 1: 67280421310721"
+    # Example: "********** Factor found in step 2: 154848006894803752593902015592419621459239"
+    STANDARD_FACTOR = re.compile(r'\**\s*Factor found in step \d+: (\d+)', re.IGNORECASE)
 
     # Sigma parameter extraction
     SIGMA_PARAM = re.compile(r'-sigma (3:\d+|\d+)')
@@ -129,6 +133,53 @@ def extract_sigma_for_factor(output: str, factor: str, factor_position: Optional
     return None
 
 
+def _extract_factors_with_patterns(output: str) -> List[Tuple[str, Optional[str], str]]:
+    """
+    Internal unified function: Extract all factors from output using all available patterns.
+
+    This is the single source of truth for factor extraction, ensuring both
+    parse_ecm_output() and parse_ecm_output_multiple() use identical logic.
+
+    Args:
+        output: ECM program output
+
+    Returns:
+        List of (factor, sigma, pattern_name) tuples
+        Empty list if no factors found
+    """
+    factors = []
+    seen_factors = set()  # Deduplicate factors found by multiple patterns
+
+    # Pattern 1: Prime factor announcements (highest priority - most reliable)
+    for match in ECMPatterns.PRIME_FACTOR.finditer(output):
+        factor = match.group(1)
+        if factor not in seen_factors:
+            sigma = extract_sigma_for_factor(output, factor, match.start())
+            factors.append((factor, sigma, "PRIME_FACTOR"))
+            seen_factors.add(factor)
+            logger.debug(f"Found factor via PRIME_FACTOR: {factor}")
+
+    # Pattern 2: GPU format (includes sigma in match)
+    for match in ECMPatterns.GPU_FACTOR.finditer(output):
+        factor = match.group(1)
+        if factor not in seen_factors:
+            sigma = f"3:{match.group(2)}" if match.group(2) else None
+            factors.append((factor, sigma, "GPU_FACTOR"))
+            seen_factors.add(factor)
+            logger.debug(f"Found factor via GPU_FACTOR: {factor}")
+
+    # Pattern 3: Standard format
+    for match in ECMPatterns.STANDARD_FACTOR.finditer(output):
+        factor = match.group(1)
+        if factor not in seen_factors:
+            sigma = extract_sigma_for_factor(output, factor, match.start())
+            factors.append((factor, sigma, "STANDARD_FACTOR"))
+            seen_factors.add(factor)
+            logger.debug(f"Found factor via STANDARD_FACTOR: {factor}")
+
+    return factors
+
+
 def parse_ecm_output_multiple(output: str) -> List[Tuple[str, Optional[str]]]:
     """
     Parse GMP-ECM output for multiple prime factors only.
@@ -137,34 +188,10 @@ def parse_ecm_output_multiple(output: str) -> List[Tuple[str, Optional[str]]]:
     Returns:
         List of (factor, sigma) tuples. Empty list if no factors found.
     """
-    factors = []
+    factors_with_patterns = _extract_factors_with_patterns(output)
 
-    # Look for explicit prime factor announcements first
-    prime_matches = ECMPatterns.PRIME_FACTOR.findall(output)
-    if prime_matches:
-        logger.debug(f"Found {len(prime_matches)} prime factors via PRIME_FACTOR pattern")
-        for factor in prime_matches:
-            sigma = extract_sigma_for_factor(output, factor)
-            factors.append((factor, sigma))
-        return factors
-
-    # Fallback to GPU format if no prime factor announcements
-    gpu_matches = ECMPatterns.GPU_FACTOR.findall(output)
-    if gpu_matches:
-        logger.debug(f"Found {len(gpu_matches)} factors via GPU_FACTOR pattern")
-    for match in gpu_matches:
-        factor = match[0]
-        sigma = f"3:{match[1]}" if match[1] else None
-        factors.append((factor, sigma))
-
-    # If no GPU factors, try standard format
-    if not factors:
-        standard_matches = ECMPatterns.STANDARD_FACTOR.findall(output)
-        if standard_matches:
-            logger.debug(f"Found {len(standard_matches)} factors via STANDARD_FACTOR pattern")
-        for factor in standard_matches:
-            sigma = extract_sigma_for_factor(output, factor)
-            factors.append((factor, sigma))
+    # Strip pattern name and return just (factor, sigma) tuples
+    factors = [(f[0], f[1]) for f in factors_with_patterns]
 
     if factors:
         logger.info(f"Parsed {len(factors)} factors from ECM output")
@@ -172,28 +199,32 @@ def parse_ecm_output_multiple(output: str) -> List[Tuple[str, Optional[str]]]:
     return factors
 
 
-def parse_ecm_output(output: str) -> Tuple[Optional[str], Optional[str]]:
+def parse_ecm_output(output: str, debug: bool = False) -> Tuple[Optional[str], Optional[str]]:
     """
-    Parse GMP-ECM output for factors and sigma.
-    Optimized version using compiled patterns.
+    Parse GMP-ECM output for first factor and sigma.
+
+    Now uses the same comprehensive pattern matching as parse_ecm_output_multiple(),
+    ensuring consistent behavior across all parsing operations.
+
+    Args:
+        output: ECM program output
+        debug: If True, log output preview when no factors found (for debugging)
 
     Returns:
         Tuple of (factor, sigma) where both can be None
     """
-    # Try GPU format first (most specific)
-    match = ECMPatterns.GPU_FACTOR.search(output)
-    if match:
-        factor = match.group(1)
-        sigma = match.group(2)  # May be None
+    factors = _extract_factors_with_patterns(output)
+
+    if factors:
+        factor, sigma, pattern = factors[0]
+        logger.info(f"Parsed factor {factor} using pattern {pattern}")
         return factor, sigma
 
-    # Try standard format
-    match = ECMPatterns.STANDARD_FACTOR.search(output)
-    if match:
-        factor = match.group(1)
-        factor_position = match.start()
-        sigma = extract_sigma_for_factor(output, factor, factor_position)
-        return factor, sigma
+    # Debug output when no factors found
+    if debug:
+        logger.warning("No factors found in output")
+        logger.debug(f"Output preview (first 500 chars):\n{output[:500]}")
+        logger.debug(f"Output preview (last 500 chars):\n{output[-500:]}")
 
     return None, None
 

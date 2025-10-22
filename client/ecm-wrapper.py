@@ -186,6 +186,7 @@ class ECMWrapper(BaseWrapper):
 
     def run_ecm(self, composite: str, b1: int, b2: Optional[int] = None,
                 curves: int = 100, sigma: Optional[int] = None,
+                param: Optional[int] = None,
                 use_gpu: bool = False, gpu_device: Optional[int] = None,
                 gpu_curves: Optional[int] = None, verbose: bool = False,
                 method: str = "ecm", continue_after_factor: bool = False,
@@ -211,6 +212,8 @@ class ECMWrapper(BaseWrapper):
                 cmd_base.extend(['-gpucurves', str(gpu_curves)])
         if verbose:
             cmd_base.append('-v')
+        if param is not None and method == "ecm":  # Param only applies to ECM
+            cmd_base.extend(['-param', str(param)])
         if sigma and method == "ecm":  # Sigma only applies to ECM
             cmd_base.extend(['-sigma', str(sigma)])
 
@@ -370,7 +373,9 @@ class ECMWrapper(BaseWrapper):
         return results
 
     def run_ecm_two_stage(self, composite: str, b1: int, b2: Optional[int] = None,
-                         curves: int = 100, use_gpu: bool = True,
+                         curves: int = 100, sigma: Optional[int] = None,
+                         param: Optional[int] = None,
+                         use_gpu: bool = True,
                          stage2_workers: int = 4, verbose: bool = False,
                          save_residues: Optional[str] = None,
                          resume_residues: Optional[str] = None,
@@ -436,7 +441,7 @@ class ECMWrapper(BaseWrapper):
                 stage1_mode = "GPU" if use_gpu else "CPU"
                 self.logger.info(f"Starting Stage 1 ({stage1_mode})")
                 stage1_success, stage1_factor, actual_curves, stage1_output, all_stage1_factors = self._run_stage1(
-                    composite, b1, curves, residue_file, use_gpu, verbose, gpu_device, gpu_curves
+                    composite, b1, curves, residue_file, use_gpu, verbose, gpu_device, gpu_curves, sigma, param
                 )
 
                 if stage1_factor:
@@ -550,7 +555,8 @@ class ECMWrapper(BaseWrapper):
 
     def _run_stage1(self, composite: str, b1: int, curves: int,
                    residue_file: Path, use_gpu: bool, verbose: bool,
-                   gpu_device: Optional[int] = None, gpu_curves: Optional[int] = None) -> tuple[bool, Optional[str], int, str, List[tuple[str, Optional[str]]]]:
+                   gpu_device: Optional[int] = None, gpu_curves: Optional[int] = None,
+                   sigma: Optional[int] = None, param: Optional[int] = None) -> tuple[bool, Optional[str], int, str, List[tuple[str, Optional[str]]]]:
         """Run Stage 1 with GPU or CPU and save residues - returns (success, factor, actual_curves)"""
         ecm_path = self.config['programs']['gmp_ecm']['path']
 
@@ -563,6 +569,10 @@ class ECMWrapper(BaseWrapper):
                 cmd.extend(['-gpucurves', str(gpu_curves)])
         if verbose:
             cmd.append('-v')
+        if param is not None:
+            cmd.extend(['-param', str(param)])
+        if sigma is not None:
+            cmd.extend(['-sigma', str(sigma)])
         cmd.extend(['-c', str(curves), str(b1), '0'])  # B2=0 for stage 1 only
 
         try:
@@ -686,6 +696,26 @@ class ECMWrapper(BaseWrapper):
                                 last_progress_report = curves_completed
 
                     process.wait()
+
+                    # CRITICAL: Drain any remaining buffered output after process exits
+                    # When GMP-ECM finds a factor and exits immediately, the final output
+                    # lines (including "GPU: factor ... found") may still be in the buffer
+                    remaining = process.stdout.read()
+                    if remaining:
+                        full_output += remaining
+                        self.logger.debug(f"Worker {worker_id}: Drained {len(remaining)} chars from buffer after process exit")
+
+                    # Save raw output to file for debugging (streaming path)
+                    try:
+                        import tempfile
+                        output_dir = Path(tempfile.gettempdir()) / "ecm_stage2_logs"
+                        output_dir.mkdir(exist_ok=True)
+                        output_file = output_dir / f"worker_{worker_id}_{int(time.time())}.log"
+                        with open(output_file, 'w') as f:
+                            f.write(full_output)
+                        self.logger.debug(f"Worker {worker_id} output saved to: {output_file}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to save worker {worker_id} output: {e}")
                 else:
                     # Original behavior - get all output at once
                     stdout, stderr = process.communicate()
@@ -704,8 +734,29 @@ class ECMWrapper(BaseWrapper):
                         percentage = (curves_completed / total_lines) * 100
                         self.logger.info(f"Worker {worker_id} progress: {curves_completed}/{total_lines} curves - {percentage:.1f}% complete")
 
+                    # Save raw output to file for debugging
+                    try:
+                        import tempfile
+                        output_dir = Path(tempfile.gettempdir()) / "ecm_stage2_logs"
+                        output_dir.mkdir(exist_ok=True)
+                        output_file = output_dir / f"worker_{worker_id}_{int(time.time())}.log"
+                        with open(output_file, 'w') as f:
+                            f.write(full_output)
+                        self.logger.debug(f"Worker {worker_id} output saved to: {output_file}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to save worker {worker_id} output: {e}")
+
                     # Check for factor (common to both paths)
-                    factor, sigma_from_output = parse_ecm_output(full_output)
+                    # Enable debug mode if worker stopped early (likely found factor but parsing failed)
+                    # Check against total_lines if available, otherwise against a reasonable expectation
+                    if total_lines > 0:
+                        enable_debug = curves_completed < total_lines * 0.9
+                    else:
+                        # If we don't know total_lines, assume each chunk should do ~300+ curves
+                        # (3072 curves / 8 workers = 384 per worker, so < 300 is suspicious)
+                        enable_debug = curves_completed < 300
+
+                    factor, sigma_from_output = parse_ecm_output(full_output, debug=enable_debug)
                     if factor:
                         with factor_lock:
                             nonlocal factor_found
@@ -722,8 +773,27 @@ class ECMWrapper(BaseWrapper):
                                                 p.terminate()
                         return (factor, sigma_from_output)
 
-                # If no factor found, report completion
-                self.logger.info(f"Worker {worker_id} completed (no factor)")
+                # If no factor found, report completion with diagnostic
+                curves_completed = full_output.count("Step 2 took")
+                output_size = len(full_output)
+                self.logger.info(f"Worker {worker_id} completed (no factor) - {curves_completed} curves, {output_size} bytes output")
+
+                # Show first and last 500 chars for diagnosis if worker stopped early
+                stopped_early = False
+                if total_lines > 0:
+                    stopped_early = curves_completed < total_lines * 0.9
+                else:
+                    # Without verbose mode, assume < 300 curves is suspicious
+                    stopped_early = curves_completed < 300
+
+                if stopped_early:
+                    if total_lines > 0:
+                        self.logger.warning(f"Worker {worker_id} stopped early at {curves_completed}/{total_lines} curves")
+                    else:
+                        self.logger.warning(f"Worker {worker_id} stopped early at {curves_completed} curves (expected ~384)")
+                    self.logger.debug(f"Worker {worker_id} output preview (first 500 chars):\n{full_output[:500]}")
+                    self.logger.debug(f"Worker {worker_id} output preview (last 500 chars):\n{full_output[-500:]}")
+
                 return None
 
             except Exception as e:
@@ -1719,11 +1789,21 @@ def main():
             method=args.method
         )
     elif args.two_stage and args.method == 'ecm':
+        # Parse sigma if provided (convert "N" to integer, keep "3:N" as string)
+        sigma = None
+        if hasattr(args, 'sigma') and args.sigma:
+            sigma = args.sigma if ':' in args.sigma else int(args.sigma)
+
+        # Get param if provided, default to 3 for GPU
+        param = args.param if hasattr(args, 'param') and args.param is not None else (3 if use_gpu else None)
+
         results = wrapper.run_ecm_two_stage(
             composite=args.composite,
             b1=b1,
             b2=b2,
             curves=curves,
+            sigma=sigma,
+            param=param,
             use_gpu=use_gpu,
             stage2_workers=stage2_workers,
             verbose=args.verbose,
@@ -1739,11 +1819,21 @@ def main():
         if args.two_stage:
             print("Warning: Two-stage mode only available for ECM method, falling back to standard mode")
 
+        # Parse sigma if provided (convert "N" to integer, keep "3:N" as string)
+        sigma = None
+        if hasattr(args, 'sigma') and args.sigma:
+            sigma = args.sigma if ':' in args.sigma else int(args.sigma)
+
+        # Get param if provided, default to 3 for GPU
+        param = args.param if hasattr(args, 'param') and args.param is not None else (3 if use_gpu else None)
+
         results = wrapper.run_ecm(
             composite=args.composite,
             b1=b1,
             b2=b2,
             curves=curves,
+            sigma=sigma,
+            param=param,
             use_gpu=use_gpu,
             gpu_device=gpu_device,
             gpu_curves=gpu_curves,

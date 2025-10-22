@@ -57,9 +57,9 @@
                 {% set comp = db.query(Composite).filter(Composite.id == attempt.composite_id).first() %}
                 {% set comp_display = (comp.number[:30] + '...') if (comp and comp.number|length > 30) else (comp.number if comp else 'Unknown') %}
                 {% set t_data = calc_t_progress(comp.current_t_level, comp.target_t_level) if comp else None %}
-                {% set comp_int = comp.current_composite|int if comp and comp.current_composite else 0 %}
-                {% set comp_bits = comp_int.bit_length() if comp_int > 0 else 0 %}
                 {% set comp_digits = comp.current_composite|length if comp and comp.current_composite else 0 %}
+                {# Approximate bits from digits: bits ≈ digits × log2(10) ≈ digits × 3.322 #}
+                {% set comp_bits = (comp_digits * 3.322)|int if comp_digits > 0 else 0 %}
                 <tr>
                     <td class="number">
                         {% if comp %}
@@ -129,9 +129,9 @@
                 {% set comp_display = (comp.number[:40] + '...') if (comp and comp.number|length > 40) else (comp.number if comp else 'Unknown') %}
                 {% set method = attempt.method if attempt else 'Unknown' %}
                 {% set param = attempt.parametrization if attempt and attempt.parametrization is not none else '' %}
-                {% set factor_int = factor.factor|int %}
-                {% set factor_bits = factor_int.bit_length() %}
                 {% set factor_digits = factor.factor|length %}
+                {# Approximate bits from digits: bits ≈ digits × log2(10) ≈ digits × 3.322 #}
+                {% set factor_bits = (factor_digits * 3.322)|int if factor_digits > 0 else 0 %}
                 <tr>
                     <td class="factor number">{{ factor.factor }}</td>
                     <td>{{ factor_bits }}</td>

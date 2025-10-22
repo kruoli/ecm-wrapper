@@ -31,6 +31,10 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     parser.add_argument('--gpu-device', type=int, help='GPU device number to use')
     parser.add_argument('--gpu-curves', type=int, help='Number of curves to compute in parallel on GPU')
 
+    # Sigma and parametrization for reproducibility
+    parser.add_argument('--sigma', type=str, help='Specific sigma value to use (format: "N" or "3:N")')
+    parser.add_argument('--param', type=int, choices=[0, 1, 2, 3], help='ECM parametrization (0=auto, 1=Montgomery, 2=Weierstrass, 3=Twisted Edwards/GPU)')
+
     # Method and verbosity
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose ECM output')
     parser.add_argument('--progress-interval', type=int, default=0,

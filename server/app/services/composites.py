@@ -256,13 +256,14 @@ class CompositeService:
         for work in active_work:
             work.status = 'cancelled'
 
-        # Delete related records
-        attempts_deleted = db.query(ECMAttempt).filter(
-            ECMAttempt.composite_id == composite_id
-        ).delete()
-
+        # Delete related records in correct order (respecting foreign key constraints)
+        # Factors reference attempts via found_by_attempt_id, so delete factors first
         factors_deleted = db.query(Factor).filter(
             Factor.composite_id == composite_id
+        ).delete()
+
+        attempts_deleted = db.query(ECMAttempt).filter(
+            ECMAttempt.composite_id == composite_id
         ).delete()
 
         work_deleted = db.query(WorkAssignment).filter(

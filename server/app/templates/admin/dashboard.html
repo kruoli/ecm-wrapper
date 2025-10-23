@@ -292,7 +292,7 @@
                 <tr>
                     <td class="number">
                         {% if comp %}
-                        <a href="/api/v1/admin/composites/{{ comp.id }}/details" style="color: inherit; text-decoration: none;">
+                        <a href="javascript:void(0)" onclick="viewDetails({{ comp.id }})" style="color: inherit; text-decoration: none; cursor: pointer;">
                             {{ comp_display }}
                         </a>
                         {% else %}

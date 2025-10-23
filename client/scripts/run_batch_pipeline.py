@@ -85,10 +85,6 @@ def gpu_worker(wrapper: ECMWrapper, numbers: list, b1: int, curves: int,
             # Run stage 1
             stage1_start = time.time()
 
-            # TEMPORARY: Hardcoded for testing specific curve
-            test_sigma = 4054176251
-            test_param = 3
-
             stage1_success, stage1_factor, actual_curves, stage1_output, all_factors = wrapper._run_stage1(
                 composite=number,
                 b1=b1,
@@ -97,9 +93,7 @@ def gpu_worker(wrapper: ECMWrapper, numbers: list, b1: int, curves: int,
                 use_gpu=use_gpu,
                 verbose=verbose,
                 gpu_device=gpu_device,
-                gpu_curves=gpu_curves,
-                sigma=test_sigma,
-                param=test_param
+                gpu_curves=gpu_curves
             )
             stage1_time = time.time() - stage1_start
 

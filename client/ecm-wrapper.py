@@ -634,6 +634,7 @@ class ECMWrapper(BaseWrapper):
 
         def worker_stage2(chunk_file: Path, worker_id: int) -> Optional[tuple[str, str]]:
             """Worker function for Stage 2 processing"""
+            nonlocal factor_found  # Declare at top of function for both streaming and non-streaming paths
             ecm_path = self.config['programs']['gmp_ecm']['path']
 
             cmd = [ecm_path, '-resume', str(chunk_file)]
@@ -716,6 +717,30 @@ class ECMWrapper(BaseWrapper):
                         self.logger.debug(f"Worker {worker_id} output saved to: {output_file}")
                     except Exception as e:
                         self.logger.warning(f"Failed to save worker {worker_id} output: {e}")
+
+                    # Check for factor in streaming path
+                    # Count curves and enable debug if stopped early
+                    curves_completed = full_output.count("Step 2 took")
+                    if total_lines > 0:
+                        enable_debug = curves_completed < total_lines * 0.9
+                    else:
+                        enable_debug = curves_completed < 300
+
+                    factor, sigma_from_output = parse_ecm_output(full_output, debug=enable_debug)
+                    if factor:
+                        with factor_lock:
+                            if not factor_found:  # First factor wins
+                                factor_found = (factor, sigma_from_output)
+                                if early_termination:
+                                    stop_event.set()  # Signal other workers to stop
+                                self.logger.info(f"Worker {worker_id} found factor: {factor} (sigma: {sigma_from_output})")
+                                # Kill other processes if early termination enabled
+                                if early_termination:
+                                    with process_lock:
+                                        for p in running_processes:
+                                            if p != process and p.poll() is None:
+                                                p.terminate()
+                        return (factor, sigma_from_output)
                 else:
                     # Original behavior - get all output at once
                     stdout, stderr = process.communicate()
@@ -759,7 +784,6 @@ class ECMWrapper(BaseWrapper):
                     factor, sigma_from_output = parse_ecm_output(full_output, debug=enable_debug)
                     if factor:
                         with factor_lock:
-                            nonlocal factor_found
                             if not factor_found:  # First factor wins
                                 factor_found = (factor, sigma_from_output)
                                 if early_termination:

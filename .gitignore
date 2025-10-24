@@ -53,6 +53,18 @@ client/data/
 client/factors_found.txt
 client/ecm_client.log
 
+# YAFU temporary files
+client/factor.json
+client/factor.log
+client/session.log
+client/siqs.dat
+client/nfs*
+factor.json
+factor.log
+session.log
+siqs.dat
+nfs*
+
 # Temporary files
 *.tmp
 *.temp

@@ -37,6 +37,15 @@ sys.modules["ecm_wrapper"] = ecm_module
 spec.loader.exec_module(ecm_module)
 ECMWrapper = ecm_module.ECMWrapper
 
+# Import yafu-wrapper.py
+spec = importlib.util.spec_from_file_location("yafu_wrapper", "yafu-wrapper.py")
+if spec is None or spec.loader is None:
+    raise ImportError("Failed to load yafu-wrapper.py")
+yafu_module = importlib.util.module_from_spec(spec)
+sys.modules["yafu_wrapper"] = yafu_module
+spec.loader.exec_module(yafu_module)
+YAFUWrapper = yafu_module.YAFUWrapper
+
 
 class AliquotSequence:
     """Represents an aliquot sequence with tracking and cycle detection."""
@@ -84,25 +93,31 @@ class AliquotSequence:
 class AliquotWrapper(BaseWrapper):
     """Wrapper for computing aliquot sequences using CADO-NFS and ECM."""
 
-    def __init__(self, config_path: str, factorizer: str = 'cado', hybrid_threshold: int = 100, threads: Optional[int] = None, verbose: bool = False):
+    def __init__(self, config_path: str, factorizer: str = 'cado', hybrid_threshold: int = 100,
+                 siqs_threshold: int = 100, ecm_program: str = 'gmp-ecm', threads: Optional[int] = None, verbose: bool = False):
         """Initialize aliquot wrapper with specified factorization engine.
 
         Args:
             config_path: Path to configuration file
             factorizer: Either 'cado' or 'hybrid' (default: 'cado')
             hybrid_threshold: Digit length threshold for switching to ECM+CADO (default: 100)
+            siqs_threshold: Digit length threshold for using YAFU SIQS instead of CADO (default: 100)
+            ecm_program: ECM program to use: 'gmp-ecm' or 'yafu' (default: 'gmp-ecm')
             threads: Optional thread/worker count for parallel execution
             verbose: Enable verbose output from factorization programs
         """
         super().__init__(config_path)
         self.factorizer_name = factorizer
         self.hybrid_threshold = hybrid_threshold
+        self.siqs_threshold = siqs_threshold
+        self.ecm_program = ecm_program
         self.threads = threads
         self.verbose = verbose
 
         # Initialize factorizers
         self.cado = CADOWrapper(config_path)
         self.ecm = ECMWrapper(config_path)
+        self.yafu = YAFUWrapper(config_path)
 
         # Set primary factorizer
         if factorizer == 'hybrid':
@@ -236,23 +251,22 @@ class AliquotWrapper(BaseWrapper):
 
     def _factor_hybrid(self, n: int, digit_length: int) -> Tuple[bool, Dict[int, int], Dict]:
         """
-        Hybrid factorization: Trial division + Progressive ECM + CADO-NFS.
+        Hybrid factorization: Trial division + ECM + SIQS/CADO-NFS.
 
         Strategy:
         1. Trial division up to 10^7 (very fast, catches small factors)
-        2. Progressive ECM using run_ecm_with_tlevel:
-           - Target: 4/13 * digit_length (e.g., t30 for 98-digit number)
-           - Starts at t20, increments by 5 digits: t20 → t25 → t30 → t35 ...
-           - Uses Zimmermann's optimal B1 and curve counts at each level
-           - Automatically handles factors and cofactor reduction
-        3. CADO-NFS only for remaining cofactor after ECM completes
+        2. ECM (configurable via ecm_program):
+           - GMP-ECM: Progressive approach with t-level targeting 4/13 of digit length
+           - YAFU: Intelligent pretesting with -pretest flag
+        3. Final factorization based on cofactor size (configurable via siqs_threshold):
+           - YAFU SIQS for cofactors < siqs_threshold digits (default: 100)
+           - CADO-NFS for larger cofactors >= siqs_threshold digits
 
-        This progressive approach finds cheap factors first before investing
-        compute in higher B1 values, optimizing for aliquot factorization.
+        This approach optimizes factorization by using the best tool for each size range.
 
         Args:
             n: Number to factor
-            digit_length: Number of digits in n
+            digit_length: Number of digits in n (unused, kept for compatibility)
 
         Returns:
             Tuple of (success, factorization_dict, raw_results)
@@ -283,41 +297,68 @@ class AliquotWrapper(BaseWrapper):
             return True, factorization, {'success': True, 'method': 'trial_division+primality_test'}
 
         # Step 1: Progressive ECM (ALWAYS attempt ECM, regardless of size)
-        # Use ECM's run_ecm_with_tlevel which handles progressive approach automatically
         cofactor_digits = len(str(current_composite))
-        target_t_level = (4.0 / 13.0) * cofactor_digits  # Target: 4/13 of digit length
 
-        self.logger.info(f"Running progressive ECM to t{target_t_level:.1f} on C{cofactor_digits}")
+        if self.ecm_program == 'yafu':
+            # Use YAFU for ECM with intelligent pretesting
+            self.logger.info(f"Running YAFU ECM pretest on C{cofactor_digits}")
 
-        ecm_results = self.ecm.run_ecm_with_tlevel(
-            composite=str(current_composite),
-            target_tlevel=target_t_level,
-            workers=self.threads if self.threads else 1,
-            verbose=self.verbose
-        )
+            ecm_results = self.yafu.run_yafu_ecm(
+                composite=str(current_composite),
+                b1=None,  # Use -pretest (no explicit B1)
+                method='ecm',
+                verbose=self.verbose
+            )
 
-        # Collect ECM factors (all are guaranteed to be prime)
-        ecm_factors = ecm_results.get('factors_found', [])
-        if ecm_factors:
-            self.logger.info(f"Progressive ECM found {len(ecm_factors)} prime factor(s)")
-            all_factors.extend(ecm_factors)
+            # Collect YAFU ECM factors
+            ecm_factors = ecm_results.get('factors_found', [])
+            if ecm_factors:
+                self.logger.info(f"YAFU ECM found {len(ecm_factors)} factor(s)")
+                all_factors.extend(ecm_factors)
 
-            # Get final cofactor from ECM results
-            final_cofactor = ecm_results.get('final_cofactor')
-            if final_cofactor:
-                current_composite = int(final_cofactor)
-                self.logger.info(f"Cofactor after ECM: C{len(str(current_composite))}")
-            else:
-                # Fully factored
-                current_composite = 1
+                # Calculate cofactor by dividing out found factors
+                for factor_str in ecm_factors:
+                    current_composite //= int(factor_str)
+
+                if current_composite > 1:
+                    self.logger.info(f"Cofactor after YAFU ECM: C{len(str(current_composite))}")
+                else:
+                    current_composite = 1
+        else:
+            # Use GMP-ECM's progressive approach with t-level
+            target_t_level = (4.0 / 13.0) * cofactor_digits  # Target: 4/13 of digit length
+
+            self.logger.info(f"Running progressive GMP-ECM to t{target_t_level:.1f} on C{cofactor_digits}")
+
+            ecm_results = self.ecm.run_ecm_with_tlevel(
+                composite=str(current_composite),
+                target_tlevel=target_t_level,
+                workers=self.threads if self.threads else 1,
+                verbose=self.verbose
+            )
+
+            # Collect ECM factors (all are guaranteed to be prime)
+            ecm_factors = ecm_results.get('factors_found', [])
+            if ecm_factors:
+                self.logger.info(f"Progressive GMP-ECM found {len(ecm_factors)} prime factor(s)")
+                all_factors.extend(ecm_factors)
+
+                # Get final cofactor from ECM results
+                final_cofactor = ecm_results.get('final_cofactor')
+                if final_cofactor:
+                    current_composite = int(final_cofactor)
+                    self.logger.info(f"Cofactor after GMP-ECM: C{len(str(current_composite))}")
+                else:
+                    # Fully factored
+                    current_composite = 1
 
         # Check if fully factored
         if current_composite == 1:
-            self.logger.info("Fully factored by progressive ECM")
+            self.logger.info(f"Fully factored by {'YAFU' if self.ecm_program == 'yafu' else 'GMP'} ECM")
             factorization = self.parse_factorization(all_factors)
             return True, factorization, ecm_results
 
-        # Check if cofactor is prime before using CADO-NFS
+        # Check if cofactor is prime before continuing
         cofactor_digits = len(str(current_composite))
         if self.ecm._is_probably_prime(current_composite):
             self.logger.info(f"Cofactor C{cofactor_digits} is prime, factorization complete")
@@ -325,21 +366,47 @@ class AliquotWrapper(BaseWrapper):
             factorization = self.parse_factorization(all_factors)
             return True, factorization, ecm_results
 
-        # Use CADO-NFS for remaining cofactor
-        self.logger.info(f"Cofactor is {cofactor_digits} digits (composite), using CADO-NFS")
-        cado_results = self.cado.run_cado_nfs(composite=str(current_composite), threads=self.threads, verbose=self.verbose)
+        # Choose between YAFU SIQS and CADO-NFS based on cofactor size
+        if cofactor_digits < self.siqs_threshold:
+            # Use YAFU SIQS for smaller cofactors
+            self.logger.info(f"Cofactor is {cofactor_digits} digits (composite), using YAFU SIQS")
+            siqs_results = self.yafu.run_yafu_auto(
+                composite=str(current_composite),
+                method='siqs',
+                verbose=self.verbose
+            )
 
-        # Check if CADO succeeded
-        if not cado_results.get('success', False):
-            self.logger.error(f"CADO-NFS failed to factor C{cofactor_digits}")
-            return False, {}, cado_results
+            # Check if SIQS succeeded
+            if not siqs_results.get('success', False):
+                self.logger.error(f"YAFU SIQS failed to factor C{cofactor_digits}")
+                return False, {}, siqs_results
 
-        cado_factors = cado_results.get('factors_found', [])
-        if cado_factors:
-            all_factors.extend(cado_factors)
+            siqs_factors = siqs_results.get('factors_found', [])
+            if siqs_factors:
+                all_factors.extend(siqs_factors)
+            else:
+                self.logger.error("YAFU SIQS succeeded but found no factors")
+                return False, {}, siqs_results
+
+            final_results = siqs_results
         else:
-            self.logger.error("CADO-NFS succeeded but found no factors")
-            return False, {}, cado_results
+            # Use CADO-NFS for larger cofactors
+            self.logger.info(f"Cofactor is {cofactor_digits} digits (composite), using CADO-NFS")
+            cado_results = self.cado.run_cado_nfs(composite=str(current_composite), threads=self.threads, verbose=self.verbose)
+
+            # Check if CADO succeeded
+            if not cado_results.get('success', False):
+                self.logger.error(f"CADO-NFS failed to factor C{cofactor_digits}")
+                return False, {}, cado_results
+
+            cado_factors = cado_results.get('factors_found', [])
+            if cado_factors:
+                all_factors.extend(cado_factors)
+            else:
+                self.logger.error("CADO-NFS succeeded but found no factors")
+                return False, {}, cado_results
+
+            final_results = cado_results
 
         factorization = self.parse_factorization(all_factors)
         self.logger.info(f"Final factorization: {self.format_factorization(factorization)}")
@@ -351,9 +418,9 @@ class AliquotWrapper(BaseWrapper):
 
         if product != n:
             self.logger.error(f"Factorization verification failed: {product} != {n}")
-            return False, {}, ecm_results
+            return False, {}, final_results
 
-        return True, factorization, ecm_results
+        return True, factorization, final_results
 
     def format_factorization(self, factorization: Dict[int, int]) -> str:
         """Format factorization as string like '2^3 × 3 × 23'."""
@@ -553,7 +620,7 @@ class AliquotWrapper(BaseWrapper):
 
             # Parse existing factors from FactorDB
             # Response format: {"id": "...", "status": "C"/"CF"/"FF", "factors": [["prime", exp], ...]}
-            existing_factors = {}
+            existing_factors: Dict[int, int] = {}
             if 'factors' in fdb_data and fdb_data['factors']:
                 for factor_pair in fdb_data['factors']:
                     prime = int(factor_pair[0])
@@ -751,6 +818,12 @@ Examples:
   # Use hybrid mode (ECM + CADO-NFS) for large numbers
   python3 aliquot-wrapper.py --start 276 --factorizer hybrid
 
+  # Use YAFU for ECM pretesting (faster than GMP-ECM)
+  python3 aliquot-wrapper.py --start 276 --ecm-program yafu
+
+  # Use YAFU SIQS for numbers < 100 digits (default)
+  python3 aliquot-wrapper.py --start 276 --siqs-threshold 100
+
   # Calculate with more iterations
   python3 aliquot-wrapper.py --start 1248 --max-iterations 50
 
@@ -797,6 +870,10 @@ Common test sequences:
                        help='Factorization strategy: cado (pure CADO-NFS) or hybrid (default: hybrid - uses ECM+CADO for large numbers)')
     parser.add_argument('--hybrid-threshold', type=int, default=100,
                        help='Digit length threshold for hybrid ECM+CADO strategy (default: 100)')
+    parser.add_argument('--siqs-threshold', type=int, default=100,
+                       help='Digit length threshold for using YAFU SIQS instead of CADO-NFS (default: 100)')
+    parser.add_argument('--ecm-program', type=str, choices=['gmp-ecm', 'yafu'], default='gmp-ecm',
+                       help='ECM program: gmp-ecm (progressive t-level) or yafu (intelligent pretest) (default: gmp-ecm)')
     parser.add_argument('--resume-factordb', action='store_true',
                        help='Resume from last known term in FactorDB')
     parser.add_argument('--resume-iteration', type=int,
@@ -811,13 +888,16 @@ Common test sequences:
     args = parser.parse_args()
 
     # Initialize wrapper with selected factorizer
-    wrapper = AliquotWrapper(args.config, factorizer=args.factorizer, hybrid_threshold=args.hybrid_threshold, threads=args.threads, verbose=args.verbose)
+    wrapper = AliquotWrapper(args.config, factorizer=args.factorizer, hybrid_threshold=args.hybrid_threshold,
+                            siqs_threshold=args.siqs_threshold, ecm_program=args.ecm_program,
+                            threads=args.threads, verbose=args.verbose)
 
     # Override factor logging config if requested
     if args.quiet_factors:
         wrapper.config['logging']['log_factors_found'] = False
         wrapper.cado.config['logging']['log_factors_found'] = False
         wrapper.ecm.config['logging']['log_factors_found'] = False
+        wrapper.yafu.config['logging']['log_factors_found'] = False
 
     print(f"\nComputing aliquot sequence starting from {args.start}")
     print("="*80)

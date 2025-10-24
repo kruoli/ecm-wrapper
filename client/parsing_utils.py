@@ -87,8 +87,9 @@ class YAFUPatterns:
     # Factor section markers
     FACTOR_SECTION_START = re.compile(r'\*{3,}factors? found\*{3,}', re.IGNORECASE)
 
-    # Factor lines in auto mode: "C123 = 456..."
-    AUTO_FACTOR = re.compile(r'[PCQ]\d+\s*=\s*(\d+)')
+    # Factor lines in auto mode: "P15 = 856395168938929"
+    # Only match P (prime) factors, not C (composite) cofactors
+    AUTO_FACTOR = re.compile(r'P\d+\s*=\s*(\d+)')
 
     # Simple number lines (fallback)
     SIMPLE_NUMBER = re.compile(r'^\s*(\d+)\s*$')
@@ -231,28 +232,43 @@ def parse_ecm_output(output: str, debug: bool = False) -> Tuple[Optional[str], O
 
 def parse_yafu_ecm_output(output: str) -> List[Tuple[str, Optional[str]]]:
     """
-    Parse YAFU ECM output for factors and curves completed.
+    Parse YAFU ECM output for factors.
     Returns list of (factor, sigma) tuples.
+
+    Note: YAFU lists factors multiple times to indicate multiplicity (exponents).
+    We preserve duplicates as they represent the complete prime factorization.
+
+    Important: YAFU reports factors in TWO places:
+    1. During execution: "ecm: found prp15 factor = X"
+    2. Final summary: "***factors found***" section
+    We only parse the final summary to avoid duplicates.
     """
     lines = output.split('\n')
     factors: List[Tuple[str, Optional[str]]] = []
+    in_factor_section = False
 
     for line in lines:
-        # Look for factor findings - capture ALL factors including duplicates
-        match = YAFUPatterns.FACTOR_FOUND.search(line)
-        if match:
-            factor = match.group(1)
-            logger.debug(f"Found factor via FACTOR_FOUND pattern: {factor}")
-            factors.append((factor, None))  # YAFU doesn't report sigma
+        # Check for factor section start (same as auto mode)
+        if YAFUPatterns.FACTOR_SECTION_START.search(line):
+            logger.debug("Entered YAFU factor section")
+            in_factor_section = True
             continue
 
-        # Check P/Q format - capture ALL factors including duplicates
-        match = YAFUPatterns.PQ_NOTATION.search(line)
-        if match:
-            factor = match.group(1)
-            logger.debug(f"Found factor via PQ_NOTATION pattern: {factor}")
-            factors.append((factor, None))
-            continue
+        if in_factor_section:
+            # Parse factor lines - keep ALL occurrences (multiplicity)
+            match = YAFUPatterns.AUTO_FACTOR.search(line)
+            if match:
+                factor = match.group(1)
+                logger.debug(f"Found factor via AUTO_FACTOR pattern: {factor}")
+                factors.append((factor, None))  # YAFU doesn't report sigma
+                continue
+
+            # Handle simple number lines - keep ALL occurrences (multiplicity)
+            match = YAFUPatterns.SIMPLE_NUMBER.search(line)
+            if match:
+                factor = match.group(1)
+                logger.debug(f"Found factor via SIMPLE_NUMBER pattern: {factor}")
+                factors.append((factor, None))
 
     if factors:
         logger.info(f"Parsed {len(factors)} factors from YAFU ECM output")
@@ -264,6 +280,9 @@ def parse_yafu_auto_factors(output: str) -> List[Tuple[str, Optional[str]]]:
     """
     Parse factors from YAFU automatic factorization.
     Returns list of (factor, sigma) tuples.
+
+    Note: YAFU lists factors multiple times to indicate multiplicity (exponents).
+    We preserve duplicates as they represent the complete prime factorization.
     """
     lines = output.split('\n')
     in_factor_section = False
@@ -277,7 +296,7 @@ def parse_yafu_auto_factors(output: str) -> List[Tuple[str, Optional[str]]]:
             continue
 
         if in_factor_section:
-            # Parse factor lines - capture ALL factors including duplicates
+            # Parse factor lines - keep ALL occurrences (multiplicity)
             match = YAFUPatterns.AUTO_FACTOR.search(line)
             if match:
                 factor = match.group(1)
@@ -285,7 +304,7 @@ def parse_yafu_auto_factors(output: str) -> List[Tuple[str, Optional[str]]]:
                 factors.append((factor, None))
                 continue
 
-            # Handle simple number lines
+            # Handle simple number lines - keep ALL occurrences (multiplicity)
             match = YAFUPatterns.SIMPLE_NUMBER.search(line)
             if match:
                 factor = match.group(1)

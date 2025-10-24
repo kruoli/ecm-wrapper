@@ -46,7 +46,7 @@ class CompositeService:
         db: Session,
         number: str,
         current_composite: Optional[str] = None,
-        has_snfs_form: bool = False,
+        has_snfs_form: Optional[bool] = None,
         snfs_difficulty: Optional[int] = None,
         is_prime: Optional[bool] = None,
         is_fully_factored: Optional[bool] = None,
@@ -93,7 +93,7 @@ class CompositeService:
                 existing.digit_length = calculate_digit_length(current_composite)
                 updated = True
 
-            if existing.has_snfs_form != has_snfs_form:
+            if has_snfs_form is not None and existing.has_snfs_form != has_snfs_form:
                 existing.has_snfs_form = has_snfs_form
                 updated = True
 
@@ -139,7 +139,7 @@ class CompositeService:
             number=number,
             current_composite=current_composite,
             digit_length=digit_length,
-            has_snfs_form=has_snfs_form,
+            has_snfs_form=has_snfs_form if has_snfs_form is not None else False,
             snfs_difficulty=snfs_difficulty,
             is_prime=is_prime if is_prime is not None else False,
             is_fully_factored=is_fully_factored if is_fully_factored is not None else False,
@@ -530,7 +530,7 @@ class CompositeService:
                     composite, created, updated = self.get_or_create_composite(
                         db, number,
                         current_composite=item.get('current_composite'),
-                        has_snfs_form=item.get('has_snfs_form', False),
+                        has_snfs_form=item.get('has_snfs_form'),  # None if not provided
                         snfs_difficulty=item.get('snfs_difficulty'),
                         is_prime=item.get('is_prime'),
                         is_fully_factored=item.get('is_fully_factored'),

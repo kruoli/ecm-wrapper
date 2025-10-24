@@ -46,7 +46,6 @@ programs:
 
   yafu:
     path: yafu  # Will use system PATH
-    default_b1: 50000
     threads: 8
 
   cado_nfs:

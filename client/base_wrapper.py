@@ -282,6 +282,7 @@ class BaseWrapper:
         """
         start_time = time.time()
         results = self.create_base_results(composite, method, **kwargs)
+        verbose = kwargs.get('verbose', False)
 
         try:
             self.logger.info(f"Running {method.upper()} on {len(composite)}-digit number with {' '.join(cmd[1:3])}")
@@ -296,14 +297,31 @@ class BaseWrapper:
                 stdin=stdin_mode,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True
+                text=True,
+                bufsize=1  # Line buffered
             )
 
-            # Send input and get output (only if input is specified)
-            if program_input:
-                stdout, _ = process.communicate(input=program_input, timeout=timeout)
+            # Handle output - stream if verbose, otherwise just capture
+            if verbose:
+                # Stream output in real-time while capturing
+                stdout_lines = []
+                if program_input:
+                    process.stdin.write(program_input)
+                    process.stdin.close()
+
+                for line in iter(process.stdout.readline, ''):
+                    print(line, end='')  # Stream to console
+                    stdout_lines.append(line)
+
+                process.wait(timeout=timeout)
+                stdout = ''.join(stdout_lines)
             else:
-                stdout, _ = process.communicate(timeout=timeout)
+                # Capture all output at once
+                if program_input:
+                    stdout, _ = process.communicate(input=program_input, timeout=timeout)
+                else:
+                    stdout, _ = process.communicate(timeout=timeout)
+
             results['raw_output'] = stdout
 
             # Parse for factors using provided function

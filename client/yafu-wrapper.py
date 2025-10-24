@@ -10,6 +10,46 @@ class YAFUWrapper(BaseWrapper):
         """Initialize YAFU wrapper with shared base functionality"""
         super().__init__(config_path)
 
+    def cleanup_yafu_files(self) -> List[str]:
+        """
+        Clean up temporary files created by YAFU.
+
+        YAFU creates several temporary files in the working directory:
+        - factor.json: Factor results
+        - factor.log: Factorization log
+        - session.log: Session log
+        - siqs.dat: SIQS sieving data
+        - nfs*: NFS working files
+
+        Returns:
+            List of files that were cleaned up
+        """
+        import glob
+        from pathlib import Path
+
+        yafu_temp_patterns = [
+            'factor.json',
+            'factor.log',
+            'session.log',
+            'siqs.dat',
+            'nfs*'  # NFS files
+        ]
+
+        cleaned_files = []
+        for pattern in yafu_temp_patterns:
+            for filepath in glob.glob(pattern):
+                try:
+                    Path(filepath).unlink()
+                    cleaned_files.append(filepath)
+                    self.logger.debug(f"Cleaned up YAFU temp file: {filepath}")
+                except Exception as e:
+                    self.logger.debug(f"Could not remove {filepath}: {e}")
+
+        if cleaned_files:
+            self.logger.debug(f"Cleaned up {len(cleaned_files)} YAFU temporary file(s)")
+
+        return cleaned_files
+
     def _add_yafu_threading(self, cmd: List[str], threads: Optional[int] = None) -> None:
         """Add threading parameter to YAFU command if configured.
 
@@ -22,7 +62,7 @@ class YAFUWrapper(BaseWrapper):
         elif 'threads' in self.config.get('programs', {}).get('yafu', {}):
             cmd.extend(['-threads', str(self.config['programs']['yafu']['threads'])])
 
-    def _build_yafu_ecm_cmd(self, method: str, b1: int, b2: Optional[int] = None,
+    def _build_yafu_ecm_cmd(self, method: str, b1: Optional[int] = None, b2: Optional[int] = None,
                            curves: int = 100, composite: str = "") -> List[str]:
         """Build YAFU command for ECM/P-1/P+1 methods.
 
@@ -37,18 +77,26 @@ class YAFUWrapper(BaseWrapper):
 
         # Add method-specific parameters
         if method == "pm1":
-            cmd.extend(['-B1pm1', str(b1)])
+            if b1:
+                cmd.extend(['-B1pm1', str(b1)])
             if b2:
                 cmd.extend(['-B2pm1', str(b2)])
         elif method == "pp1":
-            cmd.extend(['-B1pp1', str(b1)])
+            if b1:
+                cmd.extend(['-B1pp1', str(b1)])
             if b2:
                 cmd.extend(['-B2pp1', str(b2)])
         else:  # ecm
-            cmd.extend(['-B1ecm', str(b1)])
-            if b2:
-                cmd.extend(['-B2ecm', str(b2)])
-            cmd.extend(['-curves', str(curves)])
+            # For ECM: use -pretest for intelligent pretesting if no B1 specified
+            # Otherwise use explicit -B1ecm/-B2ecm for manual control
+            if b1:
+                cmd.extend(['-B1ecm', str(b1)])
+                if b2:
+                    cmd.extend(['-B2ecm', str(b2)])
+            else:
+                # Use YAFU's intelligent pretesting (no value - just the flag)
+                cmd.append('-pretest')
+            # Note: YAFU doesn't have a -curves option; it runs curves automatically
 
         return cmd
 
@@ -74,19 +122,21 @@ class YAFUWrapper(BaseWrapper):
         yafu_path = self.config['programs']['yafu']['path']
 
         # YAFU expects expression as first positional argument
-        auto_input = f'factor({composite})'
-        cmd = [yafu_path, auto_input]
+        # For specific methods like SIQS/NFS, use direct function calls
+        if method in ['siqs', 'nfs']:
+            auto_input = f'{method}({composite})'
+        else:
+            # For 'auto' or other methods, use factor()
+            auto_input = f'factor({composite})'
 
-        if method:
-            # Force specific method: -method siqs, -method nfs, etc
-            cmd.extend(['-method', method])
+        cmd = [yafu_path, auto_input]
 
         self._add_yafu_threading(cmd, threads)
 
         return cmd
 
-    def run_yafu_ecm(self, composite: str, b1: int, b2: Optional[int] = None,
-                     curves: int = 100, method: str = "ecm") -> Dict[str, Any]:
+    def run_yafu_ecm(self, composite: str, b1: Optional[int] = None, b2: Optional[int] = None,
+                     curves: int = 100, method: str = "ecm", verbose: bool = False) -> Dict[str, Any]:
         """Run YAFU in ECM/P-1/P+1 mode using unified base infrastructure."""
         # Build command with expression as first positional argument
         cmd = self._build_yafu_ecm_cmd(method, b1, b2, curves, composite)
@@ -102,7 +152,8 @@ class YAFUWrapper(BaseWrapper):
             curves=curves,
             b1=b1,
             b2=b2,
-            track_curves=True  # Enable curves tracking for YAFU
+            track_curves=True,  # Enable curves tracking for YAFU
+            verbose=verbose  # Pass verbose flag through
         )
 
         # Store command for debugging
@@ -117,15 +168,19 @@ class YAFUWrapper(BaseWrapper):
         if self.config['execution']['save_raw_output']:
             self.save_raw_output(results, f'yafu-{method}')
 
+        # Clean up YAFU temporary files
+        self.cleanup_yafu_files()
+
         return results
 
-    def run_yafu_auto(self, composite: str, method: Optional[str] = None, threads: Optional[int] = None) -> Dict[str, Any]:
+    def run_yafu_auto(self, composite: str, method: Optional[str] = None, threads: Optional[int] = None, verbose: bool = False) -> Dict[str, Any]:
         """Run YAFU in automatic factorization mode using unified base infrastructure.
 
         Args:
             composite: Number to factor
             method: Optional method to force (siqs, nfs, etc.)
             threads: Optional thread count override
+            verbose: Enable verbose output streaming
 
         Returns:
             Results dictionary
@@ -139,7 +194,8 @@ class YAFUWrapper(BaseWrapper):
             timeout=Timeouts.YAFU_AUTO,
             composite=composite,
             method=method or 'auto',
-            parse_function=parse_yafu_auto_factors
+            parse_function=parse_yafu_auto_factors,
+            verbose=verbose  # Pass verbose flag through
         )
 
         # Store command for debugging
@@ -154,6 +210,9 @@ class YAFUWrapper(BaseWrapper):
         # Save raw output if configured
         if self.config['execution']['save_raw_output']:
             self.save_raw_output(results, f'yafu-{method or "auto"}')
+
+        # Clean up YAFU temporary files
+        self.cleanup_yafu_files()
 
         return results
 
@@ -190,20 +249,27 @@ def main():
 
     if args.mode in ['ecm', 'pm1', 'pp1']:
         # Use ECM/P-1/P+1 mode
-        b1 = args.b1 or 50000  # Default B1 if not specified
+        # For ECM: if no B1 specified, YAFU will use intelligent pretesting
+        # For P-1/P+1: require explicit B1 (default 50000 if not specified)
+        b1 = args.b1
+        if not b1 and args.mode != 'ecm':
+            b1 = 50000  # Default B1 for P-1/P+1
+
         results = wrapper.run_yafu_ecm(
             composite=args.composite,
             b1=b1,
             b2=args.b2,
             curves=args.curves,
-            method=args.mode
+            method=args.mode,
+            verbose=args.verbose
         )
     else:
         # Use automatic or specific method
         method = None if args.mode == 'auto' else args.mode
         results = wrapper.run_yafu_auto(
             composite=args.composite,
-            method=method
+            method=method,
+            verbose=args.verbose
         )
 
     # Print results summary
@@ -222,8 +288,8 @@ def main():
         print("\n✗ No factors found")
     print(f"{'='*80}")
 
-    # Debug: print raw output if verbose or no factors
-    if not results.get('factors_found') or (hasattr(args, 'verbose') and args.verbose):
+    # Debug: print raw output if no factors found (unless already streamed with -v)
+    if not results.get('factors_found') and not args.verbose:
         print("\n=== RAW YAFU OUTPUT ===")
         print(results.get('raw_output', '(no output)'))
         print("=== END ===\n")

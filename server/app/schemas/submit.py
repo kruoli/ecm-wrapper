@@ -10,8 +10,13 @@ class ParametersSchema(BaseModel):
     sigma: Optional[str] = Field(None, description="ECM curve parameter (can include parametrization like '3:12345' or just '12345')")
     a: Optional[int] = Field(None, description="PP1 base parameter")
 
+class FactorWithSigma(BaseModel):
+    factor: str = Field(..., description="The factor value")
+    sigma: Optional[str] = Field(None, description="Sigma value that found this factor (ECM only)")
+
 class ResultsSchema(BaseModel):
-    factor_found: Optional[str] = Field(None, description="Factor found (if any)")
+    factor_found: Optional[str] = Field(None, description="Factor found (if any) - DEPRECATED: use factors_found for multiple factors")
+    factors_found: Optional[List[FactorWithSigma]] = Field(None, description="List of factors found with their sigmas (preferred over factor_found)")
     curves_completed: int = Field(..., description="Actual curves completed")
     execution_time: Optional[float] = Field(None, description="Execution time in seconds")
 

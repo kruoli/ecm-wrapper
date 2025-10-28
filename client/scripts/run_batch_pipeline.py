@@ -7,6 +7,10 @@ Runs GPU stage 1 and CPU stage 2 concurrently in a pipeline architecture:
 - CPU thread: Processes stage 2 for number N-1 from residue queue
 
 This maximizes hardware utilization by keeping both GPU and CPU busy.
+
+Architecture:
+- Uses Stage2Executor (via wrapper._run_stage2_multithread) for multi-threaded stage 2
+- Uses ResultProcessor for consistent factor handling and logging
 """
 
 import sys
@@ -21,13 +25,16 @@ from typing import Optional
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Import wrapper using importlib to handle hyphenated module name
+# Import wrapper and utilities using importlib to handle hyphenated module name
 import importlib.util
 spec = importlib.util.spec_from_file_location("ecm_wrapper",
     str(Path(__file__).parent.parent / "ecm-wrapper.py"))
 ecm_wrapper_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ecm_wrapper_module)
 ECMWrapper = ecm_wrapper_module.ECMWrapper
+
+# Import ResultProcessor for factor handling
+from result_processor import ResultProcessor
 
 
 class PipelineStats:
@@ -238,11 +245,11 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
                     'raw_output': stage1_output  # Include actual stage 1 output
                 }
 
-                # Handle factors found in stage 1 using wrapper's method
+                # Handle factors found using ResultProcessor for consistency
                 if all_factors:
-                    wrapper._log_and_store_factors(
-                        all_factors, results, number, b1_actual, actual_b2, curves, "ecm", "GMP-ECM (ECM)"
-                    )
+                    # Use ResultProcessor for factor handling (eliminates duplication)
+                    processor = ResultProcessor(wrapper, number, "ecm", b1_actual, actual_b2, curves, "GMP-ECM (ECM)")
+                    processor.log_and_store_factors(all_factors, results, quiet=False)
                 elif stage2_factor:
                     # Handle stage 2 factor
                     results['factor_found'] = stage2_factor

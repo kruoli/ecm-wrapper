@@ -83,11 +83,23 @@ class APIClient:
 
             except requests.exceptions.RequestException as e:
                 error_details = ""
+                response_text = ""
                 if hasattr(e, 'response') and e.response is not None:
                     try:
-                        error_details = f" - Response: {e.response.text}"
+                        response_text = e.response.text
+                        error_details = f" - Response: {response_text}"
                     except:
                         pass
+
+                # Check if this is a schema validation error from old server
+                # If so, return 'schema_error' to signal fallback needed
+                if hasattr(e, 'response') and e.response is not None:
+                    if e.response.status_code == 422:  # Pydantic validation error
+                        self.logger.warning(
+                            f"Server rejected new schema (likely old server version), "
+                            f"will try legacy format if multiple factors present"
+                        )
+                        return 'schema_error'  # Special return value for fallback
 
                 self.logger.error(
                     f"API submission failed (attempt {attempt + 1}): {e}{error_details}"
@@ -180,12 +192,30 @@ class APIClient:
         Returns:
             Formatted API payload dictionary
         """
-        # Handle different result formats for factor_found
+        # Handle different result formats for factor_found (backward compatibility)
         factor_found = None
         if 'factor_found' in results:
             factor_found = results['factor_found']
         elif 'factors_found' in results and results['factors_found']:
             factor_found = results['factors_found'][0]  # Use first factor
+
+        # Build factors_found list if we have multiple factors
+        factors_found_list = None
+        if 'factors_found' in results and len(results['factors_found']) > 0:
+            factor_sigmas = results.get('factor_sigmas', {})
+            factors_found_list = []
+
+            self.logger.debug(f"Building factors_found list from {len(results['factors_found'])} factors")
+            self.logger.debug(f"factor_sigmas available: {list(factor_sigmas.keys()) if factor_sigmas else 'None'}")
+
+            for factor in results['factors_found']:
+                # Get sigma for this specific factor, or use main sigma
+                factor_sigma = factor_sigmas.get(factor, results.get('sigma'))
+                factors_found_list.append({
+                    'factor': factor,
+                    'sigma': str(factor_sigma) if factor_sigma is not None else None
+                })
+                self.logger.debug(f"  Added factor: {factor[:20]}... with sigma: {factor_sigma}")
 
         payload = {
             'composite': composite,
@@ -202,12 +232,18 @@ class APIClient:
                 'sigma': results.get('sigma')
             },
             'results': {
-                'factor_found': factor_found,
+                'factor_found': factor_found,  # Legacy field for backward compatibility
+                'factors_found': factors_found_list,  # New field for multiple factors
                 'curves_completed': results.get('curves_completed', 0),
                 'execution_time': results.get('execution_time', 0)
             },
             'raw_output': results.get('raw_output', '')
         }
+
+        # Debug logging for multi-factor submissions
+        if factors_found_list and len(factors_found_list) > 1:
+            self.logger.info(f"Built payload with {len(factors_found_list)} factors: {[f['factor'][:20] + '...' for f in factors_found_list]}")
+            self.logger.debug(f"DEBUG: Full factors_found_list structure: {factors_found_list}")
 
         return payload
 

@@ -28,14 +28,76 @@
             window.location.href = '/api/v1/admin/login';
         });
     }
+
+    function deleteComposite() {
+        const apiKey = sessionStorage.getItem('admin_api_key');
+        if (!apiKey) {
+            window.location.href = '/api/v1/admin/login';
+            return;
+        }
+
+        const compositeId = {{ composite.id }};
+        const compositeNumber = "{{ composite.number[:50] }}...";
+
+        if (!confirm(`Are you sure you want to delete composite ${compositeId}?\n\nNumber: ${compositeNumber}\n\nThis will permanently delete:\n- The composite record\n- All ECM attempts\n- All factors found\n- All work assignments\n\nThis action cannot be undone.`)) {
+            return;
+        }
+
+        // Show loading state
+        const deleteBtn = document.getElementById('delete-btn');
+        const originalText = deleteBtn.textContent;
+        deleteBtn.textContent = 'Deleting...';
+        deleteBtn.disabled = true;
+
+        fetch(`/api/v1/admin/composites/${compositeId}?reason=admin_manual_delete`, {
+            method: 'DELETE',
+            headers: {
+                'X-Admin-Key': apiKey
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Delete failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(result => {
+            alert(`Successfully deleted composite ${compositeId}\n\nDeleted:\n- ${result.deleted_attempts} attempts\n- ${result.deleted_factors} factors\n- ${result.deleted_work_assignments} work assignments`);
+            backToDashboard();
+        })
+        .catch(error => {
+            alert(`Failed to delete composite: ${error.message}`);
+            deleteBtn.textContent = originalText;
+            deleteBtn.disabled = false;
+        });
+    }
 </script>
+<style>
+    .btn-danger {
+        background-color: #dc3545;
+        color: white;
+        border: 1px solid #dc3545;
+    }
+    .btn-danger:hover {
+        background-color: #c82333;
+        border-color: #bd2130;
+    }
+    .header-actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+    }
+</style>
 {% endblock %}
 
 {% block body %}
 <div class="container">
     <div class="header">
         <h1>Composite Details</h1>
-        <p><button onclick="backToDashboard()" class="btn btn-secondary">← Back to Dashboard</button></p>
+        <div class="header-actions">
+            <button onclick="backToDashboard()" class="btn btn-secondary">← Back to Dashboard</button>
+            <button id="delete-btn" onclick="deleteComposite()" class="btn btn-danger">🗑️ Delete Composite</button>
+        </div>
     </div>
 
     <div class="card">
@@ -155,7 +217,21 @@
                 <td>{{ "{:,}".format(attempt.b1) }}</td>
                 <td>{{ "{:,}".format(attempt.b2) }}</td>
                 <td>{{ "{:,}".format(attempt.curves_completed) }}</td>
-                <td>{{ esc(attempt.factor_found) if attempt.factor_found else "None" }}</td>
+                <td>
+                    {% if attempt.factor_found %}
+                    {# Check if multiple factors were found by this attempt #}
+                    {% set attempt_factors = db.query(Factor).filter(Factor.found_by_attempt_id == attempt.id).all() %}
+                    {% if attempt_factors|length > 1 %}
+                    <span style="cursor: help;" title="This attempt found {{ attempt_factors|length }} factors total">
+                        {{ esc(attempt.factor_found[:30]) }}... <strong style="color: #2ecc71;">[+{{ attempt_factors|length - 1 }} more]</strong>
+                    </span>
+                    {% else %}
+                    {{ esc(attempt.factor_found) }}
+                    {% endif %}
+                    {% else %}
+                    None
+                    {% endif %}
+                </td>
                 <td>{{ esc(attempt.client_id) }}</td>
                 <td>{{ esc(attempt.created_at) }}</td>
             </tr>

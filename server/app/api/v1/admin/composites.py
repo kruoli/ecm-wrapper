@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from ....config import get_settings
 from ....database import get_db
 from ....dependencies import verify_admin_key, get_composite_service
+from ....models.factors import Factor
 from ....schemas.composites import BulkCompositeRequest
 from ....services.composites import CompositeService
 from ....templates import templates
@@ -258,7 +259,9 @@ async def get_composite_details_page(
         "progress": details['progress'],
         "recent_attempts": details['recent_attempts'],
         "active_work": details['active_work'],
-        "factors_with_group_orders": details['factors_with_group_orders']
+        "factors_with_group_orders": details['factors_with_group_orders'],
+        "db": db,
+        "Factor": Factor
     })
 
 

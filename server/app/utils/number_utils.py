@@ -1,5 +1,6 @@
 import math
 import re
+import random
 
 def validate_integer(number_str: str) -> bool:
     """Validate that string represents a positive integer."""
@@ -97,3 +98,78 @@ def verify_complete_factorization(composite: str, factors: list[str]) -> bool:
         return str(product) == composite
     except (ValueError, OverflowError):
         return False
+
+
+def divide_factor(composite: str, factor: str) -> str:
+    """
+    Divide a factor out of a composite and return the cofactor.
+
+    Args:
+        composite: The composite number (as string)
+        factor: The factor to divide out (as string)
+
+    Returns:
+        The cofactor as a string
+
+    Raises:
+        ValueError: If factor doesn't divide composite or inputs are invalid
+    """
+    if not validate_integer(composite) or not validate_integer(factor):
+        raise ValueError("Invalid number format")
+
+    if not verify_factor_divides(factor, composite):
+        raise ValueError(f"Factor {factor} does not divide composite {composite}")
+
+    composite_int = int(composite)
+    factor_int = int(factor)
+
+    cofactor = composite_int // factor_int
+    return str(cofactor)
+
+
+def is_probably_prime(n: str, trials: int = 10) -> bool:
+    """
+    Miller-Rabin primality test.
+
+    Args:
+        n: Number to test (as string)
+        trials: Number of trials (default: 10, gives error probability < 2^-20)
+
+    Returns:
+        True if probably prime, False if definitely composite
+    """
+    if not validate_integer(n):
+        return False
+
+    n_int = int(n)
+
+    # Handle small cases
+    if n_int < 2:
+        return False
+    if n_int == 2 or n_int == 3:
+        return True
+    if n_int % 2 == 0:
+        return False
+
+    # Write n-1 as 2^r * d
+    r, d = 0, n_int - 1
+    while d % 2 == 0:
+        r += 1
+        d //= 2
+
+    # Witness loop
+    for _ in range(trials):
+        a = random.randrange(2, n_int - 1)
+        x = pow(a, d, n_int)
+
+        if x == 1 or x == n_int - 1:
+            continue
+
+        for _ in range(r - 1):
+            x = pow(x, 2, n_int)
+            if x == n_int - 1:
+                break
+        else:
+            return False  # Definitely composite
+
+    return True  # Probably prime

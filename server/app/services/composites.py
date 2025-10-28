@@ -463,6 +463,85 @@ class CompositeService:
         except Exception as e:
             raise ValueError(f"Failed to update t-level for composite {composite_id}: {str(e)}")
 
+    def update_after_factor_division(self, db: Session, composite_id: int, factor: str) -> bool:
+        """
+        Update composite after dividing out a factor.
+
+        This method:
+        1. Divides the factor out to get the cofactor
+        2. Updates current_composite and digit_length
+        3. Tests if cofactor is prime
+        4. If prime, marks as fully factored
+        5. If composite, recalculates target t-level for new size
+
+        Args:
+            db: Database session
+            composite_id: ID of composite to update
+            factor: Factor to divide out (as string)
+
+        Returns:
+            True if successful, False if composite not found
+
+        Raises:
+            ValueError: If factor doesn't divide composite or update fails
+        """
+        from ..utils.number_utils import divide_factor, is_probably_prime, calculate_digit_length
+        from ..utils.calculations import ECMCalculations
+
+        try:
+            composite = self.get_composite_by_id(db, composite_id)
+            if not composite:
+                return False
+
+            # Get the current composite value (use current_composite if set, otherwise original number)
+            current_value = composite.current_composite or composite.number
+
+            # Divide out the factor
+            cofactor = divide_factor(current_value, factor)
+
+            # Update composite with cofactor
+            composite.current_composite = cofactor
+            composite.digit_length = calculate_digit_length(cofactor)
+
+            logger.info(
+                "Divided factor %s out of composite %d: %s -> %s (%d digits)",
+                factor[:20] + "..." if len(factor) > 20 else factor,
+                composite_id,
+                current_value[:20] + "..." if len(current_value) > 20 else current_value,
+                cofactor[:20] + "..." if len(cofactor) > 20 else cofactor,
+                composite.digit_length
+            )
+
+            # Test if cofactor is prime
+            if is_probably_prime(cofactor):
+                logger.info("Cofactor %s is prime - marking composite %d as fully factored",
+                           cofactor[:20] + "..." if len(cofactor) > 20 else cofactor, composite_id)
+                composite.is_prime = True
+                composite.is_fully_factored = True
+            else:
+                # Cofactor is still composite - recalculate target t-level for new size
+                new_target_t_level = ECMCalculations.recommend_target_t_level(composite.digit_length)
+
+                logger.info(
+                    "Cofactor %s is composite (%d digits) - updating target t-level from %.1f to %.1f",
+                    cofactor[:20] + "..." if len(cofactor) > 20 else cofactor,
+                    composite.digit_length,
+                    composite.target_t_level or 0.0,
+                    new_target_t_level
+                )
+
+                composite.target_t_level = new_target_t_level
+
+                # Also update current t-level based on existing work
+                self.update_t_level(db, composite_id)
+
+            db.flush()  # Make changes visible within transaction
+            return True
+
+        except Exception as e:
+            logger.error("Failed to update composite %d after factor division: %s", composite_id, str(e))
+            raise ValueError(f"Failed to update composite {composite_id} after factor division: {str(e)}")
+
     # ==================== Bulk Operations ====================
 
     def bulk_load_composites(
@@ -630,16 +709,16 @@ class CompositeService:
         total_ecm_curves = sum(a.curves_completed for a in attempts if a.method == 'ecm')
         pm1_attempts = len([a for a in attempts if a.method == 'pm1'])
 
-        # Deduplicate factors found and sort numerically
-        factors_found = sorted(
-            set(a.factor_found for a in attempts if a.factor_found),
-            key=lambda x: int(x)
-        )
-
-        # Get factors with full details
+        # Get factors with full details from Factor table (not from attempts)
         factors_with_details = db.query(Factor).filter(
             Factor.composite_id == composite_id
         ).all()
+
+        # Get unique factors sorted numerically
+        factors_found = sorted(
+            set(f.factor for f in factors_with_details),
+            key=lambda x: int(x)
+        )
 
         return {
             'composite': {

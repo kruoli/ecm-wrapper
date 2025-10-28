@@ -64,6 +64,53 @@ class ECMCalculations:
     """Business logic for ECM-related calculations."""
 
     @staticmethod
+    def recommend_target_t_level(digit_length: int) -> float:
+        """
+        Recommend target t-level based on composite digit length.
+
+        Based on standard ECM recommendations for finding factors
+        in numbers of various sizes.
+
+        Args:
+            digit_length: Number of decimal digits in the composite
+
+        Returns:
+            Recommended target t-level
+
+        Example:
+            >>> ECMCalculations.recommend_target_t_level(65)
+            40.0
+            >>> ECMCalculations.recommend_target_t_level(120)
+            65.0
+        """
+        if digit_length < 30:
+            return 20.0
+        elif digit_length < 40:
+            return 25.0
+        elif digit_length < 50:
+            return 30.0
+        elif digit_length < 60:
+            return 35.0
+        elif digit_length < 70:
+            return 40.0
+        elif digit_length < 80:
+            return 45.0
+        elif digit_length < 90:
+            return 50.0
+        elif digit_length < 100:
+            return 55.0
+        elif digit_length < 110:
+            return 60.0
+        elif digit_length < 120:
+            return 65.0
+        elif digit_length < 130:
+            return 70.0
+        else:
+            # For very large numbers, use a formula
+            # Roughly t-level = 70 + (digits - 130) / 10
+            return min(70.0 + (digit_length - 130) / 10.0, 85.0)
+
+    @staticmethod
     def group_attempts_by_b1(attempts: List[ECMAttempt]) -> Dict[int, int]:
         """
         Group ECM attempts by B1 bound and sum curves completed.

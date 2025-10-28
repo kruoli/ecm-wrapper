@@ -91,7 +91,15 @@
                     <td>{{ attempt.curves_completed }}</td>
                     <td>
                         {% if attempt.factor_found %}
+                        {# Check if multiple factors were found by this attempt #}
+                        {% set attempt_factors = db.query(Factor).filter(Factor.found_by_attempt_id == attempt.id).all() %}
+                        {% if attempt_factors|length > 1 %}
+                        <span class="factor" style="cursor: help;" title="This attempt found {{ attempt_factors|length }} factors total">
+                            {{ attempt.factor_found[:20] }}... <strong style="color: #2ecc71;">[+{{ attempt_factors|length - 1 }} more]</strong>
+                        </span>
+                        {% else %}
                         <span class="factor">{{ attempt.factor_found }}</span>
+                        {% endif %}
                         {% else %}
                         None
                         {% endif %}

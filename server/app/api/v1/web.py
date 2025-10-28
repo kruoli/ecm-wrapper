@@ -112,5 +112,7 @@ async def get_composite_details_public(
         "progress": details['progress'],
         "recent_attempts": details['recent_attempts'],
         "active_work": details['active_work'],
-        "factors_with_group_orders": details['factors_with_group_orders']
+        "factors_with_group_orders": details['factors_with_group_orders'],
+        "db": db,
+        "Factor": Factor
     })

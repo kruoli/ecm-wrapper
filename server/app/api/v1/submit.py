@@ -122,15 +122,38 @@ async def submit_result(
             db.flush()  # Get ID without committing transaction
             db.refresh(attempt)
 
-            # Handle factor discovery
+            # Handle factor discovery - support both single and multiple factors
             factor_status = "no_factor"
-            if result_request.results.factor_found:
-                factor_str = result_request.results.factor_found
+            factors_to_process = []
 
-                # Check if it's a trivial factor
-                if is_trivial_factor(factor_str, result_request.composite):
-                    factor_status = "no_factor"  # Trivial factors don't count
-                else:
+            # Debug: Log what we received
+            logger.info(f"DEBUG: result_request.results.factors_found = {result_request.results.factors_found}")
+            logger.info(f"DEBUG: result_request.results.factor_found = {result_request.results.factor_found}")
+
+            # Collect factors from new or legacy format
+            if result_request.results.factors_found:
+                # New format: multiple factors with sigmas
+                logger.info(f"Received {len(result_request.results.factors_found)} factors in batch submission")
+                for factor_with_sigma in result_request.results.factors_found:
+                    factors_to_process.append((factor_with_sigma.factor, factor_with_sigma.sigma))
+                logger.info(f"Processing {len(factors_to_process)} factors: {[f[:20] + '...' for f, _ in factors_to_process]}")
+            elif result_request.results.factor_found:
+                # Legacy format: single factor with sigma from parameters
+                logger.info(f"Received single factor (legacy format): {result_request.results.factor_found[:20]}...")
+                factors_to_process.append((result_request.results.factor_found, sigma))
+
+            # Process all factors in batch
+            if factors_to_process:
+                new_factors_count = 0
+                known_factors_count = 0
+                all_factors_valid = True
+
+                # Validate and add all factors BEFORE updating composite
+                for factor_str, factor_sigma in factors_to_process:
+                    # Check if it's a trivial factor
+                    if is_trivial_factor(factor_str, result_request.composite):
+                        continue  # Skip trivial factors
+
                     # SECURITY: Verify the factor actually divides the composite
                     if not verify_factor_divides(factor_str, result_request.composite):
                         logger.warning(
@@ -143,11 +166,89 @@ async def submit_result(
                             detail=f"Invalid factor: {factor_str} does not divide the composite"
                         )
 
+                    # Parse sigma if it's a string (format: "3:12345")
+                    parsed_sigma = None
+                    if factor_sigma:
+                        sigma_str = str(factor_sigma)
+                        if ':' in sigma_str:
+                            parsed_sigma = int(sigma_str.split(':', 1)[1])
+                        else:
+                            parsed_sigma = int(sigma_str)
+
                     # Add factor to database (with parametrization for group order calculation)
                     factor, factor_created = FactorService.add_factor(
-                        db, composite.id, factor_str, attempt.id, sigma, parametrization
+                        db, composite.id, factor_str, attempt.id, parsed_sigma, parametrization
                     )
-                    factor_status = "new_factor" if factor_created else "known_factor"
+
+                    if factor_created:
+                        new_factors_count += 1
+                        logger.info(f"  ✓ Added new factor {new_factors_count}: {factor_str[:20]}...")
+                    else:
+                        known_factors_count += 1
+                        logger.info(f"  ○ Factor already known: {factor_str[:20]}...")
+
+                # Set factor status based on what was found
+                if new_factors_count > 0:
+                    factor_status = "new_factor"
+                elif known_factors_count > 0:
+                    factor_status = "known_factor"
+
+                # Now update composite by dividing out all factors from the ORIGINAL composite
+                if new_factors_count > 0 or known_factors_count > 0:
+                    try:
+                        # Calculate the product of all factors to divide out
+                        from ...utils.number_utils import divide_factor
+
+                        current_cofactor = result_request.composite
+                        for factor_str, _ in factors_to_process:
+                            if not is_trivial_factor(factor_str, result_request.composite):
+                                # Check if this factor divides the current cofactor
+                                from ...utils.number_utils import verify_factor_divides
+                                if verify_factor_divides(factor_str, current_cofactor):
+                                    # Divide from the running cofactor (starts as original composite)
+                                    current_cofactor = divide_factor(current_cofactor, factor_str)
+                                    logger.info(
+                                        f"Divided out factor {factor_str[:20]}{'...' if len(factor_str) > 20 else ''}, "
+                                        f"cofactor now has {len(current_cofactor)} digits"
+                                    )
+                                else:
+                                    # Factor doesn't divide current cofactor (likely composite or duplicate)
+                                    logger.warning(
+                                        f"Skipping factor {factor_str[:20]}... - doesn't divide current cofactor "
+                                        f"(likely composite factor or already divided out)"
+                                    )
+
+                        # Now update the composite with the final cofactor
+                        from ...utils.number_utils import is_probably_prime, calculate_digit_length
+                        from ...utils.calculations import ECMCalculations
+
+                        composite.current_composite = current_cofactor
+                        composite.digit_length = calculate_digit_length(current_cofactor)
+
+                        # Test if cofactor is prime
+                        if is_probably_prime(current_cofactor):
+                            logger.info(f"Cofactor is prime - marking composite {composite.id} as fully factored")
+                            composite.is_prime = True
+                            composite.is_fully_factored = True
+                        else:
+                            # Cofactor is still composite - recalculate target t-level for new size
+                            new_target_t_level = ECMCalculations.recommend_target_t_level(composite.digit_length)
+                            logger.info(
+                                f"Cofactor is composite ({composite.digit_length} digits) - "
+                                f"updating target t-level to {new_target_t_level}"
+                            )
+                            composite.target_t_level = new_target_t_level
+
+                            # Also update current t-level based on existing work
+                            composite_service.update_t_level(db, composite.id)
+
+                        db.flush()  # Make changes visible
+
+                    except ValueError as e:
+                        # Log but don't fail - the factors were still recorded
+                        logger.warning(
+                            f"Failed to update composite {composite.id} after factor division: {e}"
+                        )
 
                     # Check if we now have complete factorization
                     if FactorService.verify_factorization(db, composite.id):

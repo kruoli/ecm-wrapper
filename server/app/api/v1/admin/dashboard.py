@@ -13,6 +13,7 @@ from ....config import get_settings
 from ....database import get_db
 from ....dependencies import verify_admin_key
 from ....models import Composite, ECMAttempt
+from ....models.factors import Factor
 from ....templates import templates
 from ....utils.html_helpers import get_unauthorized_redirect_html
 from ....utils.query_helpers import (
@@ -151,5 +152,6 @@ async def admin_dashboard(
         "now": datetime.utcnow(),
         "db": db,
         "Composite": Composite,
-        "ECMAttempt": ECMAttempt
+        "ECMAttempt": ECMAttempt,
+        "Factor": Factor
     })

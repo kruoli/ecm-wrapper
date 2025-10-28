@@ -1,130 +1,15 @@
 #!/usr/bin/env python3
 import subprocess
-import argparse
 import time
 import sys
-import threading
-import tempfile
-import shutil
-import multiprocessing
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from base_wrapper import BaseWrapper
-from parsing_utils import parse_ecm_output, parse_ecm_output_multiple, count_ecm_steps_completed, Timeouts, ECMPatterns
+from parsing_utils import parse_ecm_output_multiple, count_ecm_steps_completed, ECMPatterns
 from residue_manager import ResidueFileManager
-
-def _run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optional[int],
-                           curves: int, verbose: bool, method: str, ecm_path: str,
-                           result_queue, stop_event) -> None:
-    """Global worker function for multiprocessing"""
-    import subprocess
-    import re
-
-    # Import the shared parsing function for worker processes
-    from parsing_utils import parse_ecm_output as parse_ecm_output_local
-
-    # Build command for this worker
-    cmd = [ecm_path]
-
-    # Add method-specific parameters
-    if method == "pm1":
-        cmd.append('-pm1')
-    elif method == "pp1":
-        cmd.append('-pp1')
-
-    if verbose:
-        cmd.append('-v')
-
-    # Run specified number of curves
-    cmd.extend(['-c', str(curves), str(b1)])
-    if b2 is not None:
-        cmd.append(str(b2))
-
-    try:
-        print(f"Worker {worker_id} starting {curves} curves")
-        process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True
-        )
-
-        # Send composite number
-        process.stdin.write(composite)
-        process.stdin.close()
-
-        # Capture output
-        output_lines = []
-        curves_completed = 0
-        factor_found = None
-        sigma_found = None
-        sigma_values = []  # Collect all sigma values used
-
-        while True:
-            # Check stop event
-            if stop_event.is_set():
-                process.terminate()
-                break
-
-            line = process.stdout.readline()
-            if not line:
-                break
-            line = line.rstrip()
-            if line:
-                print(f"Worker {worker_id}: {line}")
-                output_lines.append(line)
-
-                # Track progress and check for factors
-                if "Step 1 took" in line:
-                    curves_completed += 1
-
-                # Collect sigma values from curve output
-                # Match both formats: "sigma=1:xxxx" and "-sigma 3:xxxx"
-                sigma_match = ECMPatterns.SIGMA_COLON_FORMAT.search(line) or ECMPatterns.SIGMA_DASH_FORMAT.search(line)
-                if sigma_match:
-                    sigma_val = sigma_match.group(1)
-                    if sigma_val not in sigma_values:
-                        sigma_values.append(sigma_val)
-
-                # Check for factor
-                if not factor_found:
-                    factor, sigma = parse_ecm_output_local(line)
-                    if factor:
-                        factor_found = factor
-                        sigma_found = sigma
-                        break  # Stop immediately when factor found
-
-        process.wait()
-
-        # If no factor found during streaming, check full output
-        if not factor_found and not stop_event.is_set():
-            full_output = '\n'.join(output_lines)
-            factor_found, sigma_found = parse_ecm_output_local(full_output)
-            curves_completed = curves  # All curves completed
-
-        result = {
-            'worker_id': worker_id,
-            'factor_found': factor_found,
-            'sigma_found': sigma_found,  # Sigma of the curve that found the factor
-            'sigma_values': sigma_values,  # All sigma values used by this worker
-            'curves_completed': curves_completed if not stop_event.is_set() else curves_completed,
-            'raw_output': '\n'.join(output_lines)
-        }
-
-        result_queue.put(result)
-
-    except Exception as e:
-        print(f"Worker {worker_id} failed: {e}")
-        result_queue.put({
-            'worker_id': worker_id,
-            'factor_found': None,
-            'sigma_found': None,
-            'sigma_values': [],
-            'curves_completed': 0,
-            'raw_output': f"Worker failed: {e}"
-        })
+from result_processor import ResultProcessor
+from stage2_executor import Stage2Executor
+from ecm_worker_process import run_worker_ecm_process
 
 class ECMWrapper(BaseWrapper):
     def __init__(self, config_path: str):
@@ -138,6 +23,8 @@ class ECMWrapper(BaseWrapper):
         """
         Deduplicate factors, log them, and store in results dictionary.
 
+        This is now a thin wrapper around ResultProcessor for backward compatibility.
+
         Args:
             all_factors: List of (factor, sigma) tuples
             results: Results dictionary to update
@@ -149,40 +36,8 @@ class ECMWrapper(BaseWrapper):
         Returns:
             First factor (for compatibility)
         """
-        if not all_factors:
-            return None
-
-        # Deduplicate factors - same factor can be found by multiple curves
-        unique_factors = {}
-        for factor, sigma in all_factors:
-            if factor not in unique_factors:
-                unique_factors[factor] = sigma  # Keep first sigma found
-
-        # Log each unique factor once
-        for factor, sigma in unique_factors.items():
-            self.log_factor_found(composite, factor, b1, b2, curves,
-                                method=method, sigma=sigma, program=program)
-
-        # Store all unique factors for API submission
-        if 'factors_found' not in results:
-            results['factors_found'] = []
-        results['factors_found'].extend(unique_factors.keys())
-
-        # Store factor-to-sigma mapping for multiple factor submissions
-        if 'factor_sigmas' not in results:
-            results['factor_sigmas'] = {}
-        results['factor_sigmas'].update(unique_factors)
-
-        # Set the main factor for compatibility (use first factor found)
-        main_factor = list(unique_factors.keys())[0]
-        results['factor_found'] = main_factor
-
-        # Store sigma for the main factor (for API submission)
-        results['sigma'] = unique_factors[main_factor]
-
-        self.logger.info(f"Factors found: {list(unique_factors.keys())}")
-
-        return main_factor
+        processor = ResultProcessor(self, composite, method, b1, b2, curves, program)
+        return processor.log_and_store_factors(all_factors, results, quiet=False)
 
     def run_ecm(self, composite: str, b1: int, b2: Optional[int] = None,
                 curves: int = 100, sigma: Optional[int] = None,
@@ -310,49 +165,10 @@ class ECMWrapper(BaseWrapper):
         results['execution_time'] = time.time() - start_time
         results['raw_output'] = '\n'.join(results['raw_outputs'])
 
-        # Final deduplication of factors found across all batches
+        # Final deduplication of factors found across all batches and full factorization
         if 'factors_found' in results and results['factors_found'] and not quiet:
-            results['factors_found'] = list(dict.fromkeys(results['factors_found']))  # Preserve order while deduplicating
-
-            # Fully factor any composite factors found
-            self.logger.info(f"Checking {len(results['factors_found'])} factor(s) for composites...")
-            all_prime_factors = []
-            for factor in results['factors_found']:
-                prime_factors = self._fully_factor_found_result(factor, quiet=True)
-                self.logger.info(f"Prime factorization of {factor}: {prime_factors}")
-                all_prime_factors.extend(prime_factors)
-
-            # Calculate remaining cofactor after dividing out all found primes
-            cofactor = int(composite)
-            for prime in all_prime_factors:
-                cofactor //= int(prime)
-
-            # Check if there's a remaining cofactor
-            if cofactor > 1:
-                cofactor_digits = len(str(cofactor))
-
-                # Test if cofactor is prime
-                if self._is_probably_prime(cofactor):
-                    self.logger.info(f"Remaining cofactor {cofactor} is prime")
-                    all_prime_factors.append(str(cofactor))
-                else:
-                    # Cofactor is composite - only auto-factor if small enough (ECM is fastest for <60 digits)
-                    if cofactor_digits < 60:
-                        self.logger.info(f"Remaining cofactor {cofactor} is composite - factoring...")
-                        cofactor_primes = self._fully_factor_found_result(str(cofactor), quiet=True)
-                        all_prime_factors.extend(cofactor_primes)
-                    else:
-                        self.logger.info(f"Remaining cofactor {cofactor} is composite (not auto-factoring)")
-
-            # Replace with fully factored results
-            results['factors_found'] = all_prime_factors
-            if all_prime_factors:
-                results['factor_found'] = all_prime_factors[0]
-
-            # Log each prime factor individually (only once, at top level)
-            program_name = f"GMP-ECM ({method.upper()})"
-            for prime in all_prime_factors:
-                self.log_factor_found(composite, prime, b1, b2, curves, method=method, sigma=results.get('sigma'), program=program_name)
+            processor = ResultProcessor(self, composite, method, b1, b2, curves, f"GMP-ECM ({method.upper()})")
+            processor.fully_factor_and_store(results['factors_found'], results, quiet=False)
 
         # Extract parametrization from raw output (look for "sigma=1:xxx" or "sigma=3:xxx")
         if 'parametrization' not in results:
@@ -609,273 +425,14 @@ class ECMWrapper(BaseWrapper):
 
     def _run_stage2_multithread(self, residue_file: Path, b1: int, b2: int,
                                workers: int, verbose: bool, early_termination: bool = True,
-                               progress_interval: int = 0) -> Optional[str]:
-        """Run Stage 2 with multiple CPU workers"""
+                               progress_interval: int = 0) -> Optional[Tuple[str, str]]:
+        """
+        Run Stage 2 with multiple CPU workers.
 
-        # Extract B1 from residue file to ensure consistency
-        residue_info = self._parse_residue_file(residue_file)
-        actual_b1 = residue_info['b1']
-        if actual_b1 > 0 and actual_b1 != b1:
-            self.logger.info(f"Using B1={actual_b1} from residue file (overriding parameter B1={b1})")
-        b1_to_use = actual_b1 if actual_b1 > 0 else b1
-
-        # Split residue file into chunks for workers
-        residue_chunks = self._split_residue_file(residue_file, workers)
-
-        if not residue_chunks:
-            self.logger.error("Failed to split residue file")
-            return None
-
-        factor_found = None
-        factor_lock = threading.Lock()
-        stop_event = threading.Event()
-        running_processes = []
-        process_lock = threading.Lock()
-
-        def worker_stage2(chunk_file: Path, worker_id: int) -> Optional[tuple[str, str]]:
-            """Worker function for Stage 2 processing"""
-            nonlocal factor_found  # Declare at top of function for both streaming and non-streaming paths
-            ecm_path = self.config['programs']['gmp_ecm']['path']
-
-            cmd = [ecm_path, '-resume', str(chunk_file)]
-            if verbose:
-                cmd.append('-v')
-            cmd.extend([str(b1_to_use), str(b2)])
-
-            # Count total lines in this worker's chunk for progress reporting
-            total_lines = 0
-            if verbose:
-                try:
-                    with open(chunk_file, 'r') as f:
-                        total_lines = sum(1 for _ in f)
-                except:
-                    total_lines = 0
-
-            try:
-                self.logger.info(f"Worker {worker_id} starting Stage 2" +
-                               (f" ({total_lines} curves)" if verbose and total_lines > 0 else ""))
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True
-                )
-
-                # Register process for potential termination
-                with process_lock:
-                    running_processes.append(process)
-
-                # Stream output for progress tracking if progress_interval is set
-                if progress_interval > 0:
-                    full_output = ""
-                    last_progress_report = 0
-
-                    while True:
-                        line = process.stdout.readline()
-                        if not line:
-                            break
-
-                        full_output += line
-
-                        # Check if we should terminate early
-                        if early_termination and stop_event.is_set():
-                            process.terminate()
-                            self.logger.info(f"Worker {worker_id} terminating due to factor found elsewhere")
-                            return None
-
-                        # Check for curve completion and progress reporting
-                        if "Step 2 took" in line:
-                            curves_completed = full_output.count("Step 2 took")
-
-                            # Report progress at intervals
-                            if curves_completed - last_progress_report >= progress_interval:
-                                if total_lines > 0:
-                                    percentage = (curves_completed / total_lines) * 100
-                                    self.logger.info(f"Worker {worker_id}: {curves_completed}/{total_lines} curves ({percentage:.1f}%)")
-                                else:
-                                    self.logger.info(f"Worker {worker_id}: {curves_completed} curves completed")
-                                last_progress_report = curves_completed
-
-                    process.wait()
-
-                    # CRITICAL: Drain any remaining buffered output after process exits
-                    # When GMP-ECM finds a factor and exits immediately, the final output
-                    # lines (including "GPU: factor ... found") may still be in the buffer
-                    remaining = process.stdout.read()
-                    if remaining:
-                        full_output += remaining
-                        self.logger.debug(f"Worker {worker_id}: Drained {len(remaining)} chars from buffer after process exit")
-
-                    # Save raw output to file for debugging (streaming path)
-                    try:
-                        import tempfile
-                        output_dir = Path(tempfile.gettempdir()) / "ecm_stage2_logs"
-                        output_dir.mkdir(exist_ok=True)
-                        output_file = output_dir / f"worker_{worker_id}_{int(time.time())}.log"
-                        with open(output_file, 'w') as f:
-                            f.write(full_output)
-                        self.logger.debug(f"Worker {worker_id} output saved to: {output_file}")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to save worker {worker_id} output: {e}")
-
-                    # Check for factor in streaming path
-                    # Count curves and enable debug if stopped early
-                    curves_completed = full_output.count("Step 2 took")
-                    if total_lines > 0:
-                        enable_debug = curves_completed < total_lines * 0.9
-                    else:
-                        enable_debug = curves_completed < 300
-
-                    factor, sigma_from_output = parse_ecm_output(full_output, debug=enable_debug)
-                    if factor:
-                        with factor_lock:
-                            if not factor_found:  # First factor wins
-                                factor_found = (factor, sigma_from_output)
-                                if early_termination:
-                                    stop_event.set()  # Signal other workers to stop
-                                self.logger.info(f"Worker {worker_id} found factor: {factor} (sigma: {sigma_from_output})")
-                                # Kill other processes if early termination enabled
-                                if early_termination:
-                                    with process_lock:
-                                        for p in running_processes:
-                                            if p != process and p.poll() is None:
-                                                p.terminate()
-                        return (factor, sigma_from_output)
-                else:
-                    # Original behavior - get all output at once
-                    stdout, stderr = process.communicate()
-                    full_output = stdout if stdout else ""
-
-                    # Check if we should terminate early due to factor found elsewhere
-                    if early_termination and stop_event.is_set():
-                        self.logger.info(f"Worker {worker_id} terminating due to factor found elsewhere")
-                        return None
-
-                    # Count curve completions from output
-                    curves_completed = full_output.count("Step 2 took")
-
-                    # Progress reporting in verbose mode
-                    if verbose and total_lines > 0:
-                        percentage = (curves_completed / total_lines) * 100
-                        self.logger.info(f"Worker {worker_id} progress: {curves_completed}/{total_lines} curves - {percentage:.1f}% complete")
-
-                    # Save raw output to file for debugging
-                    try:
-                        import tempfile
-                        output_dir = Path(tempfile.gettempdir()) / "ecm_stage2_logs"
-                        output_dir.mkdir(exist_ok=True)
-                        output_file = output_dir / f"worker_{worker_id}_{int(time.time())}.log"
-                        with open(output_file, 'w') as f:
-                            f.write(full_output)
-                        self.logger.debug(f"Worker {worker_id} output saved to: {output_file}")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to save worker {worker_id} output: {e}")
-
-                    # Check for factor (common to both paths)
-                    # Enable debug mode if worker stopped early (likely found factor but parsing failed)
-                    # Check against total_lines if available, otherwise against a reasonable expectation
-                    if total_lines > 0:
-                        enable_debug = curves_completed < total_lines * 0.9
-                    else:
-                        # If we don't know total_lines, assume each chunk should do ~300+ curves
-                        # (3072 curves / 8 workers = 384 per worker, so < 300 is suspicious)
-                        enable_debug = curves_completed < 300
-
-                    factor, sigma_from_output = parse_ecm_output(full_output, debug=enable_debug)
-                    if factor:
-                        with factor_lock:
-                            if not factor_found:  # First factor wins
-                                factor_found = (factor, sigma_from_output)
-                                if early_termination:
-                                    stop_event.set()  # Signal other workers to stop
-                                self.logger.info(f"Worker {worker_id} found factor: {factor} (sigma: {sigma_from_output})")
-                                # Kill other processes if early termination enabled
-                                if early_termination:
-                                    with process_lock:
-                                        for p in running_processes:
-                                            if p != process and p.poll() is None:
-                                                p.terminate()
-                        return (factor, sigma_from_output)
-
-                # If no factor found, report completion with diagnostic
-                curves_completed = full_output.count("Step 2 took")
-                output_size = len(full_output)
-                self.logger.info(f"Worker {worker_id} completed (no factor) - {curves_completed} curves, {output_size} bytes output")
-
-                # Show first and last 500 chars for diagnosis if worker stopped early
-                stopped_early = False
-                if total_lines > 0:
-                    stopped_early = curves_completed < total_lines * 0.9
-                else:
-                    # Without verbose mode, assume < 300 curves is suspicious
-                    stopped_early = curves_completed < 300
-
-                if stopped_early:
-                    if total_lines > 0:
-                        self.logger.warning(f"Worker {worker_id} stopped early at {curves_completed}/{total_lines} curves")
-                    else:
-                        self.logger.warning(f"Worker {worker_id} stopped early at {curves_completed} curves (expected ~384)")
-                    self.logger.debug(f"Worker {worker_id} output preview (first 500 chars):\n{full_output[:500]}")
-                    self.logger.debug(f"Worker {worker_id} output preview (last 500 chars):\n{full_output[-500:]}")
-
-                return None
-
-            except Exception as e:
-                self.logger.error(f"Worker {worker_id} failed: {e}")
-                return None
-            finally:
-                # Remove process from tracking
-                with process_lock:
-                    if process in running_processes:
-                        running_processes.remove(process)
-
-        # Run workers in parallel
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = []
-            for i, chunk_file in enumerate(residue_chunks):
-                future = executor.submit(worker_stage2, chunk_file, i+1)
-                futures.append(future)
-
-            # Wait for completion or first factor
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    if result:
-                        factor_found = result  # This is now (factor, sigma) tuple
-                        stop_event.set()  # Ensure all workers are signaled to stop
-                        break
-                except Exception as e:
-                    self.logger.error(f"Worker thread error: {e}")
-
-            # Ensure all remaining processes are terminated
-            with process_lock:
-                for process in running_processes:
-                    if process.poll() is None:
-                        process.terminate()
-                        try:
-                            process.wait(timeout=2)
-                        except subprocess.TimeoutExpired:
-                            process.kill()
-
-        # Cleanup temporary chunk files and directory
-        chunk_dirs_to_cleanup = set()
-        for chunk_file in residue_chunks:
-            try:
-                chunk_dirs_to_cleanup.add(chunk_file.parent)
-                chunk_file.unlink()
-            except:
-                pass
-
-        # Clean up temporary chunk directories
-        for chunk_dir in chunk_dirs_to_cleanup:
-            try:
-                import shutil
-                shutil.rmtree(chunk_dir)
-                self.logger.debug(f"Cleaned up chunk directory: {chunk_dir}")
-            except:
-                pass
-
-        return factor_found
+        This is now a thin wrapper around Stage2Executor.
+        """
+        executor = Stage2Executor(self, residue_file, b1, b2, workers, verbose)
+        return executor.execute(early_termination, progress_interval)
 
     def _split_residue_file(self, residue_file: Path, num_chunks: int) -> List[Path]:
         """Split residue file into chunks for parallel processing"""
@@ -942,7 +499,7 @@ class ECMWrapper(BaseWrapper):
         processes = []
         for worker_id, worker_curves in worker_assignments:
             p = mp.Process(
-                target=_run_worker_ecm_process,
+                target=run_worker_ecm_process,
                 args=(worker_id, composite, b1, b2, worker_curves, verbose, method,
                       self.config['programs']['gmp_ecm']['path'], result_queue, stop_event)
             )
@@ -1060,40 +617,13 @@ class ECMWrapper(BaseWrapper):
 
         # Fully factor any composite factors found
         if factor_found:
-            self.logger.info(f"Raw factor found: {factor_found} - checking if composite...")
-            prime_factors = self._fully_factor_found_result(factor_found, quiet=True)
-            self.logger.info(f"Prime factorization: {prime_factors}")
-
-            # Calculate remaining cofactor after dividing out all found primes
-            cofactor = int(composite)
-            for prime in prime_factors:
-                cofactor //= int(prime)
-
-            # Check if there's a remaining cofactor
-            if cofactor > 1:
-                cofactor_digits = len(str(cofactor))
-
-                # Test if cofactor is prime
-                if self._is_probably_prime(cofactor):
-                    self.logger.info(f"Remaining cofactor {cofactor} is prime")
-                    prime_factors.append(str(cofactor))
-                else:
-                    # Cofactor is composite - only auto-factor if small enough (ECM is fastest for <60 digits)
-                    if cofactor_digits < 60:
-                        self.logger.info(f"Remaining cofactor {cofactor} is composite - factoring...")
-                        cofactor_primes = self._fully_factor_found_result(str(cofactor), quiet=True)
-                        prime_factors.extend(cofactor_primes)
-                    else:
-                        self.logger.info(f"Remaining cofactor {cofactor} is composite (not auto-factoring)")
-
-            # Store all prime factors
-            results['factors_found'] = prime_factors
-            results['factor_found'] = prime_factors[0]  # First prime factor
-
-            # Log each prime factor (only once, at top level)
-            program_name = f"GMP-ECM ({method.upper()})"
-            for prime in prime_factors:
-                self.log_factor_found(composite, prime, b1, b2, curves, method=method, sigma=factor_sigma, program=program_name)
+            processor = ResultProcessor(self, composite, method, b1, b2, curves, f"GMP-ECM ({method.upper()})")
+            # Store factor and sigma first
+            results['factor_found'] = factor_found
+            results['factors_found'] = [factor_found]
+            results['sigma'] = factor_sigma
+            # Then fully factor it
+            processor.fully_factor_and_store([factor_found], results, quiet=False)
         else:
             # No factors found
             if 'factor_found' not in results:

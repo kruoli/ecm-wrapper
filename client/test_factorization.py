@@ -9,20 +9,26 @@ from collections import Counter
 from typing import List, Tuple
 import sys
 import importlib.util
+from pathlib import Path
+
+# Get the directory containing this test file
+test_dir = Path(__file__).parent
 
 # Import ecm-wrapper.py
-spec = importlib.util.spec_from_file_location("ecm_wrapper", "ecm-wrapper.py")
+ecm_wrapper_path = test_dir / "ecm-wrapper.py"
+spec = importlib.util.spec_from_file_location("ecm_wrapper", str(ecm_wrapper_path))
 if spec is None or spec.loader is None:
-    raise ImportError("Failed to load ecm-wrapper.py")
+    raise ImportError(f"Failed to load ecm-wrapper.py from {ecm_wrapper_path}")
 ecm_module = importlib.util.module_from_spec(spec)
 sys.modules["ecm_wrapper"] = ecm_module
 spec.loader.exec_module(ecm_module)
 ECMWrapper = ecm_module.ECMWrapper
 
 # Import yafu-wrapper.py
-spec = importlib.util.spec_from_file_location("yafu_wrapper", "yafu-wrapper.py")
+yafu_wrapper_path = test_dir / "yafu-wrapper.py"
+spec = importlib.util.spec_from_file_location("yafu_wrapper", str(yafu_wrapper_path))
 if spec is None or spec.loader is None:
-    raise ImportError("Failed to load yafu-wrapper.py")
+    raise ImportError(f"Failed to load yafu-wrapper.py from {yafu_wrapper_path}")
 yafu_module = importlib.util.module_from_spec(spec)
 sys.modules["yafu_wrapper"] = yafu_module
 spec.loader.exec_module(yafu_module)

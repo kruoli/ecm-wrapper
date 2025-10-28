@@ -83,23 +83,11 @@ class APIClient:
 
             except requests.exceptions.RequestException as e:
                 error_details = ""
-                response_text = ""
                 if hasattr(e, 'response') and e.response is not None:
                     try:
-                        response_text = e.response.text
-                        error_details = f" - Response: {response_text}"
+                        error_details = f" - Response: {e.response.text}"
                     except:
                         pass
-
-                # Check if this is a schema validation error from old server
-                # If so, return 'schema_error' to signal fallback needed
-                if hasattr(e, 'response') and e.response is not None:
-                    if e.response.status_code == 422:  # Pydantic validation error
-                        self.logger.warning(
-                            f"Server rejected new schema (likely old server version), "
-                            f"will try legacy format if multiple factors present"
-                        )
-                        return 'schema_error'  # Special return value for fallback
 
                 self.logger.error(
                     f"API submission failed (attempt {attempt + 1}): {e}{error_details}"
@@ -247,83 +235,6 @@ class APIClient:
 
         return payload
 
-    def submit_multiple_factors(
-        self,
-        results: Dict[str, Any],
-        client_id: str,
-        program: str,
-        program_version: str,
-        project: Optional[str] = None
-    ) -> int:
-        """
-        Submit additional factors found in the same run.
-
-        Args:
-            results: Results dictionary with multiple factors
-            client_id: Client identifier
-            program: Program name
-            program_version: Program version string
-            project: Optional project name
-
-        Returns:
-            Number of additional factors successfully submitted
-        """
-        if 'factors_found' not in results or len(results['factors_found']) <= 1:
-            return 0
-
-        # Get factor-to-sigma mapping if available
-        factor_sigmas = results.get('factor_sigmas', {})
-        successful_submissions = 0
-
-        for factor in results['factors_found'][1:]:
-            # Use the specific sigma for this factor, or fall back to the main sigma
-            factor_sigma = factor_sigmas.get(factor, results.get('sigma'))
-
-            payload = {
-                'composite': results['composite'],
-                'project': project,
-                'client_id': client_id,
-                'method': results.get('method', 'ecm'),
-                'program': program,
-                'program_version': program_version,
-                'parameters': {
-                    'b1': results.get('b1'),
-                    'b2': results.get('b2'),
-                    'curves': results.get('curves_requested'),
-                    'parametrization': results.get('parametrization', 3),
-                    'sigma': factor_sigma
-                },
-                'results': {
-                    'factor_found': factor,
-                    'curves_completed': 0,  # Additional factor from same run
-                    'execution_time': 0
-                },
-                'raw_output': f"Additional factor from same run: {factor}"
-            }
-
-            try:
-                response = requests.post(
-                    f"{self.api_endpoint}/submit_result",
-                    json=payload,
-                    timeout=self.timeout
-                )
-
-                if response.status_code != 200:
-                    self.logger.error(
-                        f"Additional factor submission failed ({response.status_code}): "
-                        f"{response.text}"
-                    )
-                else:
-                    result = response.json()
-                    self.logger.info(f"Submitted additional factor: {factor} - {result}")
-                    successful_submissions += 1
-
-            except requests.exceptions.RequestException as e:
-                self.logger.error(f"Failed to submit additional factor {factor}: {e}")
-            except Exception as e:
-                self.logger.exception(f"Unexpected error submitting additional factor {factor}: {e}")
-
-        return successful_submissions
 
     def get_work_assignment(self, client_id: str) -> Optional[Dict[str, Any]]:
         """

@@ -218,50 +218,9 @@ class BaseWrapper:
                     results_context=results
                 )
 
-                # Handle three possible return values: True, False, or 'schema_error'
-                if success == 'schema_error':
-                    # TODO: Remove this legacy fallback once all servers are updated and batch processing is verified
-                    # Old server doesn't support new schema - fall back to legacy multi-factor submission
-                    self.logger.warning(
-                        f"⚠ {endpoint_name} doesn't support batch factors, falling back to legacy mode"
-                    )
-
-                    # Rebuild payload without factors_found field for legacy compatibility
-                    legacy_payload = payload.copy()
-                    if 'results' in legacy_payload and 'factors_found' in legacy_payload['results']:
-                        legacy_payload['results'] = legacy_payload['results'].copy()
-                        legacy_payload['results'].pop('factors_found', None)
-
-                    # Try submitting with legacy format (single factor only)
-                    legacy_success = api_client.submit_result(
-                        payload=legacy_payload,
-                        save_on_failure=True,
-                        results_context=results
-                    )
-
-                    if legacy_success is True:
-                        self.logger.info(f"✓ Successfully submitted first factor to {endpoint_name} (legacy mode)")
-                        submission_results.append(True)
-
-                        # Submit additional factors using old multi-call approach
-                        if 'factors_found' in results and len(results['factors_found']) > 1:
-                            self.logger.info(f"Submitting {len(results['factors_found']) - 1} additional factors (legacy mode)")
-                            additional_count = api_client.submit_multiple_factors(
-                                results=results,
-                                client_id=self.client_id,
-                                program=program,
-                                program_version=self.get_program_version(program),
-                                project=project
-                            )
-                            self.logger.info(f"✓ Submitted {additional_count} additional factors to {endpoint_name}")
-                    else:
-                        self.logger.warning(f"✗ Failed to submit to {endpoint_name} even in legacy mode")
-                        submission_results.append(False)
-
-                elif success is True:
+                if success:
                     self.logger.info(f"✓ Successfully submitted to {endpoint_name}")
                     submission_results.append(True)
-                    # Note: All factors are now submitted in a single API call via factors_found field
                 else:
                     self.logger.warning(f"✗ Failed to submit to {endpoint_name}")
                     submission_results.append(False)

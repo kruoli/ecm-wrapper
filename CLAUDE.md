@@ -93,6 +93,15 @@ curl http://localhost:8000/api/v1/composites
 curl -X POST http://localhost:8000/api/v1/results/ecm \
   -H "Content-Type: application/json" \
   -d '{"client_id": "test", "composite": "123", "factors": ["3", "41"]}'
+
+# Run unit tests
+cd server
+source venv/bin/activate
+pytest tests/test_number_utils.py -v           # Test number utilities
+pytest tests/ --ignore=tests/test_transactions.py -v  # All tests except transactions
+
+cd ../client
+pytest test_factorization.py -v               # Test parsing logic
 ```
 
 ### Server Refactoring Documentation
@@ -257,6 +266,26 @@ Essential tables for ECM coordination:
   - Only displayed when group order information is available (requires sigma and parametrization)
 - **Deduplicated factors**: Work summary now shows unique factors sorted numerically
   - Same factor appearing in multiple attempts now shown only once
+- **Multi-factor indicators**: Recent attempts tables show `[+N more]` badge when multiple factors found in one run
+- **Delete button**: Admin composite details page now has delete button with confirmation dialog
+- **Auto-refresh**: Admin dashboard auto-refreshes every 30 seconds
+
+### Multi-Factor Batch Submission (2025-10-28)
+**Critical bug fix**: When multiple factors were found in a single ECM run, only the first factor was being logged to the correct composite. Subsequent factors were logged to the wrong composite (the cofactor) because the server updated the composite after processing each factor.
+
+**Solution implemented**:
+- **Extended API schema** (`server/app/schemas/submit.py`): Added `FactorWithSigma` schema and `factors_found` list to `ResultsSchema`
+- **Server batch processing** (`server/app/api/v1/submit.py`):
+  - All factors are now validated and added to the database BEFORE any composite updates
+  - Factors are divided out sequentially from a running cofactor (not from the composite record)
+  - Composite is updated only ONCE after all factors are processed
+  - Robust handling: skips factors that don't divide (handles composite factors gracefully)
+- **Client single submission** (`client/api_client.py`, `client/base_wrapper.py`):
+  - `build_submission_payload()` now includes all factors with their individual sigmas in `factors_found` list
+  - All factors submitted in a single API call
+  - Maintains backward compatibility with `factor_found` field for single-factor submissions
+
+**Result**: Multiple factors from the same ECM run are now correctly associated with the original composite, not its cofactors.
 
 ## Important File Locations
 

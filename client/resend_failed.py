@@ -113,6 +113,19 @@ class FailedResultsResender(BaseWrapper):
 
             # Otherwise reconstruct from saved data (legacy format)
             # Use client_id from BaseWrapper (already constructed as username-cpu_name)
+
+            # Build factors_found list if available (new format)
+            factors_found_list = None
+            if 'factors_found' in data and data['factors_found']:
+                factor_sigmas = data.get('factor_sigmas', {})
+                factors_found_list = []
+                for factor in data['factors_found']:
+                    sigma = factor_sigmas.get(factor, data.get('sigma'))
+                    factors_found_list.append({
+                        'factor': factor,
+                        'sigma': str(sigma) if sigma else None
+                    })
+
             submission = {
                 "composite": data.get("composite"),
                 "client_id": self.client_id,
@@ -128,6 +141,7 @@ class FailedResultsResender(BaseWrapper):
                 },
                 "results": {
                     "factor_found": data.get("factor_found"),
+                    "factors_found": factors_found_list,  # Include multiple factors if available
                     "curves_completed": data.get("curves_completed", 0),
                     "execution_time": data.get("execution_time", 0)
                 },

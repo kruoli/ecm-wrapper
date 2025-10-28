@@ -203,7 +203,6 @@ async def submit_result(
                         for factor_str, _ in factors_to_process:
                             if not is_trivial_factor(factor_str, result_request.composite):
                                 # Check if this factor divides the current cofactor
-                                from ...utils.number_utils import verify_factor_divides
                                 if verify_factor_divides(factor_str, current_cofactor):
                                     # Divide from the running cofactor (starts as original composite)
                                     current_cofactor = divide_factor(current_cofactor, factor_str)

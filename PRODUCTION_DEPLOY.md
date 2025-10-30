@@ -21,12 +21,15 @@ Configure these secrets in your GitHub repository (Settings → Secrets and vari
 ### 2. Server Setup
 
 Your GitHub Action will automatically:
-- ✅ Create `/opt/ecm-distributed` directory
-- ✅ Clone the repository
+- ✅ Create deployment directory (`~/ecm-distributed`)
+- ✅ Clone/pull the repository
 - ✅ Write secrets to `server/secrets/` directory
-- ✅ Run `deploy.sh` script
+- ✅ Generate self-signed SSL certificates (if needed)
+- ✅ Configure nginx with your domain
+- ✅ Build and start Docker containers
+- ✅ Run health checks
 
-**Manual server prerequisites:**
+**Manual server prerequisites (one-time setup):**
 ```bash
 # Install Docker and Docker Compose (if not already installed)
 curl -fsSL https://get.docker.com -o get-docker.sh
@@ -35,7 +38,7 @@ sudo sh get-docker.sh
 # Give deploy user Docker permissions (IMPORTANT!)
 sudo usermod -aG docker deploy
 
-# Install Docker Compose
+# Install Docker Compose plugin
 sudo apt-get update
 sudo apt-get install docker-compose-plugin
 
@@ -44,6 +47,9 @@ sudo apt-get install docker-compose-plugin
 
 # Verify deploy user can run Docker
 docker ps
+
+# Optional: Install OpenSSL for SSL certificate generation (usually pre-installed)
+sudo apt-get install openssl
 ```
 
 ### 3. DNS Configuration
@@ -87,7 +93,7 @@ docker-compose -f docker-compose.prod.yml.active restart nginx
 Place your certificates in `server/ssl/` before first deployment:
 ```bash
 # On server
-mkdir -p /opt/ecm-distributed/server/ssl
+mkdir -p ~/ecm-distributed/server/ssl
 # Upload your cert.pem and key.pem
 ```
 
@@ -171,16 +177,18 @@ app/config.py reads from secret files
 │   │   ├── postgres_password.txt       # From POSTGRES_PASSWORD secret
 │   │   ├── api_secret_key.txt          # From API_SECRET_KEY secret
 │   │   └── admin_api_key.txt           # From ADMIN_API_KEY secret
-│   ├── ssl/                            # Created by deploy.sh
+│   ├── ssl/                            # Created by GitHub Actions
 │   │   ├── cert.pem                    # SSL certificate (self-signed or real)
 │   │   └── key.pem                     # SSL private key
 │   ├── nginx.conf                      # Template (in git)
 │   ├── nginx.conf.prod                 # Generated with domain (not in git)
 │   ├── docker-compose.prod.yml         # Template (in git)
 │   ├── docker-compose.prod.yml.active  # Generated with domain (not in git)
-│   ├── deploy.sh                       # Deployment script
 │   └── app/                            # Application code
-└── .git/                               # Git repository
+├── .git/                               # Git repository
+└── .github/
+    └── workflows/
+        └── deploy.yml                  # Deployment automation (all logic here)
 ```
 
 ## Security Checklist
@@ -222,28 +230,44 @@ cat postgres_password.txt  # Should show the password
 
 Check PostgreSQL is running:
 ```bash
-cd /opt/ecm-distributed/server
-docker-compose -f docker-compose.prod.yml ps postgres
-docker-compose -f docker-compose.prod.yml logs postgres
+cd ~/ecm-distributed/server
+docker-compose -f docker-compose.prod.yml.active ps postgres
+docker-compose -f docker-compose.prod.yml.active logs postgres
 ```
 
 ### Migration errors
 
 Run migrations manually:
 ```bash
-cd /opt/ecm-distributed/server
-docker-compose -f docker-compose.prod.yml exec api alembic upgrade head
+cd ~/ecm-distributed/server
+docker-compose -f docker-compose.prod.yml.active exec api alembic upgrade head
 ```
 
 ## Rollback Procedure
 
+### Option 1: Via GitHub Actions (Recommended)
 ```bash
-ssh user@server
-cd /opt/ecm-distributed
+# On your local machine, rollback the repository
+git log --oneline  # Find previous working commit
+git reset --hard COMMIT_HASH
+git push origin main --force  # Triggers automatic deployment
+
+# OR manually trigger deployment from GitHub Actions UI
+# - Go to Actions tab → "Deploy to Digital Ocean"
+# - Run workflow on specific commit
+```
+
+### Option 2: Manual Rollback on Server
+```bash
+ssh deploy@server
+cd ~/ecm-distributed
 git log --oneline  # Find previous commit
 git reset --hard COMMIT_HASH
+
+# Redeploy manually
 cd server
-./deploy.sh production YOUR_DOMAIN
+docker-compose -f docker-compose.prod.yml.active down
+docker-compose -f docker-compose.prod.yml.active up -d --build
 ```
 
 ## Monitoring
@@ -257,14 +281,16 @@ cd server
 ### Logs
 
 ```bash
+cd ~/ecm-distributed/server
+
 # API logs
-docker-compose -f docker-compose.prod.yml logs -f api
+docker-compose -f docker-compose.prod.yml.active logs -f api
 
 # Database logs
-docker-compose -f docker-compose.prod.yml logs -f postgres
+docker-compose -f docker-compose.prod.yml.active logs -f postgres
 
 # Nginx logs
-docker-compose -f docker-compose.prod.yml logs -f nginx
+docker-compose -f docker-compose.prod.yml.active logs -f nginx
 ```
 
 ## Backup and Restore
@@ -272,16 +298,16 @@ docker-compose -f docker-compose.prod.yml logs -f nginx
 ### Backup Database
 
 ```bash
-cd /opt/ecm-distributed/server
-docker-compose -f docker-compose.prod.yml exec postgres \
+cd ~/ecm-distributed/server
+docker-compose -f docker-compose.prod.yml.active exec postgres \
   pg_dump -U ecm_user ecm_distributed > backup_$(date +%Y%m%d).sql
 ```
 
 ### Restore Database
 
 ```bash
-cd /opt/ecm-distributed/server
-docker-compose -f docker-compose.prod.yml exec -T postgres \
+cd ~/ecm-distributed/server
+docker-compose -f docker-compose.prod.yml.active exec -T postgres \
   psql -U ecm_user ecm_distributed < backup_20240101.sql
 ```
 

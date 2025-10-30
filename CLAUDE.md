@@ -139,8 +139,24 @@ pytest test_factorization.py -v               # Test parsing logic
 ```
 
 ### Key Components
-- **ECMWrapper** (client/ecm-wrapper.py): GMP-ECM process management and result parsing
-- **YAFUWrapper** (client/yafu-wrapper.py): YAFU multi-method factorization coordination
+
+#### Client Components
+- **ECMWrapper** (client/ecm-wrapper.py:14): GMP-ECM execution with multiple modes
+  - Standard mode, two-stage GPU/CPU, multiprocess, t-level targeting
+  - Curve-by-curve control and two-stage processing
+  - Multiple factor handling with automatic deduplication
+- **YAFUWrapper** (client/yafu-wrapper.py:8): YAFU multi-method factorization coordination
+  - ECM, P-1, P+1, SIQS, NFS, and automatic mode selection
+  - Thread pool configuration
+- **CADOWrapper** (client/cado-wrapper.py): Number Field Sieve for large numbers
+- **AliquotWrapper** (client/aliquot-wrapper.py): Aliquot sequence calculator with FactorDB integration
+- **BaseWrapper** (client/base_wrapper.py:17): Shared base class
+  - Configuration loading via ConfigManager
+  - API client initialization (supports multiple endpoints)
+  - Subprocess execution with timeout handling
+  - Result parsing and factor logging
+
+#### Server Components
 - **API Server** (server/app/main.py): FastAPI middleware with coordination endpoints
 - **Database Models** (server/app/models/): Minimal schema focused on ECM coordination
 - **API Routes** (server/app/api/v1/): RESTful endpoints for work assignment and results
@@ -226,11 +242,55 @@ Essential tables for ECM coordination:
 - **PARI/GP**: Installed in Docker container for elliptic curve group order calculations
 - **group.gp script**: PARI/GP script deployed to `server/bin/group.gp` for FindGroupOrder function
 
-## Result Parsing Patterns
+## Client Implementation Details
 
-- **ECM factor extraction**: `r'Factor found in step \d+: (\d+)'` (ecm-wrapper.py:108)
-- **YAFU output parsing**: Multiple patterns for P/Q notation and factor formats (yafu-wrapper.py:144-198)
-- **Timeout handling**: 1 hour for ECM, 2-4 hours for YAFU operations
+### Output Parsing
+- **ECM**: Multiple factor detection with prime factor filtering using `parse_ecm_output_multiple()` (parsing_utils.py:61)
+  - Pattern: `r'Factor found in step \d+: (\d+)'`
+  - Composite factor filtering (avoids submitting products of known primes)
+  - Multi-pattern matching with deduplication
+- **YAFU**: Unified parsing functions `parse_yafu_ecm_output()` and `parse_yafu_auto_factors()` (parsing_utils.py:141-200)
+  - Multiple patterns for P/Q notation and factor formats
+  - Supports ECM, SIQS, NFS output formats
+- **Shared Infrastructure**: Unified subprocess execution via `BaseWrapper.run_subprocess_with_parsing()` (base_wrapper.py:278)
+  - Single execution path for all wrappers
+  - Consistent error handling and timeout management
+
+### Error Handling and Timeouts
+- **Subprocess timeouts**: 1 hour for ECM, 2-4 hours for YAFU operations
+- **API submission retries**: Exponential backoff with configurable attempts
+- **Raw output preservation**: All outputs saved to `data/outputs/` for debugging
+- **Failed submission persistence**: JSON files in `data/results/` for manual retry
+
+### File Organization
+All data directories are auto-created on first use:
+- **Raw outputs**: `data/outputs/` (configured via `execution.output_dir`)
+  - Timestamped files with method and curve count
+- **Logs**: `data/logs/ecm_client.log` (configured via `logging.file`)
+  - Combined file + console logging
+- **Factors found**:
+  - `data/factors_found.txt` - Human-readable format with timestamps
+  - `data/factors.json` - Machine-readable with all metadata
+- **Residue files**: `data/residues/` (configured via `execution.residue_dir`)
+  - Auto-generated when using two-stage mode without `--save-residues`
+  - Filename format: `residue_<composite_hash>_<timestamp>.txt`
+  - Override with `--save-residues /path/to/custom.txt`
+- **Failed submissions**: `data/results/` (for retry via `resend_failed.py`)
+
+### Code Quality Checks
+When making code changes, always run both syntax and type checks:
+```bash
+# Basic syntax check (catches syntax errors only)
+python3 -m py_compile *.py
+
+# Type checking (catches type hint issues, undefined variables in annotations)
+python3 -m mypy --ignore-missing-imports *.py
+
+# OR use pylint for comprehensive linting
+pylint *.py
+```
+
+**Important**: `py_compile` alone is insufficient - it does not validate type hints or catch undefined names in type annotations. Always use mypy or pylint for thorough validation, especially after refactoring.
 
 ## Recent Bug Fixes and Improvements
 

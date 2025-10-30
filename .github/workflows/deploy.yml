@@ -69,12 +69,62 @@ jobs:
           echo '${{ secrets.ADMIN_API_KEY }}' > server/secrets/admin_api_key.txt
           chmod 600 server/secrets/*.txt
 
-          # Set executable permissions
-          chmod +x server/deploy.sh
-
-          # Deploy
+          # Deploy with Docker
           cd server
-          ./deploy.sh ${{ github.event.inputs.environment || 'production' }} ${{ secrets.DOMAIN_NAME }}
+
+          # Detect docker-compose command
+          if command -v docker-compose &> /dev/null; then
+            DOCKER_COMPOSE="docker-compose"
+          elif docker compose version &> /dev/null; then
+            DOCKER_COMPOSE="docker compose"
+          else
+            echo "❌ Error: Neither 'docker-compose' nor 'docker compose' found."
+            exit 1
+          fi
+          echo "📦 Using: \$DOCKER_COMPOSE"
+
+          # Create SSL directory and generate self-signed cert if needed
+          mkdir -p ssl
+          if [ ! -f ssl/cert.pem ] || [ ! -f ssl/key.pem ]; then
+            echo "🔐 Generating self-signed SSL certificate..."
+            echo "⚠️  For production, replace with real certificates (Let's Encrypt recommended)"
+            openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+              -keyout ssl/key.pem -out ssl/cert.pem \
+              -subj "/C=US/ST=State/L=City/O=Organization/CN=${{ secrets.DOMAIN_NAME }}"
+          fi
+
+          # Update domain in nginx config
+          echo "🌐 Configuring domain: ${{ secrets.DOMAIN_NAME }}"
+          sed "s/your-domain.com/${{ secrets.DOMAIN_NAME }}/g" nginx.conf > nginx.conf.prod
+          sed "s/your-domain.com/${{ secrets.DOMAIN_NAME }}/g" docker-compose.prod.yml > docker-compose.prod.yml.active
+
+          # Pull latest images
+          echo "📦 Pulling latest Docker images..."
+          \$DOCKER_COMPOSE -f docker-compose.prod.yml.active pull || true
+
+          # Stop existing services
+          echo "🛑 Stopping existing services..."
+          \$DOCKER_COMPOSE -f docker-compose.prod.yml.active down || true
+
+          # Build and start services
+          echo "🏗️  Building and starting services..."
+          \$DOCKER_COMPOSE -f docker-compose.prod.yml.active up -d --build
+
+          # Wait for services to be ready
+          echo "⏳ Waiting for services to be ready..."
+          sleep 30
+
+          # Check service health
+          echo "🩺 Checking service health..."
+          if curl -f http://localhost:8000/health >/dev/null 2>&1; then
+            echo "✅ API server is healthy"
+          else
+            echo "⚠️  API server health check failed (may be normal if only HTTPS is enabled)"
+          fi
+
+          # Display status
+          echo "📊 Service status:"
+          \$DOCKER_COMPOSE -f docker-compose.prod.yml.active ps
         ENDSSH
 
     - name: Verify deployment

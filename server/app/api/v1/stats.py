@@ -18,7 +18,7 @@ from ...utils.calculations import CompositeCalculations, ECMCalculations
 
 router = APIRouter()
 
-@router.get("/stats/{composite}", response_model=CompositeStats)
+@router.get("/stats/{composite:path}", response_model=CompositeStats)
 async def get_composite_stats(
     composite: str = Path(..., description="The composite number to get stats for"),
     db: Session = Depends(get_db),

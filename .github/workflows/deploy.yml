@@ -81,7 +81,7 @@ jobs:
             echo "❌ Error: Neither 'docker-compose' nor 'docker compose' found."
             exit 1
           fi
-          echo "📦 Using: \$DOCKER_COMPOSE"
+          echo "📦 Using: $DOCKER_COMPOSE"
 
           # Create SSL directory and generate self-signed cert if needed
           mkdir -p ssl
@@ -100,15 +100,15 @@ jobs:
 
           # Pull latest images
           echo "📦 Pulling latest Docker images..."
-          \$DOCKER_COMPOSE -f docker-compose.prod.yml.active pull || true
+          $DOCKER_COMPOSE -f docker-compose.prod.yml.active pull || true
 
           # Stop existing services
           echo "🛑 Stopping existing services..."
-          \$DOCKER_COMPOSE -f docker-compose.prod.yml.active down || true
+          $DOCKER_COMPOSE -f docker-compose.prod.yml.active down || true
 
           # Build and start services
           echo "🏗️  Building and starting services..."
-          \$DOCKER_COMPOSE -f docker-compose.prod.yml.active up -d --build
+          $DOCKER_COMPOSE -f docker-compose.prod.yml.active up -d --build
 
           # Wait for services to be ready
           echo "⏳ Waiting for services to be ready..."
@@ -124,7 +124,7 @@ jobs:
 
           # Display status
           echo "📊 Service status:"
-          \$DOCKER_COMPOSE -f docker-compose.prod.yml.active ps
+          $DOCKER_COMPOSE -f docker-compose.prod.yml.active ps
         ENDSSH
 
     - name: Verify deployment

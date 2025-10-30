@@ -4,7 +4,7 @@
 
 api:
   # Single endpoint mode (simple configuration)
-  endpoint: https://ecm.kyleaskine.com/api/v1
+  endpoint: https://your-server.example.com/api/v1
   # endpoint: http://localhost:8000/api/v1  # Uncomment for local testing
 
   # Multiple endpoints mode (submit to all servers simultaneously)
@@ -12,7 +12,7 @@ api:
   # endpoints:
   #   - url: http://localhost:8000/api/v1
   #     name: local-dev
-  #   - url: https://ecm.kyleaskine.com/api/v1
+  #   - url: https://your-server.example.com/api/v1
   #     name: production
 
 client:

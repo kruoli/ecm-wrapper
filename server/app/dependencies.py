@@ -7,6 +7,7 @@ Provides reusable dependencies for:
 - Configuration access
 """
 
+import secrets
 from fastapi import Header, HTTPException, status, Depends
 from .config import get_settings
 
@@ -17,6 +18,7 @@ async def verify_admin_key(x_admin_key: str = Header(None)):
     Dependency to verify admin API key from header.
 
     Requires X-Admin-Key header to match ADMIN_API_KEY environment variable.
+    Uses constant-time comparison to prevent timing attacks.
 
     Raises:
         HTTPException: 401 if key missing or invalid
@@ -27,7 +29,7 @@ async def verify_admin_key(x_admin_key: str = Header(None)):
             detail="Admin API key required. Provide X-Admin-Key header."
         )
 
-    if x_admin_key != settings.admin_api_key:
+    if not secrets.compare_digest(x_admin_key, settings.admin_api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin API key"

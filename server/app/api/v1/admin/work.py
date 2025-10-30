@@ -2,15 +2,20 @@
 Work assignment management routes for admin.
 """
 from typing import Optional
+from datetime import datetime, timedelta
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ....database import get_db
-from ....dependencies import verify_admin_key
+from ....dependencies import verify_admin_key, get_composite_service
+from ....services.composites import CompositeService
+from ....schemas.work import ManualReservationRequest, ManualReservationResponse
 from ....utils.serializers import serialize_work_assignment
 from ....utils.query_helpers import get_recent_work_assignments, get_expired_work_assignments
 from ....utils.transactions import transaction_scope
+from ....utils.errors import get_or_404
 
 router = APIRouter()
 
@@ -103,4 +108,135 @@ async def cleanup_expired_work(
     return {
         "cleaned_up": len(expired_assignments),
         "status": "completed"
+    }
+
+
+@router.post("/work/reserve", response_model=ManualReservationResponse)
+async def reserve_composite(
+    request: ManualReservationRequest,
+    db: Session = Depends(get_db),
+    composite_service: CompositeService = Depends(get_composite_service),
+    _admin: bool = Depends(verify_admin_key)
+):
+    """
+    Manually reserve a composite for external work (e.g., NFS at OPN).
+
+    This creates a work assignment that blocks the composite from being assigned
+    to ECM clients. Use this when running NFS or other external factorization work.
+
+    Args:
+        request: Reservation request with composite identifier and metadata
+        db: Database session
+        composite_service: Composite service for lookups
+
+    Returns:
+        ManualReservationResponse with reservation details
+    """
+    from ....models.work_assignments import WorkAssignment
+
+    # Look up the composite
+    composite = get_or_404(
+        composite_service.find_composite_by_identifier(db, request.composite_identifier),
+        "Composite",
+        request.composite_identifier
+    )
+
+    # Check if already reserved
+    existing_assignment = db.query(WorkAssignment).filter(
+        WorkAssignment.composite_id == composite.id,
+        WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+    ).first()
+
+    if existing_assignment:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Composite already has active work assignment (ID: {existing_assignment.id}, "
+                   f"method: {existing_assignment.method}, client: {existing_assignment.client_id})"
+        )
+
+    # Create the reservation (work assignment)
+    work_id = str(uuid.uuid4())
+    expires_at = datetime.utcnow() + timedelta(hours=request.duration_hours)
+
+    with transaction_scope(db, "reserve_composite"):
+        assignment = WorkAssignment(
+            id=work_id,
+            composite_id=composite.id,
+            client_id=request.client_id,
+            method=request.method,
+            b1=0,  # Not applicable for NFS
+            b2=None,
+            curves_requested=0,  # Not applicable for NFS
+            expires_at=expires_at,
+            status='running',  # Mark as running to indicate active work
+            assigned_at=datetime.utcnow()
+        )
+        db.add(assignment)
+
+    return ManualReservationResponse(
+        work_id=work_id,
+        composite_id=composite.id,
+        composite_number=composite.number,
+        client_id=request.client_id,
+        method=request.method,
+        expires_at=expires_at,
+        status='running'
+    )
+
+
+@router.post("/work/release/{work_id}")
+async def release_reservation(
+    work_id: str,
+    reason: str = "completed",
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
+):
+    """
+    Release a manual reservation.
+
+    Call this when NFS or other external work is complete (or cancelled).
+    Marks the work assignment as completed, making the composite available
+    for ECM work assignment again.
+
+    Args:
+        work_id: Work assignment ID to release
+        reason: Reason for release (e.g., 'completed', 'cancelled', 'factored')
+        db: Database session
+
+    Returns:
+        Status of the release operation
+    """
+    from ....models.work_assignments import WorkAssignment
+
+    assignment = db.query(WorkAssignment).filter(
+        WorkAssignment.id == work_id
+    ).first()
+
+    if not assignment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Work assignment not found"
+        )
+
+    previous_status = assignment.status
+
+    # Determine final status based on reason
+    if reason in ['completed', 'factored']:
+        new_status = 'completed'
+    elif reason in ['cancelled', 'timeout']:
+        new_status = 'failed'
+    else:
+        new_status = 'completed'  # Default to completed
+
+    with transaction_scope(db, "release_reservation"):
+        assignment.status = new_status
+        assignment.completed_at = datetime.utcnow()
+
+    return {
+        "work_id": work_id,
+        "composite_id": assignment.composite_id,
+        "previous_status": previous_status,
+        "new_status": new_status,
+        "reason": reason,
+        "status": "released"
     }

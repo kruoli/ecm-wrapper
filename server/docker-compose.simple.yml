@@ -1,5 +1,9 @@
 version: '3.8'
 
+# SECURITY: This configuration uses environment variables for credentials.
+# Create a .env file (see .env.example) with strong, randomly generated passwords.
+# DO NOT use default or weak passwords in production environments.
+
 services:
   postgres:
     image: postgres:15

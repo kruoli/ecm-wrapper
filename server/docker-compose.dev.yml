@@ -7,6 +7,7 @@ services:
     environment:
       POSTGRES_DB: ecm_distributed
       POSTGRES_USER: ecm_user
+      # WARNING: DEVELOPMENT ONLY - Change this password for production!
       POSTGRES_PASSWORD: ecm_password
     ports:
       - "5434:5432"

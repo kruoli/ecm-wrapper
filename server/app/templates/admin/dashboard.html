@@ -116,6 +116,7 @@
                     <th>Progress</th>
                     <th>Status</th>
                     <th>Expires</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -143,6 +144,10 @@
                     </td>
                     <td><span class="{{ status_class }}">{{ esc(work.status) }}</span></td>
                     <td>{{ esc(time_str) }}</td>
+                    <td>
+                        <button class="btn" onclick="expireWork('{{ work.id }}')" style="background: #ffc107; font-size: 0.85em; padding: 4px 8px; margin-right: 5px;">Expire</button>
+                        <button class="btn" onclick="cancelWork('{{ work.id }}')" style="background: #dc3545; font-size: 0.85em; padding: 4px 8px;">Cancel</button>
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -535,6 +540,44 @@
                 })
                 .catch(error => {
                     alert('Error deleting curve: ' + error);
+                });
+        }
+    }
+
+    function expireWork(workId) {
+        if (confirm(`Expire this work assignment?\n\nWork ID: ${workId}\n\nThis will:\n- Mark the work as "timeout"\n- Make it available for reassignment\n\nAre you sure?`)) {
+            // Use the cleanup endpoint which marks work as timeout
+            // We'll need to call the cancel endpoint with status 'timeout'
+            fetchWithAuth(`/api/v1/admin/work/assignments/${workId}?reason=admin_timeout`, {method: 'DELETE'})
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'cancelled') {
+                        alert(`Work assignment expired successfully.\n\nWork ID: ${workId}`);
+                        refreshPage();
+                    } else {
+                        alert('Error expiring work: ' + JSON.stringify(data));
+                    }
+                })
+                .catch(error => {
+                    alert('Error expiring work: ' + error);
+                });
+        }
+    }
+
+    function cancelWork(workId) {
+        if (confirm(`CANCEL this work assignment?\n\nWork ID: ${workId}\n\nThis will:\n- Mark the work as "failed"\n- Make it available for reassignment\n\nThis action cannot be undone!`)) {
+            fetchWithAuth(`/api/v1/admin/work/assignments/${workId}?reason=admin_cancel`, {method: 'DELETE'})
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'cancelled') {
+                        alert(`Work assignment cancelled successfully.\n\nWork ID: ${workId}`);
+                        refreshPage();
+                    } else {
+                        alert('Error cancelling work: ' + JSON.stringify(data));
+                    }
+                })
+                .catch(error => {
+                    alert('Error cancelling work: ' + error);
                 });
         }
     }

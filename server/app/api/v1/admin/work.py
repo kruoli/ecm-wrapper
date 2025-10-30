@@ -66,15 +66,23 @@ async def cancel_work_assignment(
             detail="Work assignment not found"
         )
 
+    # Determine new status based on reason
+    previous_status = assignment.status
+    if "timeout" in reason.lower():
+        new_status = 'timeout'
+    else:
+        new_status = 'failed'
+
     # Cancel the assignment
     with transaction_scope(db, "cancel_work"):
-        assignment.status = 'failed'
+        assignment.status = new_status
 
     return {
         "work_id": work_id,
         "status": "cancelled",
         "reason": reason,
-        "previous_status": assignment.status
+        "new_status": new_status,
+        "previous_status": previous_status
     }
 
 

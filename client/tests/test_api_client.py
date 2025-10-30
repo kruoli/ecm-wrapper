@@ -4,7 +4,12 @@ Tests for APIClient functionality
 """
 import tempfile
 import os
+import sys
 from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from api_client import APIClient
 
 
@@ -56,7 +61,7 @@ def test_build_submission_payload():
     assert payload['results']['execution_time'] == 45.2
 
     print("✓ test_build_submission_payload passed")
-    return True
+    pass  # Test passed
 
 
 def test_build_payload_with_multiple_factors():
@@ -86,7 +91,7 @@ def test_build_payload_with_multiple_factors():
     assert payload['results']['factor_found'] == '13'
 
     print("✓ test_build_payload_with_multiple_factors passed")
-    return True
+    pass  # Test passed
 
 
 def test_save_failed_submission():
@@ -129,7 +134,7 @@ def test_save_failed_submission():
         assert 'failed_at' in saved_data
 
         print("✓ test_save_failed_submission passed")
-        return True
+        pass  # Test passed
 
 
 def test_api_client_initialization():
@@ -145,7 +150,7 @@ def test_api_client_initialization():
     assert api_client.retry_attempts == 5
 
     print("✓ test_api_client_initialization passed")
-    return True
+    pass  # Test passed
 
 
 def test_default_parametrization():
@@ -172,7 +177,7 @@ def test_default_parametrization():
     assert payload['parameters']['parametrization'] == 3
 
     print("✓ test_default_parametrization passed")
-    return True
+    pass  # Test passed
 
 
 def test_integration_with_base_wrapper():
@@ -213,11 +218,10 @@ logging:
             assert wrapper.api_client.retry_attempts == 3
 
             print("✓ test_integration_with_base_wrapper passed")
-            return True
 
     except Exception as e:
         print(f"✗ test_integration_with_base_wrapper failed: {e}")
-        return False
+        pytest.fail("Test failed")
 
 
 def main():

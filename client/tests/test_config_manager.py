@@ -4,7 +4,12 @@ Tests for ConfigManager functionality
 """
 import tempfile
 import os
+import sys
 from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from config_manager import ConfigManager
 
 
@@ -38,7 +43,7 @@ programs:
         assert config['api']['endpoint'] == 'http://localhost:8000', "API endpoint should match"
 
         print("✓ test_load_config_base_only passed")
-        return True
+        pass  # Test passed
     finally:
         os.unlink(config_file)
 
@@ -102,7 +107,7 @@ programs:
         assert config['programs']['gmp_ecm']['path'] == '/home/user/ecm', "ECM path should be overridden"
 
         print("✓ test_load_config_with_local_override passed")
-        return True
+        pass  # Test passed
 
 
 def test_deep_merge():
@@ -137,7 +142,7 @@ def test_deep_merge():
     assert override['a']['b'] == 99, "Original override should be unchanged"
 
     print("✓ test_deep_merge passed")
-    return True
+    pass  # Test passed
 
 
 def test_get_nested_value():
@@ -171,7 +176,7 @@ def test_get_nested_value():
     assert mgr.get_nested_value(config, 'api.nonexistent', None) is None
 
     print("✓ test_get_nested_value passed")
-    return True
+    pass  # Test passed
 
 
 def test_validate_config_structure():
@@ -211,7 +216,7 @@ def test_validate_config_structure():
     ) is False, "Config missing custom key should fail"
 
     print("✓ test_validate_config_structure passed")
-    return True
+    pass  # Test passed
 
 
 def test_file_not_found():
@@ -224,7 +229,7 @@ def test_file_not_found():
     except FileNotFoundError as e:
         assert 'not found' in str(e).lower()
         print("✓ test_file_not_found passed")
-        return True
+        pass  # Test passed
 
 
 def test_integration_with_base_wrapper():
@@ -269,11 +274,10 @@ logging:
             assert wrapper.api_endpoint == "http://localhost:8000", "API endpoint should be set"
 
             print("✓ test_integration_with_base_wrapper passed")
-            return True
 
     except Exception as e:
         print(f"✗ test_integration_with_base_wrapper failed: {e}")
-        return False
+        pytest.fail("Test failed")
 
 
 def main():

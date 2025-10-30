@@ -9,6 +9,11 @@ their product as a "factor". We need to:
 """
 
 import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from parsing_utils import parse_ecm_output_multiple
 
 # Simplified test case based on real GPU ECM output
@@ -68,14 +73,9 @@ def test_sigma_matching():
     print("Validation:")
     print("=" * 80)
 
-    success = True
-
     # Should have exactly 2 factors (the two primes)
-    if len(factors) != 2:
-        print(f"❌ FAIL: Expected 2 factors, got {len(factors)}")
-        success = False
-    else:
-        print(f"✓ Correct number of factors: {len(factors)}")
+    assert len(factors) == 2, f"Expected 2 factors, got {len(factors)}"
+    print(f"✓ Correct number of factors: {len(factors)}")
 
     # Check p1
     p1 = "856395168938929"
@@ -84,16 +84,11 @@ def test_sigma_matching():
     for factor, sigma in factors:
         if factor == p1:
             p1_found = True
-            if sigma == p1_sigma:
-                print(f"✓ Prime p1 has correct sigma: {p1_sigma}")
-            else:
-                print(f"❌ FAIL: Prime p1 has wrong sigma: {sigma} (expected {p1_sigma})")
-                success = False
+            assert sigma == p1_sigma, f"Prime p1 has wrong sigma: {sigma} (expected {p1_sigma})"
+            print(f"✓ Prime p1 has correct sigma: {p1_sigma}")
             break
 
-    if not p1_found:
-        print(f"❌ FAIL: Prime p1 not found in results")
-        success = False
+    assert p1_found, "Prime p1 not found in results"
 
     # Check p2
     p2 = "901149811757719"
@@ -102,37 +97,26 @@ def test_sigma_matching():
     for factor, sigma in factors:
         if factor == p2:
             p2_found = True
-            if sigma == p2_sigma:
-                print(f"✓ Prime p2 has correct sigma: {p2_sigma}")
-            else:
-                print(f"❌ FAIL: Prime p2 has wrong sigma: {sigma} (expected {p2_sigma})")
-                success = False
+            assert sigma == p2_sigma, f"Prime p2 has wrong sigma: {sigma} (expected {p2_sigma})"
+            print(f"✓ Prime p2 has correct sigma: {p2_sigma}")
             break
 
-    if not p2_found:
-        print(f"❌ FAIL: Prime p2 not found in results")
-        success = False
+    assert p2_found, "Prime p2 not found in results"
 
     # Check that composite is NOT present
     composite = "771740345279535829905655342951"
-    composite_found = False
-    for factor, sigma in factors:
-        if factor == composite:
-            composite_found = True
-            print(f"❌ FAIL: Composite {composite} should not be in results")
-            success = False
-            break
-
-    if not composite_found:
-        print(f"✓ Composite correctly filtered out")
+    composite_found = any(factor == composite for factor, sigma in factors)
+    assert not composite_found, f"Composite {composite} should not be in results"
+    print(f"✓ Composite correctly filtered out")
 
     print("\n" + "=" * 80)
-    if success:
-        print("✅ ALL TESTS PASSED")
-        return 0
-    else:
-        print("❌ SOME TESTS FAILED")
-        return 1
+    print("✅ ALL TESTS PASSED")
+    print("=" * 80)
 
 if __name__ == "__main__":
-    sys.exit(test_sigma_matching())
+    try:
+        test_sigma_matching()
+        sys.exit(0)
+    except AssertionError as e:
+        print(f"\n❌ Test failed: {e}")
+        sys.exit(1)

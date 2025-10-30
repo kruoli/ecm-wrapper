@@ -4,7 +4,12 @@ Quick tests for ResidueFileManager functionality
 """
 import tempfile
 import os
+import sys
 from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from residue_manager import ResidueFileManager
 
 def test_parse_metadata():
@@ -29,7 +34,7 @@ def test_parse_metadata():
         assert curve_count == 3, f"Expected 3 curves, got {curve_count}"
 
         print("✓ test_parse_metadata passed")
-        return True
+        pass  # Test passed
     finally:
         os.unlink(test_file)
 
@@ -65,7 +70,6 @@ def test_split_into_chunks():
                     assert 'B1=50000' in content, "Chunk should contain header with B1"
 
             print(f"✓ test_split_into_chunks passed (created {len(chunk_files)} chunks)")
-            return True
     finally:
         os.unlink(test_file)
 
@@ -90,7 +94,7 @@ def test_correlate_factor_to_sigma():
         assert sigma is None, "Should not find sigma for non-factor"
 
         print("✓ test_correlate_factor_to_sigma passed")
-        return True
+        pass  # Test passed
     finally:
         os.unlink(test_file)
 

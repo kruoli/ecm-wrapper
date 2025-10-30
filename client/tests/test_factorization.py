@@ -11,11 +11,11 @@ import sys
 import importlib.util
 from pathlib import Path
 
-# Get the directory containing this test file
-test_dir = Path(__file__).parent
+# Get the parent directory (client/) to import wrappers
+client_dir = Path(__file__).parent.parent
 
 # Import ecm-wrapper.py
-ecm_wrapper_path = test_dir / "ecm-wrapper.py"
+ecm_wrapper_path = client_dir / "ecm-wrapper.py"
 spec = importlib.util.spec_from_file_location("ecm_wrapper", str(ecm_wrapper_path))
 if spec is None or spec.loader is None:
     raise ImportError(f"Failed to load ecm-wrapper.py from {ecm_wrapper_path}")
@@ -25,7 +25,7 @@ spec.loader.exec_module(ecm_module)
 ECMWrapper = ecm_module.ECMWrapper
 
 # Import yafu-wrapper.py
-yafu_wrapper_path = test_dir / "yafu-wrapper.py"
+yafu_wrapper_path = client_dir / "yafu-wrapper.py"
 spec = importlib.util.spec_from_file_location("yafu_wrapper", str(yafu_wrapper_path))
 if spec is None or spec.loader is None:
     raise ImportError(f"Failed to load yafu-wrapper.py from {yafu_wrapper_path}")
@@ -33,6 +33,9 @@ yafu_module = importlib.util.module_from_spec(spec)
 sys.modules["yafu_wrapper"] = yafu_module
 spec.loader.exec_module(yafu_module)
 YAFUWrapper = yafu_module.YAFUWrapper
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(client_dir))
 
 from parsing_utils import parse_yafu_ecm_output, parse_yafu_auto_factors
 
@@ -43,8 +46,10 @@ class TestFactorizationParsing(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Initialize wrappers once for all tests."""
-        cls.ecm = ECMWrapper('client.yaml')
-        cls.yafu = YAFUWrapper('client.yaml')
+        # Use absolute path to config file (one level up from tests/)
+        config_path = client_dir / 'client.yaml'
+        cls.ecm = ECMWrapper(str(config_path))
+        cls.yafu = YAFUWrapper(str(config_path))
 
         # Test composite with known factorization
         cls.test_composite = "595481287174180414621815111912500384480425142428743680084508806931548176009641041122357703"
@@ -129,13 +134,19 @@ class TestFactorizationParsing(unittest.TestCase):
         # Run YAFU ECM with pretest (should find all factors)
         results = self.yafu.run_yafu_ecm(
             composite=self.test_composite,
-            b1=None,  # Use pretest
             method='ecm',
             verbose=False
         )
 
         # Get factors
         factors_found = results.get('factors_found', [])
+
+        # Debug output for YAFU ECM
+        print(f"\nDEBUG YAFU ECM: Command: {' '.join(results.get('cmd', []))}")
+        print(f"DEBUG YAFU ECM: Results keys: {results.keys()}")
+        print(f"DEBUG YAFU ECM: Factors found: {factors_found}")
+        print(f"DEBUG YAFU ECM: Raw output length: {len(results.get('raw_output', ''))}")
+        print(f"DEBUG YAFU ECM: Raw output:\n{results.get('raw_output', '')}")
 
         self.assertGreater(len(factors_found), 0, "YAFU ECM should find at least one factor")
 
@@ -165,6 +176,13 @@ class TestFactorizationParsing(unittest.TestCase):
 
         # Get factors
         factors_found = results.get('factors_found', [])
+
+        # Debug output
+        print(f"\nDEBUG: Results keys: {results.keys()}")
+        print(f"DEBUG: Factors found: {factors_found}")
+        print(f"DEBUG: Raw output length: {len(results.get('raw_output', ''))}")
+        if len(results.get('raw_output', '')) < 500:
+            print(f"DEBUG: Raw output: {results.get('raw_output', '')}")
 
         self.assertGreater(len(factors_found), 0, "YAFU auto should find factors")
 

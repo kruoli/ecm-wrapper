@@ -34,7 +34,7 @@
 
 {% block body %}
 <div class="header">
-    <div style="display: flex; justify-content: space-between; align-items: center;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
         <div>
             <h1>🔧 ECM Coordination Dashboard</h1>
             <p>Distributed ECM coordination middleware - work assignment and t-level progress tracking</p>
@@ -73,7 +73,7 @@
 <div class="section">
     <div class="section-header">📊 ECM Progress Overview</div>
     <div class="section-content">
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 20px;">
             <div>
                 <strong>Work Queue Status:</strong>
                 {% set queue_util = summary_stats.health.work_queue_utilization %}
@@ -104,54 +104,56 @@
     <div class="section-header">⚡ Active Work Assignments</div>
     <div class="section-content">
         {% if recent_work %}
-        <table>
-            <thead>
-                <tr>
-                    <th>Work ID</th>
-                    <th>Client</th>
-                    <th>Composite (digits)</th>
-                    <th>T-Level Target</th>
-                    <th>Method</th>
-                    <th>Parameters</th>
-                    <th>Progress</th>
-                    <th>Status</th>
-                    <th>Expires</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for work in recent_work %}
-                {% set progress_pct = (work.curves_completed / work.curves_requested * 100) if work.curves_requested > 0 else 0 %}
-                {% set status_class = format_work_status(work.status) %}
-                {% set composite_display = work.composite.number[:20] + '...' if work.composite.number|length > 20 else work.composite.number %}
-                {% set time_str = format_time(work.expires_at, now) %}
-                {% set current_t = work.composite.current_t_level or 0.0 %}
-                {% set target_t = work.composite.target_t_level or 0.0 %}
-                <tr>
-                    <td><span class="number">{{ work.id[:8] }}...</span></td>
-                    <td>{{ esc(work.client_id) }}</td>
-                    <td><span class="number">{{ esc(composite_display) }}</span> ({{ work.composite.digit_length }})</td>
-                    <td>
-                        <span style="font-size: 0.9em;">📊 t{{ current_t|round(1) }}→t{{ target_t|round(1) }}</span>
-                    </td>
-                    <td>{{ esc(work.method.upper()) }}</td>
-                    <td>B1={{ "{:,}".format(work.b1) }}{% if work.b2 %}, B2={{ "{:,}".format(work.b2) }}{% endif %}</td>
-                    <td>
-                        <div class="progress">
-                            <div class="progress-bar" style="width: {{ progress_pct }}%;"></div>
-                        </div>
-                        {{ work.curves_completed }}/{{ work.curves_requested }}
-                    </td>
-                    <td><span class="{{ status_class }}">{{ esc(work.status) }}</span></td>
-                    <td>{{ esc(time_str) }}</td>
-                    <td>
-                        <button class="btn" onclick="expireWork('{{ work.id }}')" style="background: #ffc107; font-size: 0.85em; padding: 4px 8px; margin-right: 5px;">Expire</button>
-                        <button class="btn" onclick="cancelWork('{{ work.id }}')" style="background: #dc3545; font-size: 0.85em; padding: 4px 8px;">Cancel</button>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Work ID</th>
+                        <th>Client</th>
+                        <th>Composite (digits)</th>
+                        <th>T-Level Target</th>
+                        <th>Method</th>
+                        <th>Parameters</th>
+                        <th>Progress</th>
+                        <th>Status</th>
+                        <th>Expires</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for work in recent_work %}
+                    {% set progress_pct = (work.curves_completed / work.curves_requested * 100) if work.curves_requested > 0 else 0 %}
+                    {% set status_class = format_work_status(work.status) %}
+                    {% set composite_display = work.composite.number[:20] + '...' if work.composite.number|length > 20 else work.composite.number %}
+                    {% set time_str = format_time(work.expires_at, now) %}
+                    {% set current_t = work.composite.current_t_level or 0.0 %}
+                    {% set target_t = work.composite.target_t_level or 0.0 %}
+                    <tr>
+                        <td><span class="number">{{ work.id[:8] }}...</span></td>
+                        <td>{{ esc(work.client_id) }}</td>
+                        <td><span class="number">{{ esc(composite_display) }}</span> ({{ work.composite.digit_length }})</td>
+                        <td>
+                            <span style="font-size: 0.9em;">📊 t{{ current_t|round(1) }}→t{{ target_t|round(1) }}</span>
+                        </td>
+                        <td>{{ esc(work.method.upper()) }}</td>
+                        <td>B1={{ "{:,}".format(work.b1) }}{% if work.b2 %}, B2={{ "{:,}".format(work.b2) }}{% endif %}</td>
+                        <td>
+                            <div class="progress">
+                                <div class="progress-bar" style="width: {{ progress_pct }}%;"></div>
+                            </div>
+                            {{ work.curves_completed }}/{{ work.curves_requested }}
+                        </td>
+                        <td><span class="{{ status_class }}">{{ esc(work.status) }}</span></td>
+                        <td>{{ esc(time_str) }}</td>
+                        <td>
+                            <button class="btn" onclick="expireWork('{{ work.id }}')" style="background: #ffc107; font-size: 0.85em; padding: 4px 8px; margin-right: 5px;">Expire</button>
+                            <button class="btn" onclick="cancelWork('{{ work.id }}')" style="background: #dc3545; font-size: 0.85em; padding: 4px 8px;">Cancel</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
         {% else %}
         <p>No active work assignments</p>
         {% endif %}
@@ -164,74 +166,78 @@
         <p style="margin-bottom: 15px; color: #666; font-style: italic;">
             Showing unfactored composites sorted by completion percentage (closest to target t-level first)
         </p>
-        <table>
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Number</th>
-                    <th>Digits</th>
-                    <th>T-Level Progress</th>
-                    <th>Priority</th>
-                    <th>Created</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for composite in composites %}
-                {% set composite_display = composite.number[:30] + '...' if composite.number|length > 30 else composite.number %}
-                {% set created_str = composite.created_at.strftime('%Y-%m-%d %H:%M') if composite.created_at else 'Unknown' %}
-                {% set t_data = calc_t_progress(composite.current_t_level, composite.target_t_level) %}
-                <tr>
-                    <td>{{ composite.id }}</td>
-                    <td><span class="number">{{ esc(composite_display) }}</span></td>
-                    <td>{{ composite.digit_length }}</td>
-                    <td>
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <div class="progress" style="width: 100px;">
-                                <div class="progress-bar" style="width: {{ [t_data.progress_pct, 100]|min }}%; background-color: {{ t_data.progress_color }};"></div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Number</th>
+                        <th>Digits</th>
+                        <th>T-Level Progress</th>
+                        <th>Priority</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for composite in composites %}
+                    {% set composite_display = composite.number[:30] + '...' if composite.number|length > 30 else composite.number %}
+                    {% set created_str = composite.created_at.strftime('%Y-%m-%d %H:%M') if composite.created_at else 'Unknown' %}
+                    {% set t_data = calc_t_progress(composite.current_t_level, composite.target_t_level) %}
+                    <tr>
+                        <td>{{ composite.id }}</td>
+                        <td><span class="number">{{ esc(composite_display) }}</span></td>
+                        <td>{{ composite.digit_length }}</td>
+                        <td>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <div class="progress" style="width: 100px;">
+                                    <div class="progress-bar" style="width: {{ [t_data.progress_pct, 100]|min }}%; background-color: {{ t_data.progress_color }};"></div>
+                                </div>
+                                <span style="font-size: 0.85em; font-weight: bold; color: {{ t_data.progress_color }};">
+                                    t{{ t_data.current_t|round(1) }} / t{{ t_data.target_t|round(1) }} ({{ t_data.progress_pct|round(1) }}%)
+                                </span>
                             </div>
-                            <span style="font-size: 0.85em; font-weight: bold; color: {{ t_data.progress_color }};">
-                                t{{ t_data.current_t|round(1) }} / t{{ t_data.target_t|round(1) }} ({{ t_data.progress_pct|round(1) }}%)
-                            </span>
-                        </div>
-                    </td>
-                    <td>
-                        <span style="font-weight: bold; color: {{ '#198754' if composite.priority > 0 else '#666' }};">{{ composite.priority }}</span>
-                    </td>
-                    <td>{{ esc(created_str) }}</td>
-                    <td>
-                        <button class="btn" onclick="viewDetails({{ composite.id }})" style="margin-right: 5px;">Details</button>
-                        <button class="btn" onclick="removeComposite({{ composite.id }})" style="background: #dc3545;">Remove</button>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                        </td>
+                        <td>
+                            <span style="font-weight: bold; color: {{ '#198754' if composite.priority > 0 else '#666' }};">{{ composite.priority }}</span>
+                        </td>
+                        <td>{{ esc(created_str) }}</td>
+                        <td>
+                            <button class="btn" onclick="viewDetails({{ composite.id }})" style="margin-right: 5px;">Details</button>
+                            <button class="btn" onclick="removeComposite({{ composite.id }})" style="background: #dc3545;">Remove</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 
 <div class="section">
     <div class="section-header">👥 Recent Clients</div>
     <div class="section-content">
-        <table>
-            <thead>
-                <tr>
-                    <th>Client ID</th>
-                    <th>Work Count</th>
-                    <th>Last Seen</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for client_info in recent_clients %}
-                {% set last_seen_str = client_info.last_seen.strftime('%Y-%m-%d %H:%M') if client_info.last_seen else 'Unknown' %}
-                <tr>
-                    <td>{{ esc(client_info.client_id) }}</td>
-                    <td>{{ client_info.work_count }}</td>
-                    <td>{{ esc(last_seen_str) }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Client ID</th>
+                        <th>Work Count</th>
+                        <th>Last Seen</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for client_info in recent_clients %}
+                    {% set last_seen_str = client_info.last_seen.strftime('%Y-%m-%d %H:%M') if client_info.last_seen else 'Unknown' %}
+                    <tr>
+                        <td>{{ esc(client_info.client_id) }}</td>
+                        <td>{{ client_info.work_count }}</td>
+                        <td>{{ esc(last_seen_str) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 
@@ -239,26 +245,28 @@
     <div class="section-header">🎯 Recent Factors Found</div>
     <div class="section-content">
         {% if recent_factors %}
-        <table>
-            <thead>
-                <tr>
-                    <th>Factor</th>
-                    <th>Composite</th>
-                    <th>Found</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for factor in recent_factors %}
-                {% set composite_display = factor.composite.number[:30] + '...' if factor.composite.number|length > 30 else factor.composite.number %}
-                {% set found_str = factor.created_at.strftime('%Y-%m-%d %H:%M') if factor.created_at else 'Unknown' %}
-                <tr>
-                    <td><span class="number">{{ esc(factor.factor) }}</span></td>
-                    <td><span class="number">{{ esc(composite_display) }}</span></td>
-                    <td>{{ esc(found_str) }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Factor</th>
+                        <th>Composite</th>
+                        <th>Found</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for factor in recent_factors %}
+                    {% set composite_display = factor.composite.number[:30] + '...' if factor.composite.number|length > 30 else factor.composite.number %}
+                    {% set found_str = factor.created_at.strftime('%Y-%m-%d %H:%M') if factor.created_at else 'Unknown' %}
+                    <tr>
+                        <td><span class="number">{{ esc(factor.factor) }}</span></td>
+                        <td><span class="number">{{ esc(composite_display) }}</span></td>
+                        <td>{{ esc(found_str) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
         {% else %}
         <p>No factors found recently</p>
         {% endif %}
@@ -269,85 +277,87 @@
     <div class="section-header">📊 Recent Curves (ECM Attempts)</div>
     <div class="section-content">
         {% if recent_attempts %}
-        <table>
-            <thead>
-                <tr>
-                    <th>Composite</th>
-                    <th>Bits</th>
-                    <th>Digits</th>
-                    <th>T-Level Progress</th>
-                    <th>Method</th>
-                    <th>B1</th>
-                    <th>Curves</th>
-                    <th>Factor Found</th>
-                    <th>Client</th>
-                    <th>Time</th>
-                    <th>Submitted</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for attempt in recent_attempts %}
-                {% set comp = db.query(Composite).filter(Composite.id == attempt.composite_id).first() %}
-                {% set comp_display = (comp.number[:30] + '...') if (comp and comp.number|length > 30) else (comp.number if comp else 'Unknown') %}
-                {% set t_data = calc_t_progress(comp.current_t_level, comp.target_t_level) if comp else None %}
-                {% set comp_digits = comp.current_composite|length if comp and comp.current_composite else 0 %}
-                {# Approximate bits from digits: bits ≈ digits × log2(10) ≈ digits × 3.322 #}
-                {% set comp_bits = (comp_digits * 3.322)|int if comp_digits > 0 else 0 %}
-                <tr>
-                    <td class="number">
-                        {% if comp %}
-                        <a href="javascript:void(0)" onclick="viewDetails({{ comp.id }})" style="color: inherit; text-decoration: none; cursor: pointer;">
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Composite</th>
+                        <th>Bits</th>
+                        <th>Digits</th>
+                        <th>T-Level Progress</th>
+                        <th>Method</th>
+                        <th>B1</th>
+                        <th>Curves</th>
+                        <th>Factor Found</th>
+                        <th>Client</th>
+                        <th>Time</th>
+                        <th>Submitted</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for attempt in recent_attempts %}
+                    {% set comp = db.query(Composite).filter(Composite.id == attempt.composite_id).first() %}
+                    {% set comp_display = (comp.number[:30] + '...') if (comp and comp.number|length > 30) else (comp.number if comp else 'Unknown') %}
+                    {% set t_data = calc_t_progress(comp.current_t_level, comp.target_t_level) if comp else None %}
+                    {% set comp_digits = comp.current_composite|length if comp and comp.current_composite else 0 %}
+                    {# Approximate bits from digits: bits ≈ digits × log2(10) ≈ digits × 3.322 #}
+                    {% set comp_bits = (comp_digits * 3.322)|int if comp_digits > 0 else 0 %}
+                    <tr>
+                        <td class="number">
+                            {% if comp %}
+                            <a href="javascript:void(0)" onclick="viewDetails({{ comp.id }})" style="color: inherit; text-decoration: none; cursor: pointer;">
+                                {{ comp_display }}
+                            </a>
+                            {% else %}
                             {{ comp_display }}
-                        </a>
-                        {% else %}
-                        {{ comp_display }}
-                        {% endif %}
-                    </td>
-                    <td>{{ comp_bits if comp_bits > 0 else 'N/A' }}</td>
-                    <td>{{ comp_digits if comp_digits > 0 else 'N/A' }}</td>
-                    <td>
-                        {% if t_data and t_data.target_t > 0 %}
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <div class="progress" style="width: 80px;">
-                                <div class="progress-bar" style="width: {{ [t_data.progress_pct, 100]|min }}%; background-color: {{ t_data.progress_color }}"></div>
+                            {% endif %}
+                        </td>
+                        <td>{{ comp_bits if comp_bits > 0 else 'N/A' }}</td>
+                        <td>{{ comp_digits if comp_digits > 0 else 'N/A' }}</td>
+                        <td>
+                            {% if t_data and t_data.target_t > 0 %}
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <div class="progress" style="width: 80px;">
+                                    <div class="progress-bar" style="width: {{ [t_data.progress_pct, 100]|min }}%; background-color: {{ t_data.progress_color }}"></div>
+                                </div>
+                                <span class="small-text" style="font-weight: bold; color: {{ t_data.progress_color }}">
+                                    t{{ t_data.current_t|round(1) }}/t{{ t_data.target_t|round(1) }}
+                                </span>
                             </div>
-                            <span class="small-text" style="font-weight: bold; color: {{ t_data.progress_color }}">
-                                t{{ t_data.current_t|round(1) }}/t{{ t_data.target_t|round(1) }}
+                            {% else %}
+                            <span style="color: #999;">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ attempt.method }}</td>
+                        <td>{{ attempt.b1 if attempt.b1 else 'N/A' }}</td>
+                        <td>{{ attempt.curves_completed }}</td>
+                        <td>
+                            {% if attempt.factor_found %}
+                            {# Check if multiple factors were found by this attempt #}
+                            {% set attempt_factors = db.query(Factor).filter(Factor.found_by_attempt_id == attempt.id).all() %}
+                            {% if attempt_factors|length > 1 %}
+                            <span class="factor" style="cursor: help;" title="Click composite to see all {{ attempt_factors|length }} factors">
+                                {{ attempt.factor_found[:20] }}... <strong style="color: #2ecc71;">[+{{ attempt_factors|length - 1 }} more]</strong>
                             </span>
-                        </div>
-                        {% else %}
-                        <span style="color: #999;">N/A</span>
-                        {% endif %}
-                    </td>
-                    <td>{{ attempt.method }}</td>
-                    <td>{{ attempt.b1 if attempt.b1 else 'N/A' }}</td>
-                    <td>{{ attempt.curves_completed }}</td>
-                    <td>
-                        {% if attempt.factor_found %}
-                        {# Check if multiple factors were found by this attempt #}
-                        {% set attempt_factors = db.query(Factor).filter(Factor.found_by_attempt_id == attempt.id).all() %}
-                        {% if attempt_factors|length > 1 %}
-                        <span class="factor" style="cursor: help;" title="Click composite to see all {{ attempt_factors|length }} factors">
-                            {{ attempt.factor_found[:20] }}... <strong style="color: #2ecc71;">[+{{ attempt_factors|length - 1 }} more]</strong>
-                        </span>
-                        {% else %}
-                        <span class="factor">{{ attempt.factor_found }}</span>
-                        {% endif %}
-                        {% else %}
-                        None
-                        {% endif %}
-                    </td>
-                    <td class="small-text">{{ attempt.client_id if attempt.client_id else 'Unknown' }}</td>
-                    <td>{{ (attempt.execution_time_seconds|round(1) if attempt.execution_time_seconds is not none else 'N/A') }}{{ 's' if attempt.execution_time_seconds is not none else '' }}</td>
-                    <td class="small-text">{{ attempt.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-                    <td>
-                        <button class="btn" onclick="deleteCurve({{ attempt.id }}, {{ comp.id if comp else 'null' }})" style="background: #dc3545; font-size: 0.85em; padding: 4px 8px;">Delete</button>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                            {% else %}
+                            <span class="factor">{{ attempt.factor_found }}</span>
+                            {% endif %}
+                            {% else %}
+                            None
+                            {% endif %}
+                        </td>
+                        <td class="small-text">{{ attempt.client_id if attempt.client_id else 'Unknown' }}</td>
+                        <td>{{ (attempt.execution_time_seconds|round(1) if attempt.execution_time_seconds is not none else 'N/A') }}{{ 's' if attempt.execution_time_seconds is not none else '' }}</td>
+                        <td class="small-text">{{ attempt.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td>
+                            <button class="btn" onclick="deleteCurve({{ attempt.id }}, {{ comp.id if comp else 'null' }})" style="background: #dc3545; font-size: 0.85em; padding: 4px 8px;">Delete</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
         {% else %}
         <p>No recent curves found</p>
         {% endif %}

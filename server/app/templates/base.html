@@ -291,6 +291,136 @@
             margin-top: 15px;
         }
 
+        /* Table Wrapper for Mobile Scrolling */
+        .table-wrapper {
+            overflow-x: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .table-wrapper table {
+            margin-bottom: 0;
+        }
+
+        /* Mobile Responsive Styles */
+        @media (max-width: 768px) {
+            /* Reduce body margin on mobile */
+            body {
+                margin: 10px;
+            }
+
+            /* Container adjustments */
+            .container {
+                padding: 0 10px;
+            }
+
+            /* Header sizing */
+            h1 {
+                font-size: 1.5em;
+            }
+
+            h2 {
+                font-size: 1.3em;
+            }
+
+            h3 {
+                font-size: 1.1em;
+            }
+
+            /* Stat cards */
+            .stat-number {
+                font-size: 1.8em;
+            }
+
+            .stat-label {
+                font-size: 0.9em;
+            }
+
+            /* Buttons - larger for touch */
+            .btn {
+                font-size: 14px;
+                padding: 10px 14px;
+                min-height: 44px;
+            }
+
+            /* Progress bars - smaller on mobile */
+            .progress {
+                width: 60px;
+                height: 16px;
+            }
+
+            /* Tables - allow horizontal scroll */
+            table {
+                font-size: 0.85em;
+            }
+
+            table th,
+            table td {
+                padding: 8px 6px;
+            }
+
+            /* Stats grid - single column on mobile */
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            /* Card layout */
+            .card {
+                margin-bottom: 15px;
+            }
+
+            .card h3 {
+                font-size: 1em;
+            }
+
+            /* Status badges */
+            .status-badge {
+                font-size: 0.75em;
+                padding: 3px 6px;
+            }
+
+            /* Number displays */
+            .number {
+                font-size: 0.8em;
+                padding: 2px 4px;
+            }
+
+            /* Search box */
+            .search-box input {
+                max-width: 100%;
+            }
+        }
+
+        /* Extra small devices */
+        @media (max-width: 480px) {
+            body {
+                margin: 5px;
+            }
+
+            h1 {
+                font-size: 1.3em;
+            }
+
+            .stat-number {
+                font-size: 1.5em;
+            }
+
+            table {
+                font-size: 0.75em;
+            }
+
+            table th,
+            table td {
+                padding: 6px 4px;
+            }
+
+            .btn {
+                font-size: 13px;
+                padding: 8px 12px;
+            }
+        }
+
         {% block extra_styles %}{% endblock %}
     </style>
     {% block extra_head %}{% endblock %}

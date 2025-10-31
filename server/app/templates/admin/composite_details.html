@@ -86,6 +86,7 @@
         display: flex;
         gap: 10px;
         align-items: center;
+        flex-wrap: wrap;
     }
 </style>
 {% endblock %}
@@ -151,92 +152,98 @@
     {% if active_work %}
     <div class="card">
         <h2>Active Work Assignments</h2>
-        <table>
-            <tr>
-                <th>Client ID</th>
-                <th>Method</th>
-                <th>B1</th>
-                <th>B2</th>
-                <th>Curves Requested</th>
-                <th>Status</th>
-                <th>Expires</th>
-            </tr>
-            {% for work in active_work %}
-            <tr>
-                <td>{{ esc(work.client_id) }}</td>
-                <td>{{ esc(work.method) }}</td>
-                <td>{{ "{:,}".format(work.b1) }}</td>
-                <td>{{ "{:,}".format(work.b2) }}</td>
-                <td>{{ work.curves_requested }}</td>
-                <td>{{ esc(work.status) }}</td>
-                <td>{{ esc(work.expires_at) }}</td>
-            </tr>
-            {% endfor %}
-        </table>
+        <div class="table-wrapper">
+            <table>
+                <tr>
+                    <th>Client ID</th>
+                    <th>Method</th>
+                    <th>B1</th>
+                    <th>B2</th>
+                    <th>Curves Requested</th>
+                    <th>Status</th>
+                    <th>Expires</th>
+                </tr>
+                {% for work in active_work %}
+                <tr>
+                    <td>{{ esc(work.client_id) }}</td>
+                    <td>{{ esc(work.method) }}</td>
+                    <td>{{ "{:,}".format(work.b1) }}</td>
+                    <td>{{ "{:,}".format(work.b2) }}</td>
+                    <td>{{ work.curves_requested }}</td>
+                    <td>{{ esc(work.status) }}</td>
+                    <td>{{ esc(work.expires_at) }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
     </div>
     {% endif %}
 
     {% if factors_with_group_orders %}
     <div class="card">
         <h2>Factors with Elliptic Curve Group Order Data</h2>
-        <table>
-            <tr>
-                <th>Factor</th>
-                <th>Sigma</th>
-                <th>Group Order</th>
-                <th>Group Order Factorization</th>
-            </tr>
-            {% for f in factors_with_group_orders %}
-            <tr>
-                <td class="number-display">{{ esc(f.factor) }}</td>
-                <td>{{ "{:,}".format(f.sigma) if f.sigma else "N/A" }}</td>
-                <td class="number-display">{{ esc(f.group_order) if f.group_order else "N/A" }}</td>
-                <td class="number-display">{{ esc(f.group_order_factorization) if f.group_order_factorization else "N/A" }}</td>
-            </tr>
-            {% endfor %}
-        </table>
+        <div class="table-wrapper">
+            <table>
+                <tr>
+                    <th>Factor</th>
+                    <th>Sigma</th>
+                    <th>Group Order</th>
+                    <th>Group Order Factorization</th>
+                </tr>
+                {% for f in factors_with_group_orders %}
+                <tr>
+                    <td class="number-display">{{ esc(f.factor) }}</td>
+                    <td>{{ "{:,}".format(f.sigma) if f.sigma else "N/A" }}</td>
+                    <td class="number-display">{{ esc(f.group_order) if f.group_order else "N/A" }}</td>
+                    <td class="number-display">{{ esc(f.group_order_factorization) if f.group_order_factorization else "N/A" }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
     </div>
     {% endif %}
 
     <div class="card">
         <h2>Recent ECM Attempts</h2>
         {% if recent_attempts %}
-        <table>
-            <tr>
-                <th>Method</th>
-                <th>B1</th>
-                <th>B2</th>
-                <th>Curves Completed</th>
-                <th>Factor Found</th>
-                <th>Client</th>
-                <th>Submitted</th>
-            </tr>
-            {% for attempt in recent_attempts %}
-            <tr>
-                <td>{{ esc(attempt.method) }}</td>
-                <td>{{ "{:,}".format(attempt.b1) }}</td>
-                <td>{{ "{:,}".format(attempt.b2) }}</td>
-                <td>{{ "{:,}".format(attempt.curves_completed) }}</td>
-                <td>
-                    {% if attempt.factor_found %}
-                    {# Check if multiple factors were found by this attempt #}
-                    {% set attempt_factors = db.query(Factor).filter(Factor.found_by_attempt_id == attempt.id).all() %}
-                    {% if attempt_factors|length > 1 %}
-                    <span style="cursor: help;" title="This attempt found {{ attempt_factors|length }} factors total">
-                        {{ esc(attempt.factor_found[:30]) }}... <strong style="color: #2ecc71;">[+{{ attempt_factors|length - 1 }} more]</strong>
-                    </span>
-                    {% else %}
-                    {{ esc(attempt.factor_found) }}
-                    {% endif %}
-                    {% else %}
-                    None
-                    {% endif %}
-                </td>
-                <td>{{ esc(attempt.client_id) }}</td>
-                <td>{{ esc(attempt.created_at) }}</td>
-            </tr>
-            {% endfor %}
-        </table>
+        <div class="table-wrapper">
+            <table>
+                <tr>
+                    <th>Method</th>
+                    <th>B1</th>
+                    <th>B2</th>
+                    <th>Curves Completed</th>
+                    <th>Factor Found</th>
+                    <th>Client</th>
+                    <th>Submitted</th>
+                </tr>
+                {% for attempt in recent_attempts %}
+                <tr>
+                    <td>{{ esc(attempt.method) }}</td>
+                    <td>{{ "{:,}".format(attempt.b1) }}</td>
+                    <td>{{ "{:,}".format(attempt.b2) }}</td>
+                    <td>{{ "{:,}".format(attempt.curves_completed) }}</td>
+                    <td>
+                        {% if attempt.factor_found %}
+                        {# Check if multiple factors were found by this attempt #}
+                        {% set attempt_factors = db.query(Factor).filter(Factor.found_by_attempt_id == attempt.id).all() %}
+                        {% if attempt_factors|length > 1 %}
+                        <span style="cursor: help;" title="This attempt found {{ attempt_factors|length }} factors total">
+                            {{ esc(attempt.factor_found[:30]) }}... <strong style="color: #2ecc71;">[+{{ attempt_factors|length - 1 }} more]</strong>
+                        </span>
+                        {% else %}
+                        {{ esc(attempt.factor_found) }}
+                        {% endif %}
+                        {% else %}
+                        None
+                        {% endif %}
+                    </td>
+                    <td>{{ esc(attempt.client_id) }}</td>
+                    <td>{{ esc(attempt.created_at) }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
         {% else %}
         <p>No attempts yet.</p>
         {% endif %}

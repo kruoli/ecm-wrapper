@@ -168,7 +168,7 @@
                     <td>{{ esc(work.client_id) }}</td>
                     <td>{{ esc(work.method) }}</td>
                     <td>{{ "{:,}".format(work.b1) }}</td>
-                    <td>{{ "{:,}".format(work.b2) }}</td>
+                    <td>{% if work.b2 is none %}Default{% elif work.b2 == 0 %}Stage 1 only{% else %}{{ "{:,}".format(work.b2) }}{% endif %}</td>
                     <td>{{ work.curves_requested }}</td>
                     <td>{{ esc(work.status) }}</td>
                     <td>{{ esc(work.expires_at) }}</td>
@@ -221,7 +221,7 @@
                 <tr>
                     <td>{{ esc(attempt.method) }}</td>
                     <td>{{ "{:,}".format(attempt.b1) }}</td>
-                    <td>{{ "{:,}".format(attempt.b2) }}</td>
+                    <td>{% if attempt.b2 is none %}Default{% elif attempt.b2 == 0 %}Stage 1 only{% else %}{{ "{:,}".format(attempt.b2) }}{% endif %}</td>
                     <td>{{ "{:,}".format(attempt.curves_completed) }}</td>
                     <td>
                         {% if attempt.factor_found %}

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 T = TypeVar('T')
 
 
-def not_found_error(resource_type: str, identifier: str = None) -> HTTPException:
+def not_found_error(resource_type: str, identifier: Optional[str] = None) -> HTTPException:
     """
     Create a consistent 404 Not Found error.
 
@@ -57,7 +57,7 @@ def already_exists_error(resource_type: str, name: str) -> HTTPException:
     )
 
 
-def get_or_404(query_result: Optional[T], resource_type: str, identifier: str = None) -> T:
+def get_or_404(query_result: Optional[T], resource_type: str, identifier: Optional[str] = None) -> T:
     """
     Helper to get a resource or raise 404 if not found.
 
@@ -84,7 +84,7 @@ def get_or_404(query_result: Optional[T], resource_type: str, identifier: str = 
     return query_result
 
 
-def ensure_not_exists(db: Session, model_class, error_name: str = None, **filters) -> None:
+def ensure_not_exists(db: Session, model_class, error_name: Optional[str] = None, **filters) -> None:
     """
     Check that a resource doesn't exist, raise error if it does.
 

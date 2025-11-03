@@ -84,7 +84,7 @@ Wrapper for YAFU with support for multiple factorization methods:
 **Modes:**
 - `ecm` - Elliptic Curve Method
 - `pm1` - Pollard's P-1
-- `pp1` - Pollard's P+1
+- `pp1` - Williams's P+1
 - `auto` - Automatic method selection (tries multiple approaches)
 - `siqs` - Self-initializing quadratic sieve
 - `nfs` - Number field sieve
@@ -128,50 +128,59 @@ Progressive factorization of aliquot sequences (n → σ(n) - n → ...):
   - Use `client.local.yaml.example` as template
   - Contains: username, CPU name, binary paths, API endpoints, GPU settings
 
-### Core Utilities
-- **`base_wrapper.py`**: Shared base class for all wrappers
+### Core Utilities (lib/)
+
+Implementation modules are organized in the `lib/` directory for clean separation from user-facing scripts.
+
+- **`lib/base_wrapper.py`**: Shared base class for all wrappers
   - Configuration loading via ConfigManager
   - Logging setup (file + console)
   - API client initialization (supports multiple endpoints)
   - Factor logging (text + JSON formats)
   - Subprocess execution with timeout handling
 
-- **`config_manager.py`**: YAML configuration with deep merge
+- **`lib/config_manager.py`**: YAML configuration with deep merge
   - Loads defaults from `client.yaml`
   - Auto-detects and merges `client.local.yaml`
   - Validates required configuration keys
 
-- **`api_client.py`**: API communication with retry logic
+- **`lib/api_client.py`**: API communication with retry logic
   - Exponential backoff retry (configurable attempts)
   - Failed submission persistence to `data/results/`
   - Multi-endpoint support for redundancy
   - Health check endpoint
 
-- **`parsing_utils.py`**: Optimized output parsing
+- **`lib/parsing_utils.py`**: Optimized output parsing
   - Pre-compiled regex patterns (ECMPatterns, YAFUPatterns)
   - Multiple factor extraction with deduplication
   - Sigma value extraction with 4-level fallback
   - Curve progress tracking
 
-- **`arg_parser.py`**: Unified argument parsing
+- **`lib/arg_parser.py`**: Unified argument parsing
   - Comprehensive validation (mode compatibility, required fields)
   - Default value resolution from config
   - GPU flag resolution logic
 
-- **`residue_manager.py`**: ECM residue file operations
+- **`lib/residue_manager.py`**: ECM residue file operations
   - Format auto-detection (GPU single-line vs CPU multi-line)
   - Residue file splitting for parallel Stage 2
   - Metadata extraction (N, B1, curve count)
 
-- **`result_processor.py`**: Factor processing and logging
+- **`lib/result_processor.py`**: Factor processing and logging
   - Factor deduplication
   - Composite factor recursion
   - Unified logging interface
 
-- **`stage2_executor.py`**: Multi-threaded Stage 2 execution
+- **`lib/stage2_executor.py`**: Multi-threaded Stage 2 execution
   - Worker pool management
   - Early termination on factor discovery
   - Progress interval reporting
+
+- **`lib/ecm_config.py`**: Configuration dataclasses for ECM execution
+- **`lib/ecm_math.py`**: Mathematical utilities (trial division, primality, t-level)
+- **`lib/ecm_executor.py`**: Command building and execution engine
+- **`lib/ecm_pipeline.py`**: Multi-stage pipeline orchestration
+- **`lib/ecm_worker_process.py`**: Multiprocess worker encapsulation
 
 ## Helper Scripts
 

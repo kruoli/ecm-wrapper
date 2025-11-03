@@ -274,47 +274,44 @@
 </div>
 
 <div class="section">
-    <div class="section-header">📊 Recent Curves (ECM Attempts)</div>
+    <div class="section-header">📊 Recent Curves (Aggregated by Composite)</div>
     <div class="section-content">
+        <p style="margin-bottom: 15px; color: #666; font-style: italic;">
+            Click any row to expand and see individual curve batches
+        </p>
         {% if recent_attempts %}
         <div class="table-wrapper">
             <table>
                 <thead>
                     <tr>
+                        <th></th> <!-- Expand icon -->
                         <th>Composite</th>
-                        <th>Bits</th>
                         <th>Digits</th>
                         <th>T-Level Progress</th>
-                        <th>Method</th>
-                        <th>B1</th>
-                        <th>Curves</th>
-                        <th>Factor Found</th>
-                        <th>Client</th>
-                        <th>Time</th>
-                        <th>Submitted</th>
+                        <th>Batches</th>
+                        <th>Total Curves</th>
+                        <th>Factors Found</th>
+                        <th>First/Last Attempt</th>
+                        <th>Total Time</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for attempt in recent_attempts %}
-                    {% set comp = db.query(Composite).filter(Composite.id == attempt.composite_id).first() %}
-                    {% set comp_display = (comp.number[:30] + '...') if (comp and comp.number|length > 30) else (comp.number if comp else 'Unknown') %}
-                    {% set t_data = calc_t_progress(comp.current_t_level, comp.target_t_level) if comp else None %}
-                    {% set comp_digits = comp.current_composite|length if comp and comp.current_composite else 0 %}
-                    {# Approximate bits from digits: bits ≈ digits × log2(10) ≈ digits × 3.322 #}
+                    {% for agg in recent_attempts %}
+                    {% set comp = agg.composite %}
+                    {% set comp_display = (comp.number[:30] + '...') if comp.number|length > 30 else comp.number %}
+                    {% set t_data = calc_t_progress(comp.current_t_level, comp.target_t_level) %}
+                    {% set comp_digits = comp.current_composite|length if comp.current_composite else 0 %}
                     {% set comp_bits = (comp_digits * 3.322)|int if comp_digits > 0 else 0 %}
-                    <tr>
-                        <td class="number">
-                            {% if comp %}
-                            <a href="javascript:void(0)" onclick="viewDetails({{ comp.id }})" style="color: inherit; text-decoration: none; cursor: pointer;">
-                                {{ comp_display }}
-                            </a>
-                            {% else %}
-                            {{ comp_display }}
-                            {% endif %}
+                    <!-- Main aggregated row -->
+                    <tr class="composite-row" onclick="toggleExpand({{ comp.id }})" style="cursor: pointer; background: #f8f9fa;">
+                        <td style="width: 30px; text-align: center;">
+                            <span id="expand-icon-{{ comp.id }}" style="font-size: 1.2em;">▶</span>
                         </td>
-                        <td>{{ comp_bits if comp_bits > 0 else 'N/A' }}</td>
-                        <td>{{ comp_digits if comp_digits > 0 else 'N/A' }}</td>
+                        <td class="number">
+                            <strong>{{ esc(comp_display) }}</strong>
+                        </td>
+                        <td>{{ comp_digits }}</td>
                         <td>
                             {% if t_data and t_data.target_t > 0 %}
                             <div style="display: flex; align-items: center; gap: 8px;">
@@ -329,31 +326,53 @@
                             <span style="color: #999;">N/A</span>
                             {% endif %}
                         </td>
-                        <td>{{ attempt.method }}</td>
-                        <td>{{ attempt.b1 if attempt.b1 else 'N/A' }}</td>
-                        <td>{{ attempt.curves_completed }}</td>
+                        <td><strong>{{ agg.attempt_count }}</strong></td>
+                        <td><strong>{{ "{:,}".format(agg.total_curves) }}</strong></td>
                         <td>
-                            {% if attempt.factor_found %}
-                            {# Check if multiple factors were found by this attempt #}
-                            {% set attempt_factors = db.query(Factor).filter(Factor.found_by_attempt_id == attempt.id).all() %}
-                            {% if attempt_factors|length > 1 %}
-                            <span class="factor" style="cursor: help;" title="Click composite to see all {{ attempt_factors|length }} factors">
-                                {{ attempt.factor_found[:20] }}... <strong style="color: #2ecc71;">[+{{ attempt_factors|length - 1 }} more]</strong>
-                            </span>
-                            {% else %}
-                            <span class="factor">{{ attempt.factor_found }}</span>
-                            {% endif %}
+                            {% if agg.factors %}
+                            <span class="factor" style="font-weight: bold;">{{ agg.factors|length }} factor{{ 's' if agg.factors|length > 1 else '' }}</span>
                             {% else %}
                             None
                             {% endif %}
                         </td>
-                        <td class="small-text">{{ attempt.client_id if attempt.client_id else 'Unknown' }}</td>
-                        <td>{{ (attempt.execution_time_seconds|round(1) if attempt.execution_time_seconds is not none else 'N/A') }}{{ 's' if attempt.execution_time_seconds is not none else '' }}</td>
-                        <td class="small-text">{{ attempt.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-                        <td>
-                            <button class="btn" onclick="deleteCurve({{ attempt.id }}, {{ comp.id if comp else 'null' }})" style="background: #dc3545; font-size: 0.85em; padding: 4px 8px;">Delete</button>
+                        <td class="small-text">
+                            {{ agg.earliest_attempt.strftime('%Y-%m-%d %H:%M') }}<br/>
+                            {{ agg.latest_attempt.strftime('%Y-%m-%d %H:%M') }}
+                        </td>
+                        <td>{{ (agg.total_time|round(1)) }}s</td>
+                        <td onclick="event.stopPropagation();">
+                            <button class="btn" onclick="viewDetails({{ comp.id }})" style="font-size: 0.85em; padding: 4px 8px;">Details</button>
                         </td>
                     </tr>
+                    <!-- Expandable rows for individual attempts -->
+                    {% for attempt in agg.attempts %}
+                    <tr id="detail-{{ comp.id }}-{{ attempt.id }}" class="detail-row" style="display: none; background: #fff;">
+                        <td></td>
+                        <td colspan="2" class="small-text" style="padding-left: 30px;">
+                            {{ attempt.method.upper() }} - B1={{ "{:,}".format(attempt.b1) }}{% if attempt.b2 %}, B2={{ "{:,}".format(attempt.b2) }}{% endif %}
+                        </td>
+                        <td></td>
+                        <td class="small-text">1 batch</td>
+                        <td class="small-text">{{ attempt.curves_completed }} curves</td>
+                        <td>
+                            {% if attempt.factor_found %}
+                            {% set attempt_factors = db.query(Factor).filter(Factor.found_by_attempt_id == attempt.id).all() %}
+                            {% if attempt_factors|length > 1 %}
+                            <span class="factor small-text">{{ attempt.factor_found[:15] }}... <strong style="color: #2ecc71;">[+{{ attempt_factors|length - 1 }}]</strong></span>
+                            {% else %}
+                            <span class="factor small-text">{{ attempt.factor_found[:20] }}{{ '...' if attempt.factor_found|length > 20 else '' }}</span>
+                            {% endif %}
+                            {% else %}
+                            <span class="small-text">None</span>
+                            {% endif %}
+                        </td>
+                        <td class="small-text">{{ attempt.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td class="small-text">{{ (attempt.execution_time_seconds|round(1)) if attempt.execution_time_seconds else 'N/A' }}s</td>
+                        <td onclick="event.stopPropagation();">
+                            <button class="btn" onclick="deleteCurve({{ attempt.id }}, {{ comp.id }})" style="background: #dc3545; font-size: 0.75em; padding: 2px 6px;">Del</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
                     {% endfor %}
                 </tbody>
             </table>
@@ -393,6 +412,24 @@
 
 {% block scripts %}
 <script>
+    function toggleExpand(compositeId) {
+        // Get the icon
+        const icon = document.getElementById(`expand-icon-${compositeId}`);
+
+        // Get all detail rows for this composite
+        const detailRows = document.querySelectorAll(`tr[id^="detail-${compositeId}-"]`);
+
+        // Toggle visibility
+        const isExpanded = detailRows[0] && detailRows[0].style.display !== 'none';
+
+        detailRows.forEach(row => {
+            row.style.display = isExpanded ? 'none' : 'table-row';
+        });
+
+        // Toggle icon
+        icon.textContent = isExpanded ? '▶' : '▼';
+    }
+
     function viewDetails(compositeId) {
         const apiKey = sessionStorage.getItem('admin_api_key');
         if (!apiKey) {

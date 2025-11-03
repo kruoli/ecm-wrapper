@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Optional, Tuple, List
 
-from parsing_utils import ECMPatterns
+from .parsing_utils import ECMPatterns
 
 logger = logging.getLogger(__name__)
 

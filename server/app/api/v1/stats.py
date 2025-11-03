@@ -180,7 +180,7 @@ async def get_top_composites_by_progress(
     # Project filter
     if project_name:
         # Find project
-        project = get_or_404(
+        project: Project = get_or_404(
             db.query(Project).filter(Project.name == project_name).first(),
             "Project",
             project_name

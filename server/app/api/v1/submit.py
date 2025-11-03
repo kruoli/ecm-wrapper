@@ -65,10 +65,11 @@ async def submit_result(
                         # Validate parametrization from sigma string
                         if parametrization not in [0, 1, 2, 3]:
                             raise ValueError(f"Invalid parametrization {parametrization} in sigma string. Must be 0, 1, 2, or 3.")
-                    sigma = int(parts[1])
+                    # Keep sigma as string to support large parametrization 0 values
+                    sigma = parts[1]
                 else:
-                    # Plain sigma value
-                    sigma = int(sigma_str)
+                    # Plain sigma value - keep as string
+                    sigma = sigma_str
                     # Default to param 3 if not explicitly provided
                     if parametrization is None:
                         parametrization = 3
@@ -140,6 +141,7 @@ async def submit_result(
             elif result_request.results.factor_found:
                 # Legacy format: single factor with sigma from parameters
                 logger.info(f"Received single factor (legacy format): {result_request.results.factor_found[:20]}...")
+                # sigma is already a string (or None), no need to convert
                 factors_to_process.append((result_request.results.factor_found, sigma))
 
             # Process all factors in batch
@@ -149,6 +151,12 @@ async def submit_result(
                 all_factors_valid = True
 
                 # Validate and add all factors BEFORE updating composite
+                # First pass: calculate running cofactor to identify final prime
+                running_cofactor = result_request.composite
+                factors_to_add = []  # Only factors that aren't the final prime
+
+                from ...utils.number_utils import divide_factor
+
                 for factor_str, factor_sigma in factors_to_process:
                     # Check if it's a trivial factor
                     if is_trivial_factor(factor_str, result_request.composite):
@@ -166,6 +174,32 @@ async def submit_result(
                             detail=f"Invalid factor: {factor_str} does not divide the composite"
                         )
 
+                    # Check if this factor divides the running cofactor
+                    if verify_factor_divides(factor_str, running_cofactor):
+                        # Calculate what the cofactor would be after dividing
+                        new_cofactor = divide_factor(running_cofactor, factor_str)
+
+                        # If dividing would result in 1, this is the final prime - don't add it
+                        if new_cofactor == "1":
+                            logger.info(
+                                f"Skipping final prime factor {factor_str[:20]}{'...' if len(factor_str) > 20 else ''} "
+                                f"- not adding to factors table"
+                            )
+                            # Mark that we found the final prime (will set is_prime=True later)
+                            running_cofactor = factor_str  # The "cofactor" is now just this prime
+                            continue
+
+                        # Valid non-final factor - add to list and update running cofactor
+                        factors_to_add.append((factor_str, factor_sigma))
+                        running_cofactor = new_cofactor
+                    else:
+                        # Factor doesn't divide running cofactor (composite factor or already divided)
+                        logger.warning(
+                            f"Factor {factor_str[:20]}... doesn't divide running cofactor - skipping"
+                        )
+
+                # Second pass: add only the validated factors (excluding final prime)
+                for factor_str, factor_sigma in factors_to_add:
                     # Parse sigma if it's a string (format: "3:12345")
                     parsed_sigma = None
                     if factor_sigma:
@@ -193,50 +227,22 @@ async def submit_result(
                 elif known_factors_count > 0:
                     factor_status = "known_factor"
 
-                # Now update composite by dividing out all factors from the ORIGINAL composite
+                # Now update composite with the cofactor we calculated in the first pass
                 if new_factors_count > 0 or known_factors_count > 0:
                     try:
-                        # Calculate the product of all factors to divide out
-                        from ...utils.number_utils import divide_factor
-
-                        current_cofactor = result_request.composite
-                        for factor_str, _ in factors_to_process:
-                            if not is_trivial_factor(factor_str, result_request.composite):
-                                # Check if this factor divides the current cofactor
-                                if verify_factor_divides(factor_str, current_cofactor):
-                                    # Check if dividing would result in 1 (final prime)
-                                    new_cofactor = divide_factor(current_cofactor, factor_str)
-                                    if new_cofactor == "1":
-                                        # This is the final prime - don't divide it out
-                                        logger.info(
-                                            f"Rejecting final prime factor {factor_str[:20]}{'...' if len(factor_str) > 20 else ''} "
-                                            f"- leaving as composite and marking as prime"
-                                        )
-                                        # We'll mark as prime after the loop
-                                        continue
-
-                                    # Divide from the running cofactor (starts as original composite)
-                                    current_cofactor = new_cofactor
-                                    logger.info(
-                                        f"Divided out factor {factor_str[:20]}{'...' if len(factor_str) > 20 else ''}, "
-                                        f"cofactor now has {len(current_cofactor)} digits"
-                                    )
-                                else:
-                                    # Factor doesn't divide current cofactor (likely composite or duplicate)
-                                    logger.warning(
-                                        f"Skipping factor {factor_str[:20]}... - doesn't divide current cofactor "
-                                        f"(likely composite factor or already divided out)"
-                                    )
-
-                        # Now update the composite with the final cofactor
+                        # Use the running_cofactor we already calculated
                         from ...utils.number_utils import is_probably_prime, calculate_digit_length
                         from ...utils.calculations import ECMCalculations
 
-                        composite.current_composite = current_cofactor
-                        composite.digit_length = calculate_digit_length(current_cofactor)
+                        composite.current_composite = running_cofactor
+                        composite.digit_length = calculate_digit_length(running_cofactor)
+
+                        logger.info(
+                            f"Updated composite to cofactor with {len(running_cofactor)} digits"
+                        )
 
                         # Test if cofactor is prime
-                        if is_probably_prime(current_cofactor):
+                        if is_probably_prime(running_cofactor):
                             logger.info(f"Cofactor is prime - marking composite {composite.id} as fully factored")
                             composite.is_prime = True
                             composite.is_fully_factored = True

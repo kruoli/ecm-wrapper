@@ -12,13 +12,13 @@ logger = logging.getLogger(__name__)
 class FactorService:
     @staticmethod
     def add_factor(db: Session, composite_id: int, factor: str, attempt_id: Optional[int] = None,
-                   sigma: Optional[int] = None, parametrization: Optional[int] = None) -> Tuple[Factor, bool]:
+                   sigma: Optional[str] = None, parametrization: Optional[int] = None) -> Tuple[Factor, bool]:
         """
         Add a factor to a composite.
         Returns (factor, created) where created is True if new factor was added.
 
         Args:
-            sigma: The sigma value that found this factor (ECM only)
+            sigma: The sigma value that found this factor (ECM only) - stored as string for large param 0 values
             parametrization: ECM parametrization type (0-3) for group order calculation
         """
         # Validate factor
@@ -51,7 +51,8 @@ class FactorService:
 
             try:
                 calculator = GroupOrderCalculator()
-                result = calculator.calculate_group_order(factor, str(sigma), parametrization)
+                # sigma is already a string, no need to convert
+                result = calculator.calculate_group_order(factor, sigma, parametrization)
                 if result:
                     group_order, group_order_factorization = result
                     logger.info(f"Calculated group order for factor {factor[:20]}...: {group_order}")

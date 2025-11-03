@@ -10,7 +10,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from residue_manager import ResidueFileManager
+from lib.residue_manager import ResidueFileManager
 
 def test_parse_metadata():
     """Test parsing residue file metadata"""

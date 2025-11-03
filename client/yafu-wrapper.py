@@ -2,8 +2,8 @@
 import subprocess
 import sys
 from typing import Optional, Dict, Any, List
-from base_wrapper import BaseWrapper
-from parsing_utils import parse_yafu_ecm_output, parse_yafu_auto_factors, Timeouts
+from lib.base_wrapper import BaseWrapper
+from lib.parsing_utils import parse_yafu_ecm_output, parse_yafu_auto_factors, Timeouts
 
 class YAFUWrapper(BaseWrapper):
     def __init__(self, config_path: str):

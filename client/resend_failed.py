@@ -14,7 +14,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 # Import BaseWrapper to reuse config loading logic
-from base_wrapper import BaseWrapper
+from lib.base_wrapper import BaseWrapper
 
 class FailedResultsResender(BaseWrapper):
     """Handles resending of failed results from local logs."""

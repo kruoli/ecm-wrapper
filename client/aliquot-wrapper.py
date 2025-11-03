@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from collections import Counter
 
-from base_wrapper import BaseWrapper
+from lib.base_wrapper import BaseWrapper
 import importlib.util
 
 # Import cado-wrapper.py
@@ -334,7 +334,8 @@ class AliquotWrapper(BaseWrapper):
                 composite=str(current_composite),
                 target_tlevel=target_t_level,
                 workers=self.threads if self.threads else 1,
-                verbose=self.verbose
+                verbose=self.verbose,
+                no_submit=True  # Never submit to API - aliquot-wrapper only submits to FactorDB
             )
 
             # Collect ECM factors (all are guaranteed to be prime)

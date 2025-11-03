@@ -5,7 +5,7 @@ Consolidates business logic for project management to reduce duplication
 in admin route handlers.
 """
 
-from typing import Dict, Union
+from typing import Dict, Union, Optional
 from sqlalchemy.orm import Session
 
 from ..models.projects import Project, ProjectComposite
@@ -16,7 +16,7 @@ class ProjectService:
     """Service for managing project operations."""
 
     @staticmethod
-    def create_project(db: Session, name: str, description: str = None) -> Project:
+    def create_project(db: Session, name: str, description: Optional[str] = None) -> Project:
         """
         Create a new project.
 

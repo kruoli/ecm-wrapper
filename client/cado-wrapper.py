@@ -3,8 +3,8 @@ import os
 import subprocess
 import sys
 from typing import Optional, Dict, Any, List
-from base_wrapper import BaseWrapper
-from parsing_utils import Timeouts
+from lib.base_wrapper import BaseWrapper
+from lib.parsing_utils import Timeouts
 
 class CADOWrapper(BaseWrapper):
     def __init__(self, config_path: str):
@@ -175,7 +175,7 @@ class CADOWrapper(BaseWrapper):
             )
             # CADO-NFS doesn't have a clear version string, return "installed"
             return "installed" if result.returncode == 0 else "unknown"
-        except:
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
             pass
         return "unknown"
 

@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Text, Index, BigInteger
 from sqlalchemy.orm import relationship
+from typing import Optional
 from .base import Base, TimestampMixin
 from datetime import datetime, timedelta
 
@@ -53,7 +54,7 @@ class WorkAssignment(Base, TimestampMixin):
         else:
             return 30  # Default for unknown methods
 
-    def extend_deadline(self, minutes: int = None):
+    def extend_deadline(self, minutes: Optional[int] = None):
         """Extend the work assignment deadline."""
         if minutes is None:
             minutes = self.estimated_time_minutes

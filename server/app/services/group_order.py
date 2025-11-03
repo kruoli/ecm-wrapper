@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 class GroupOrderCalculator:
     """Calculate elliptic curve group orders for ECM factors."""
 
+    gp_binary: str
+    script_path: Optional[str]
+    executor: ExternalProgramExecutor
+
     def __init__(self, gp_binary: str = "gp", script_path: Optional[str] = None):
         """
         Initialize group order calculator.
@@ -45,7 +49,7 @@ class GroupOrderCalculator:
             ]
             self.script_path = None
             for path in possible_paths:
-                if os.path.exists(path):
+                if os.path.exists(str(path)):
                     self.script_path = str(path)
                     break
 
@@ -55,7 +59,7 @@ class GroupOrderCalculator:
 
     def calculate_group_order(
         self, factor: str, sigma: str, parametrization: int = 3
-    ) -> Optional[Tuple[str, str]]:
+    ) -> Optional[Tuple[str, Optional[str]]]:
         """
         Calculate elliptic curve group order for a factor found by ECM.
 
@@ -65,7 +69,8 @@ class GroupOrderCalculator:
             parametrization: ECM parametrization (0, 1, 2, or 3)
 
         Returns:
-            Tuple of (group_order, factorization) or None if calculation fails
+            Tuple of (group_order, factorization) or None if calculation fails.
+            Factorization may be None if factorization step fails.
         """
         # Parse sigma if it includes parametrization prefix (e.g., "3:12345")
         sigma_value = sigma

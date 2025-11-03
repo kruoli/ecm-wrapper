@@ -9,6 +9,7 @@ from ...dependencies import get_composite_service
 from ...models import Composite, ECMAttempt, Factor
 from ...services.composites import CompositeService
 from ...templates import templates
+from ...utils.query_helpers import get_aggregated_attempts
 
 router = APIRouter()
 
@@ -21,8 +22,8 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
     # Get recent composites with their attempts and factors
     composites = db.query(Composite).order_by(desc(Composite.created_at)).limit(50).all()
 
-    # Get recent attempts
-    attempts = db.query(ECMAttempt).order_by(desc(ECMAttempt.created_at)).limit(100).all()
+    # Get recent attempts (aggregated by composite)
+    attempts = get_aggregated_attempts(db, limit=50)
 
     # Get all factors
     factors = db.query(Factor).order_by(desc(Factor.created_at)).all()

@@ -161,6 +161,87 @@ def get_recent_attempts(db: Session, limit: int = 100, method: Optional[str] = N
     return query.order_by(desc(ECMAttempt.created_at)).limit(limit).all()
 
 
+def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] = None):
+    """
+    Get recent ECM attempts aggregated by composite.
+
+    For each composite with recent work, returns:
+    - Composite information
+    - Total curves run
+    - Number of attempts (batches)
+    - Date range
+    - Factors found
+    - List of individual attempts for expansion
+
+    Args:
+        db: Database session
+        limit: Maximum number of composites to return
+        method: Filter by method (ecm, pm1, pp1, etc.)
+
+    Returns:
+        List of dicts with aggregated attempt data per composite
+    """
+    from ..models.attempts import ECMAttempt
+    from ..models.composites import Composite
+    from ..models.factors import Factor
+
+    # Get composites with recent attempts, ordered by most recent activity
+    # Use GROUP BY with MAX to get the latest attempt time per composite
+    query = db.query(
+        ECMAttempt.composite_id,
+        func.max(ECMAttempt.created_at).label('latest_attempt')
+    ).group_by(ECMAttempt.composite_id)
+
+    if method:
+        query = query.filter(ECMAttempt.method == method)
+
+    # Order by most recent activity
+    composite_ids = query.order_by(desc('latest_attempt')).limit(limit).all()
+    composite_ids = [cid[0] for cid in composite_ids]  # Extract just the composite_id
+
+    aggregated = []
+    for composite_id in composite_ids:
+        composite = db.query(Composite).filter(Composite.id == composite_id).first()
+        if not composite:
+            continue
+
+        # Get all attempts for this composite
+        attempts_query = db.query(ECMAttempt).filter(
+            ECMAttempt.composite_id == composite_id
+        )
+        if method:
+            attempts_query = attempts_query.filter(ECMAttempt.method == method)
+
+        attempts = attempts_query.order_by(desc(ECMAttempt.created_at)).all()
+
+        if not attempts:
+            continue
+
+        # Aggregate statistics
+        total_curves = sum(a.curves_completed or 0 for a in attempts)
+        total_time = sum(a.execution_time_seconds or 0 for a in attempts)
+        earliest = min(a.created_at for a in attempts if a.created_at)
+        latest = max(a.created_at for a in attempts if a.created_at)
+
+        # Get unique factors found across all attempts
+        factors = db.query(Factor).filter(
+            Factor.found_by_attempt_id.in_([a.id for a in attempts])
+        ).all()
+
+        aggregated.append({
+            'composite': composite,
+            'attempt_count': len(attempts),
+            'total_curves': total_curves,
+            'total_time': total_time,
+            'earliest_attempt': earliest,
+            'latest_attempt': latest,
+            'factors': factors,
+            'attempts': attempts  # Full list for expansion
+        })
+
+    return aggregated
+
+
 def get_expired_work_assignments(db: Session):
     """
     Get work assignments that have expired but are still marked as active.

@@ -21,7 +21,8 @@ from ....utils.query_helpers import (
     get_recent_clients,
     get_recent_factors,
     get_recent_work_assignments,
-    get_recent_attempts
+    get_recent_attempts,
+    get_aggregated_attempts
 )
 
 router = APIRouter()
@@ -138,7 +139,7 @@ async def admin_dashboard(
     composites = get_composites_by_completion(db, limit=50, include_factored=False)
     recent_clients = get_recent_clients(db, limit=10, days=7)
     recent_factors = get_recent_factors(db, limit=10)
-    recent_attempts = get_recent_attempts(db, limit=100)
+    recent_attempts = get_aggregated_attempts(db, limit=50)
 
     # Return template response
     return templates.TemplateResponse("admin/dashboard.html", {

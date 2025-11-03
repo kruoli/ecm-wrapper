@@ -34,7 +34,7 @@ spec.loader.exec_module(ecm_wrapper_module)
 ECMWrapper = ecm_wrapper_module.ECMWrapper
 
 # Import ResultProcessor for factor handling
-from result_processor import ResultProcessor
+from lib.result_processor import ResultProcessor
 
 
 class PipelineStats:

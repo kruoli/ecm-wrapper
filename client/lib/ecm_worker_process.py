@@ -9,9 +9,9 @@ Design note: multiprocessing requires pickleable functions, so we provide both:
 - A class-based implementation (testable, maintainable)
 - A thin global function wrapper (for multiprocessing compatibility)
 """
-import subprocess
 from typing import Optional, Dict, Any
-from parsing_utils import parse_ecm_output, ECMPatterns
+from lib.parsing_utils import parse_ecm_output, ECMPatterns
+from lib.subprocess_utils import execute_subprocess
 
 
 class ECMWorkerProcess:
@@ -76,78 +76,76 @@ class ECMWorkerProcess:
 
         try:
             print(f"Worker {self.worker_id} starting {self.curves} curves")
-            process = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True
-            )
 
-            # Send composite number
-            if process.stdin:
-                process.stdin.write(self.composite)
-                process.stdin.close()
-
-            # Stream output and collect results
-            output_lines = []
+            # State for line-by-line processing
             curves_completed = 0
             factor_found = None
             sigma_found = None
-            sigma_values = []  # Collect all sigma values used
+            sigma_values = []
+            current_curve_sigma = None  # Track sigma for the curve currently running
 
-            while True:
-                # Check stop event
-                if stop_event and stop_event.is_set():
-                    process.terminate()
-                    break
+            def process_line(line: str, output_lines: list) -> None:
+                """Process each output line for curve tracking and factor detection."""
+                nonlocal curves_completed, factor_found, sigma_found, sigma_values, current_curve_sigma
 
-                if not process.stdout:
-                    break
-                line = process.stdout.readline()
-                if not line:
-                    break
-                line = line.rstrip()
-                if line:
-                    print(f"Worker {self.worker_id}: {line}")
-                    output_lines.append(line)
+                # Track progress
+                if "Step 1 took" in line:
+                    curves_completed += 1
 
-                    # Track progress and check for factors
-                    if "Step 1 took" in line:
-                        curves_completed += 1
+                # Collect sigma values and track current curve's sigma
+                sigma_match = ECMPatterns.SIGMA_COLON_FORMAT.search(line) or \
+                             ECMPatterns.SIGMA_DASH_FORMAT.search(line)
+                if sigma_match:
+                    sigma_val = sigma_match.group(1)
+                    current_curve_sigma = sigma_val  # This is the sigma for the current curve
+                    if sigma_val not in sigma_values:
+                        sigma_values.append(sigma_val)
 
-                    # Collect sigma values from curve output
-                    # Match both formats: "sigma=1:xxxx" and "-sigma 3:xxxx"
-                    sigma_match = ECMPatterns.SIGMA_COLON_FORMAT.search(line) or \
-                                 ECMPatterns.SIGMA_DASH_FORMAT.search(line)
-                    if sigma_match:
-                        sigma_val = sigma_match.group(1)
-                        if sigma_val not in sigma_values:
-                            sigma_values.append(sigma_val)
+                # Check for factor (just pattern match the line, don't use parse_ecm_output on single line)
+                if not factor_found:
+                    # Check for standard factor pattern in this line
+                    factor_match = ECMPatterns.STANDARD_FACTOR.search(line) or \
+                                  ECMPatterns.PRIME_FACTOR.search(line)
+                    if factor_match:
+                        factor_found = factor_match.group(1)
+                        # Use the sigma from the current curve (captured earlier)
+                        sigma_found = current_curve_sigma
 
-                    # Check for factor
-                    if not factor_found:
-                        factor, sigma = parse_ecm_output(line)
-                        if factor:
-                            factor_found = factor
-                            sigma_found = sigma
-                            break  # Stop immediately when factor found
-
-            process.wait()
+            # Execute subprocess using unified utility
+            result = execute_subprocess(
+                cmd=cmd,
+                composite=self.composite,
+                verbose=self.verbose,
+                line_callback=process_line,
+                log_prefix=f"Worker {self.worker_id}",
+                stop_event=stop_event
+            )
 
             # If no factor found during streaming, check full output
-            if not factor_found and (not stop_event or not stop_event.is_set()):
-                full_output = '\n'.join(output_lines)
-                factor_found, sigma_found = parse_ecm_output(full_output)
+            if not factor_found and not result['terminated_early']:
+                factor_found, sigma_found = parse_ecm_output(result['stdout'])
                 curves_completed = self.curves  # All curves completed
+            elif factor_found and not sigma_found:
+                # Factor was found during streaming but sigma was None (found on first curve)
+                # Re-parse the full output to get the sigma
+                _, sigma_found = parse_ecm_output(result['stdout'])
+
+            # Output completion status
+            if result['terminated_early']:
+                print(f"Worker {self.worker_id} terminated early after {curves_completed}/{self.curves} curves")
+            elif factor_found:
+                factor_display = factor_found[:20] + "..." if len(factor_found) > 20 else factor_found
+                print(f"Worker {self.worker_id} completed {curves_completed} curves - FACTOR FOUND: {factor_display}")
+            else:
+                print(f"Worker {self.worker_id} completed {curves_completed} curves - no factor")
 
             return {
                 'worker_id': self.worker_id,
                 'factor_found': factor_found,
-                'sigma_found': sigma_found,  # Sigma of the curve that found the factor
-                'sigma_values': sigma_values,  # All sigma values used by this worker
-                'curves_completed': curves_completed if not stop_event or not stop_event.is_set() else curves_completed,
-                'raw_output': '\n'.join(output_lines)
+                'sigma_found': sigma_found,
+                'sigma_values': sigma_values,
+                'curves_completed': curves_completed if not result['terminated_early'] else curves_completed,
+                'raw_output': result['stdout']
             }
 
         except Exception as e:

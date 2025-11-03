@@ -10,7 +10,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from api_client import APIClient
+from lib.api_client import APIClient
 
 
 def test_build_submission_payload():
@@ -183,7 +183,7 @@ def test_default_parametrization():
 def test_integration_with_base_wrapper():
     """Test that APIClient integrates with BaseWrapper"""
     try:
-        from base_wrapper import BaseWrapper
+        from lib.base_wrapper import BaseWrapper
 
         with tempfile.TemporaryDirectory() as tmpdir:
             config_file = Path(tmpdir) / 'client.yaml'

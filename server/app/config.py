@@ -20,7 +20,9 @@ def get_database_url() -> str:
     """Construct database URL from environment or secret files."""
     # Check if full DATABASE_URL is provided
     if "DATABASE_URL" in os.environ:
-        return os.getenv("DATABASE_URL")
+        url = os.getenv("DATABASE_URL")
+        if url:
+            return url
 
     # Build from components (for Docker secrets)
     host = os.getenv("POSTGRES_HOST", "localhost")
@@ -64,8 +66,8 @@ class Settings(BaseSettings):
     # Security
     secret_key: str = Field(
         default_factory=lambda: (
-            read_secret_file(os.getenv("SECRET_KEY_FILE")) if os.getenv("SECRET_KEY_FILE")
-            else os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
+            (read_secret_file(secret_file) if (secret_file := os.getenv("SECRET_KEY_FILE")) else None)
+            or os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
         ),
         min_length=16,
         description="Secret key for cryptographic operations"
@@ -73,8 +75,8 @@ class Settings(BaseSettings):
 
     admin_api_key: str = Field(
         default_factory=lambda: (
-            read_secret_file(os.getenv("ADMIN_API_KEY_FILE")) if os.getenv("ADMIN_API_KEY_FILE")
-            else os.getenv("ADMIN_API_KEY", "dev-admin-key-change-in-production")
+            (read_secret_file(api_key_file) if (api_key_file := os.getenv("ADMIN_API_KEY_FILE")) else None)
+            or os.getenv("ADMIN_API_KEY", "dev-admin-key-change-in-production")
         ),
         min_length=16,
         description="API key for admin endpoints"

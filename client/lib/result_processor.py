@@ -126,14 +126,19 @@ class ResultProcessor:
         # Deduplicate factors (preserve order)
         unique_factors = list(dict.fromkeys(factors_found))
 
+        # Track which factors were actually found by ECM vs cofactor primes
+        ecm_found_factors = []  # Actually found by ECM (have sigma)
+        all_prime_factors = []  # All primes including cofactor primes
+
         # Fully factor any composite factors found
         self.logger.info(f"Checking {len(unique_factors)} factor(s) for composites...")
-        all_prime_factors = []
 
         for factor in unique_factors:
             prime_factors = self.wrapper._fully_factor_found_result(factor, quiet=True)
             self.logger.info(f"Prime factorization of {factor}: {prime_factors}")
             all_prime_factors.extend(prime_factors)
+            # These prime factors came from the ECM-found factor, so they count as ECM-found
+            ecm_found_factors.extend(prime_factors)
 
         # Calculate remaining cofactor after dividing out all found primes
         cofactor = int(self.composite)
@@ -141,6 +146,7 @@ class ResultProcessor:
             cofactor //= int(prime)
 
         # Check if there's a remaining cofactor
+        cofactor_primes = []  # Track primes from cofactor separately
         if cofactor > 1:
             cofactor_digits = len(str(cofactor))
 
@@ -148,6 +154,7 @@ class ResultProcessor:
             if self.wrapper._is_probably_prime(cofactor):
                 self.logger.info(f"Remaining cofactor {cofactor} is prime")
                 all_prime_factors.append(str(cofactor))
+                cofactor_primes.append(str(cofactor))
             else:
                 # Cofactor is composite - only auto-factor if small enough (ECM is fastest for <60 digits)
                 if cofactor_digits < 60:
@@ -158,16 +165,21 @@ class ResultProcessor:
                     self.logger.info(f"Remaining cofactor {cofactor} is composite (not auto-factoring)")
 
         # Replace with fully factored results
-        results['factors_found'] = all_prime_factors
+        results['factors_found'] = all_prime_factors  # All factors (for aliquot-wrapper compatibility)
+        results['ecm_found_factors'] = ecm_found_factors  # Only ECM-found factors (for API submission)
+        results['cofactor_primes'] = cofactor_primes  # Cofactor primes (not submitted to API)
         if all_prime_factors:
             results['factor_found'] = all_prime_factors[0]
 
-        # Log each prime factor individually (only once, at top level)
+        # Log only ECM-found factors (with sigma) to factors_found.txt
         if not quiet:
-            for prime in all_prime_factors:
+            for prime in ecm_found_factors:
                 self.wrapper.log_factor_found(
                     self.composite, prime, self.b1, self.b2, self.curves,
                     method=self.method, sigma=results.get('sigma'), program=self.program
                 )
+            # Log cofactor primes to console but not to factors file
+            for prime in cofactor_primes:
+                self.logger.info(f"Cofactor prime found (not logged to file): {prime}")
 
         return all_prime_factors

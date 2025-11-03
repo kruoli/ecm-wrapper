@@ -10,7 +10,7 @@ class Factor(Base, TimestampMixin):
     factor = Column(Text, nullable=False)  # Store as string for arbitrary precision
     is_prime = Column(Boolean, default=None, nullable=True)  # NULL until primality tested
     found_by_attempt_id = Column(Integer, ForeignKey("ecm_attempts.id"), nullable=True)
-    sigma = Column(BigInteger, nullable=True)  # Sigma value that found this factor (ECM only)
+    sigma = Column(Text, nullable=True)  # Sigma value that found this factor (ECM only) - Text to support large param 0 values
     group_order = Column(Text, nullable=True)  # Elliptic curve group order (ECM only)
     group_order_factorization = Column(Text, nullable=True)  # Factorization of group order
 

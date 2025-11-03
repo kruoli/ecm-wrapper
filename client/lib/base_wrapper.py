@@ -9,8 +9,8 @@ import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 
-from config_manager import ConfigManager
-from api_client import APIClient
+from .config_manager import ConfigManager
+from .api_client import APIClient
 
 
 class BaseWrapper:
@@ -71,7 +71,7 @@ class BaseWrapper:
         current_dir = Path.cwd()
 
         # Check if we're in the client directory by looking for key files
-        expected_files = ['ecm-wrapper.py', 'yafu-wrapper.py', 'client.yaml', 'base_wrapper.py']
+        expected_files = ['ecm-wrapper.py', 'yafu-wrapper.py', 'client.yaml', 'lib']
         missing_files = [f for f in expected_files if not (current_dir / f).exists()]
 
         if missing_files:
@@ -290,6 +290,8 @@ class BaseWrapper:
             parse_function: Function to parse output (factor, sigma)
             **kwargs: Additional parameters for results
         """
+        from lib.subprocess_utils import execute_subprocess
+
         start_time = time.time()
         results = self.create_base_results(composite, method, **kwargs)
         verbose = kwargs.get('verbose', False)
@@ -297,41 +299,19 @@ class BaseWrapper:
         try:
             self.logger.info(f"Running {method.upper()} on {len(composite)}-digit number with {' '.join(cmd[1:3])}")
 
-            # Only use stdin PIPE if we're sending input, otherwise inherit parent stdin
-            # (None allows programs like YAFU to detect they're running from a terminal)
+            # Get program input if specified
             program_input = kwargs.get('input')
-            stdin_mode = subprocess.PIPE if program_input else None
 
-            process = subprocess.Popen(
-                cmd,
-                stdin=stdin_mode,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1  # Line buffered
+            # Execute subprocess using unified utility
+            result = execute_subprocess(
+                cmd=cmd,
+                composite=program_input if program_input else composite,
+                verbose=verbose,
+                timeout=timeout,
+                logger=self.logger
             )
 
-            # Handle output - stream if verbose, otherwise just capture
-            if verbose:
-                # Stream output in real-time while capturing
-                stdout_lines = []
-                if program_input:
-                    process.stdin.write(program_input)
-                    process.stdin.close()
-
-                for line in iter(process.stdout.readline, ''):
-                    print(line, end='')  # Stream to console
-                    stdout_lines.append(line)
-
-                process.wait(timeout=timeout)
-                stdout = ''.join(stdout_lines)
-            else:
-                # Capture all output at once
-                if program_input:
-                    stdout, _ = process.communicate(input=program_input, timeout=timeout)
-                else:
-                    stdout, _ = process.communicate(timeout=timeout)
-
+            stdout = result['stdout']
             results['raw_output'] = stdout
 
             # Parse for factors using provided function

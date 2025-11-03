@@ -79,7 +79,7 @@ class CompositeLoader:
                 logger.warning(f"Invalid number at row {row_num}: {row[number_column]}")
                 continue
 
-            composite_data = {'number': number}
+            composite_data: Dict[str, Any] = {'number': number}
 
             # Add priority if specified
             if priority_column and priority_column in row:

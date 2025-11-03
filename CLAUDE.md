@@ -150,7 +150,7 @@ pytest test_factorization.py -v               # Test parsing logic
   - Thread pool configuration
 - **CADOWrapper** (client/cado-wrapper.py): Number Field Sieve for large numbers
 - **AliquotWrapper** (client/aliquot-wrapper.py): Aliquot sequence calculator with FactorDB integration
-- **BaseWrapper** (client/base_wrapper.py:17): Shared base class
+- **BaseWrapper** (client/lib/base_wrapper.py:17): Shared base class
   - Configuration loading via ConfigManager
   - API client initialization (supports multiple endpoints)
   - Subprocess execution with timeout handling
@@ -245,14 +245,14 @@ Essential tables for ECM coordination:
 ## Client Implementation Details
 
 ### Output Parsing
-- **ECM**: Multiple factor detection with prime factor filtering using `parse_ecm_output_multiple()` (parsing_utils.py:61)
+- **ECM**: Multiple factor detection with prime factor filtering using `parse_ecm_output_multiple()` (lib/parsing_utils.py:61)
   - Pattern: `r'Factor found in step \d+: (\d+)'`
   - Composite factor filtering (avoids submitting products of known primes)
   - Multi-pattern matching with deduplication
-- **YAFU**: Unified parsing functions `parse_yafu_ecm_output()` and `parse_yafu_auto_factors()` (parsing_utils.py:141-200)
+- **YAFU**: Unified parsing functions `parse_yafu_ecm_output()` and `parse_yafu_auto_factors()` (lib/parsing_utils.py:141-200)
   - Multiple patterns for P/Q notation and factor formats
   - Supports ECM, SIQS, NFS output formats
-- **Shared Infrastructure**: Unified subprocess execution via `BaseWrapper.run_subprocess_with_parsing()` (base_wrapper.py:278)
+- **Shared Infrastructure**: Unified subprocess execution via `BaseWrapper.run_subprocess_with_parsing()` (lib/base_wrapper.py:278)
   - Single execution path for all wrappers
   - Consistent error handling and timeout management
 
@@ -300,7 +300,7 @@ pylint *.py
 - **Timing accuracy**: Pipeline now submits combined stage1 + stage2 execution time
 
 ### Residue File Handling
-- **GPU format support**: `residue_manager.py` now auto-detects and handles both GPU (single-line) and CPU (multi-line) residue file formats
+- **GPU format support**: `lib/residue_manager.py` now auto-detects and handles both GPU (single-line) and CPU (multi-line) residue file formats
 - **Format detection**: Checks first 5 lines for `METHOD=ECM; SIGMA=...; ...` pattern to identify GPU format
 
 ### FactorDB Integration (aliquot-wrapper.py)
@@ -340,7 +340,7 @@ pylint *.py
   - Factors are divided out sequentially from a running cofactor (not from the composite record)
   - Composite is updated only ONCE after all factors are processed
   - Robust handling: skips factors that don't divide (handles composite factors gracefully)
-- **Client single submission** (`client/api_client.py`, `client/base_wrapper.py`):
+- **Client single submission** (`client/lib/api_client.py`, `client/lib/base_wrapper.py`):
   - `build_submission_payload()` now includes all factors with their individual sigmas in `factors_found` list
   - All factors submitted in a single API call
   - Maintains backward compatibility with `factor_found` field for single-factor submissions
@@ -391,8 +391,8 @@ pylint *.py
 ### Client Structure
 - **Main wrappers**: `client/ecm-wrapper.py`, `client/yafu-wrapper.py`
 - **Configuration**: `client/client.yaml` - Binary paths and API settings
-- **Base classes**: `client/base_wrapper.py` - Shared wrapper functionality
-- **Utilities**: `client/parsing_utils.py`, `client/arg_parser.py`
+- **Base classes**: `client/lib/base_wrapper.py` - Shared wrapper functionality
+- **Utilities**: `client/lib/` - Implementation modules (parsing, configuration, execution engine)
 - **Batch scripts**: `client/scripts/` - Automated processing workflows
 
 ### Database Connection

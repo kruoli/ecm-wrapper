@@ -5,6 +5,7 @@ import logging
 import threading
 import time
 from datetime import datetime
+from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
@@ -17,7 +18,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # Global state for background task
-_recalculation_status = {
+_recalculation_status: Dict[str, Any] = {
     "running": False,
     "started_at": None,
     "progress": 0,

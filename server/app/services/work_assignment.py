@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, func, desc
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Sequence
 from datetime import datetime, timedelta
 import uuid
 import logging
@@ -215,7 +215,7 @@ class WorkAssignmentService:
             composite, previous_attempts, work_request.methods
         )
 
-        if not method:
+        if not method or parameters is None:
             return WorkResponse(message="No suitable method available for this composite")
 
         # Create work assignment
@@ -279,7 +279,7 @@ class WorkAssignmentService:
         return composite
 
     def _determine_work_parameters(self, composite: Composite, previous_attempts: List[ECMAttempt],
-                                 preferred_methods: List[str]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+                                 preferred_methods: Sequence[str]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         """Determine the best method and parameters for this composite using t-level targeting."""
 
         # No special form detection in simplified system - use standard ECM approach
@@ -389,7 +389,7 @@ class WorkAssignmentService:
         return True
 
     def update_progress(self, db: Session, work_id: str, client_id: str,
-                       curves_completed: int, message: str = None) -> bool:
+                       curves_completed: int, message: Optional[str] = None) -> bool:
         """Update work progress."""
         work = db.query(WorkAssignment).filter(
             and_(

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional, Tuple, List, Callable, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from parsing_utils import parse_ecm_output
+from .parsing_utils import parse_ecm_output
 
 if TYPE_CHECKING:
     from ecm_wrapper import ECMWrapper

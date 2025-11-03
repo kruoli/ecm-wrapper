@@ -10,7 +10,7 @@ This service provides comprehensive composite management including:
 """
 
 import logging
-from typing import Optional, Tuple, Dict, Any, List, Union
+from typing import Optional, Tuple, Dict, Any, List, Union, cast
 
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
@@ -576,7 +576,7 @@ class CompositeService:
             source_type, project_name
         )
 
-        stats = {
+        stats: Dict[str, Any] = {
             'total_processed': 0,
             'new_composites': 0,
             'existing_composites': 0,
@@ -606,13 +606,14 @@ class CompositeService:
             if source_type == 'auto':
                 source_type = self._detect_source_type(data_source)
 
+            numbers_data: List[Dict[str, Any]]
             if source_type == 'file':
                 numbers_data = [{'number': n} for n in self.loader.from_text_file(data_source)]
             elif source_type == 'csv':
                 numbers_data = self.loader.from_csv_content(data_source)
             elif source_type == 'list':
                 if isinstance(data_source[0], dict):
-                    numbers_data = data_source
+                    numbers_data = cast(List[Dict[str, Any]], data_source)
                 else:
                     numbers_data = [{'number': n} for n in self.loader.from_number_list(data_source)]
             else:

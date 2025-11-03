@@ -14,7 +14,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from parsing_utils import parse_ecm_output_multiple
+from lib.parsing_utils import parse_ecm_output_multiple
 
 # Simplified test case based on real GPU ECM output
 # Scenario: GPU finds two primes (p1 and p2) and reports both plus their product

@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, Float, BigInteger, DateTime, Index
 from sqlalchemy.orm import relationship
+from typing import Optional
 from .base import Base, TimestampMixin
 import hashlib
 
@@ -42,8 +43,8 @@ class ECMAttempt(Base, TimestampMixin):
     composite = relationship("Composite")
 
     @classmethod
-    def generate_work_hash(cls, composite: str, method: str, b1: int, b2: int = None,
-                          parametrization: int = None, sigma: int = None, curves: int = None) -> str:
+    def generate_work_hash(cls, composite: str, method: str, b1: int, b2: Optional[int] = None,
+                          parametrization: Optional[int] = None, sigma: Optional[int] = None, curves: Optional[int] = None) -> str:
         """Generate a hash to detect duplicate work.
 
         Only considers work duplicate if parametrization and sigma values are explicitly the same.
@@ -72,7 +73,7 @@ class ECMAttempt(Base, TimestampMixin):
 
         return hashlib.sha256(hash_input.encode()).hexdigest()
 
-    def set_work_hash(self, composite_number: str, sigma: int = None):
+    def set_work_hash(self, composite_number: str, sigma: Optional[int] = None):
         """Set the work hash for this attempt.
 
         Args:

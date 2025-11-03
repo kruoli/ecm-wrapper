@@ -37,7 +37,7 @@ YAFUWrapper = yafu_module.YAFUWrapper
 # Add parent directory to path for imports
 sys.path.insert(0, str(client_dir))
 
-from parsing_utils import parse_yafu_ecm_output, parse_yafu_auto_factors
+from lib.parsing_utils import parse_yafu_ecm_output, parse_yafu_auto_factors
 
 
 class TestFactorizationParsing(unittest.TestCase):

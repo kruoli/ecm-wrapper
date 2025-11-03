@@ -4,17 +4,148 @@ import time
 import sys
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
-from base_wrapper import BaseWrapper
-from parsing_utils import parse_ecm_output_multiple, count_ecm_steps_completed, ECMPatterns
-from residue_manager import ResidueFileManager
-from result_processor import ResultProcessor
-from stage2_executor import Stage2Executor
-from ecm_worker_process import run_worker_ecm_process
+from lib.base_wrapper import BaseWrapper
+from lib.parsing_utils import parse_ecm_output_multiple, count_ecm_steps_completed, ECMPatterns
+from lib.residue_manager import ResidueFileManager
+from lib.result_processor import ResultProcessor
+from lib.stage2_executor import Stage2Executor
+from lib.ecm_worker_process import run_worker_ecm_process
+
+# New modularized utilities
+from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
+from lib.ecm_math import (
+    trial_division, is_probably_prime, calculate_tlevel,
+    get_b1_for_digit_length, get_optimal_b1_for_tlevel
+)
 
 class ECMWrapper(BaseWrapper):
     def __init__(self, config_path: str):
         super().__init__(config_path)
         self.residue_manager = ResidueFileManager()
+        # Initialize new executor for config-based methods
+        from lib.ecm_executor import ECMExecutor
+        self.executor = ECMExecutor(self.config, self.run_subprocess_with_parsing)
+
+    # ==================== NEW CONFIG-BASED METHODS ====================
+    # These methods use configuration objects for cleaner interfaces
+
+    def run_ecm_v2(self, config: ECMConfig) -> FactorResult:
+        """
+        Execute ECM with configuration object (simplified interface).
+
+        This is the new, recommended method that uses ECMConfig dataclass.
+        It has better type safety, validation, and testability.
+
+        Args:
+            config: ECM configuration object
+
+        Returns:
+            FactorResult with discovered factors and metadata
+
+        Example:
+            >>> config = ECMConfig(composite="123456789", b1=50000, curves=100)
+            >>> result = wrapper.run_ecm_v2(config)
+            >>> if result.success:
+            ...     print(f"Found factors: {result.factors}")
+        """
+        return self.executor.execute_ecm_batch(config)
+
+    def run_ecm_from_dict(self, params: Dict[str, Any]) -> FactorResult:
+        """
+        Execute ECM from dictionary parameters.
+
+        Convenient wrapper for config-based execution when you have
+        a dictionary of parameters (e.g., from JSON config file).
+
+        Args:
+            params: Dictionary with ECMConfig fields
+
+        Returns:
+            FactorResult object
+
+        Example:
+            >>> params = {"composite": "12345", "b1": 50000, "curves": 10}
+            >>> result = wrapper.run_ecm_from_dict(params)
+        """
+        config = ECMConfig(**params)
+        return self.run_ecm_v2(config)
+
+    def run_two_stage_v2(self, config: TwoStageConfig) -> FactorResult:
+        """
+        Execute two-stage ECM pipeline with configuration object.
+
+        Stage 1: GPU-accelerated residue generation
+        Stage 2: CPU processing of residues
+
+        Args:
+            config: Two-stage configuration object
+
+        Returns:
+            FactorResult with discovered factors
+
+        Example:
+            >>> config = TwoStageConfig(
+            ...     composite="12345...",
+            ...     b1=50000,
+            ...     stage1_curves=100,
+            ...     stage2_curves_per_residue=1000
+            ... )
+            >>> result = wrapper.run_two_stage_v2(config)
+        """
+        from lib.ecm_pipeline import TwoStagePipeline
+        pipeline = TwoStagePipeline(config, self)
+        return pipeline.execute()
+
+    def run_multiprocess_v2(self, config: MultiprocessConfig) -> FactorResult:
+        """
+        Execute multiprocess ECM with configuration object.
+
+        Distributes curves across multiple CPU cores for parallel execution.
+
+        Args:
+            config: Multiprocess configuration object
+
+        Returns:
+            FactorResult with discovered factors
+
+        Example:
+            >>> config = MultiprocessConfig(
+            ...     composite="12345...",
+            ...     b1=50000,
+            ...     total_curves=1000,
+            ...     curves_per_process=100
+            ... )
+            >>> result = wrapper.run_multiprocess_v2(config)
+        """
+        from lib.ecm_pipeline import MultiprocessPipeline
+        pipeline = MultiprocessPipeline(config, self)
+        return pipeline.execute()
+
+    def run_tlevel_v2(self, config: TLevelConfig) -> FactorResult:
+        """
+        Execute T-level targeting with configuration object.
+
+        Progressively runs ECM with optimized B1 values to reach target t-level.
+
+        Args:
+            config: T-level configuration object
+
+        Returns:
+            FactorResult with discovered factors
+
+        Example:
+            >>> config = TLevelConfig(
+            ...     composite="12345...",
+            ...     target_t_level=30.0,
+            ...     b1_strategy='optimal'
+            ... )
+            >>> result = wrapper.run_tlevel_v2(config)
+        """
+        from lib.ecm_pipeline import TLevelPipeline
+        pipeline = TLevelPipeline(config, self)
+        return pipeline.execute()
+
+    # ==================== LEGACY METHODS (BACKWARD COMPATIBLE) ====================
 
     def _log_and_store_factors(self, all_factors: List[Tuple[str, Optional[str]]],
                                results: Dict[str, Any], composite: str, b1: int,
@@ -115,7 +246,7 @@ class ECMWrapper(BaseWrapper):
                             self.logger.info(f"Completed {total_completed}/{curves} curves")
 
                 # Stream subprocess output
-                process, output_lines = self._stream_subprocess_output(
+                _, output_lines = self._stream_subprocess_output(
                     batch_cmd, composite, "ECM", progress_callback
                 )
 
@@ -622,6 +753,8 @@ class ECMWrapper(BaseWrapper):
             results['factor_found'] = factor_found
             results['factors_found'] = [factor_found]
             results['sigma'] = factor_sigma
+            # Store factor-to-sigma mapping for the processor
+            results['factor_sigmas'] = {factor_found: factor_sigma} if factor_sigma else {}
             # Then fully factor it
             processor.fully_factor_and_store([factor_found], results, quiet=False)
         else:
@@ -767,7 +900,7 @@ class ECMWrapper(BaseWrapper):
                 capture_output=True,
                 text=True
             )
-            from parsing_utils import extract_program_version
+            from lib.parsing_utils import extract_program_version
             return extract_program_version(result.stdout, 'ecm')
         except:
             pass
@@ -827,14 +960,14 @@ class ECMWrapper(BaseWrapper):
         factor_int = int(factor)
 
         # Trial division catches small factors quickly (2, 3, 5, 7, ... up to 10^7)
-        small_primes, cofactor = self._trial_division(factor_int, limit=10**7)
+        small_primes, cofactor = trial_division(factor_int, limit=10**7)
         all_primes = [str(p) for p in small_primes]
 
         if cofactor == 1:
             return all_primes
 
         # Check if cofactor is prime using probabilistic test
-        if self._is_probably_prime(cofactor):
+        if is_probably_prime(cofactor):
             self.logger.info(f"Cofactor {cofactor} is prime")
             all_primes.append(str(cofactor))
             return all_primes
@@ -850,7 +983,7 @@ class ECMWrapper(BaseWrapper):
 
             # Select B1 based on cofactor size
             cofactor_digits = len(str(current_cofactor))
-            b1 = self._get_b1_for_digit_length(cofactor_digits)
+            b1 = get_b1_for_digit_length(cofactor_digits)
 
             # Use more curves for smaller numbers (they're faster)
             curves = max(10, 50 - (cofactor_digits // 2))
@@ -887,7 +1020,7 @@ class ECMWrapper(BaseWrapper):
                         break
 
                     # Check if remaining cofactor is prime
-                    if self._is_probably_prime(current_cofactor):
+                    if is_probably_prime(current_cofactor):
                         self.logger.info(f"Remaining cofactor {current_cofactor} is prime")
                         all_primes.append(str(current_cofactor))
                         current_cofactor = 1
@@ -1002,22 +1135,21 @@ class ECMWrapper(BaseWrapper):
             Number of curves needed, or None if calculation failed
         """
         import re
+        from lib.subprocess_utils import execute_subprocess_simple
 
         tlevel_path = self.config.get('programs', {}).get('t_level', {}).get('path', 'bin/t-level')
 
         try:
             # Call t-level binary: t-level -w <current> -t <target> -b <b1>
-            result = subprocess.run(
+            stdout, _ = execute_subprocess_simple(
                 [tlevel_path, '-w', str(current_tlevel), '-t', str(target_tlevel), '-b', str(b1)],
-                capture_output=True,
-                text=True,
                 timeout=10
             )
 
             # Parse output like:
             # "Running the following will get you to t28.700:"
             # "262@25e4"
-            lines = result.stdout.strip().split('\n')
+            lines = stdout.strip().split('\n')
             for i, line in enumerate(lines):
                 if 'will get you to' in line:
                     # Check next line for the recommendation
@@ -1032,7 +1164,7 @@ class ECMWrapper(BaseWrapper):
                     if match:
                         return int(match.group(1))
 
-            self.logger.warning(f"Failed to parse curve recommendation from t-level output: {result.stdout}")
+            self.logger.warning(f"Failed to parse curve recommendation from t-level output: {stdout}")
             return None
 
         except Exception as e:
@@ -1063,75 +1195,21 @@ class ECMWrapper(BaseWrapper):
         elif digits < 120: return 850000000
         else: return 2900000000
 
-    def _get_optimal_b1_for_tlevel(self, target_tlevel: float) -> Tuple[int, int]:
-        """
-        Get optimal B1 value and expected curves for reaching a specific t-level.
-        Based on Zimmermann's table for GMP-ECM optimal plans.
-
-        Args:
-            target_tlevel: Target t-level in digits (e.g., 20, 25, 30, 35...)
-
-        Returns:
-            Tuple of (optimal_b1, expected_curves) for that t-level
-        """
-        # Zimmermann's optimal B1 values and expected curves for GMP-ECM 7
-        # Format: (digits, optimal_b1, expected_curves_ecm7)
-        # Source: https://members.loria.fr/PZimmermann/records/ecmnet.html
-        OPTIMAL_B1_TABLE = [
-            (20, 11000, 107),
-            (25, 50000, 261),
-            (30, 250000, 513),
-            (35, 1000000, 1071),
-            (40, 3000000, 2753),
-            (45, 11000000, 5208),
-            (50, 43000000, 8704),
-            (55, 110000000, 20479),
-            (60, 260000000, 47888),
-            (65, 850000000, 78923),
-            (70, 2900000000, 115153),
-            (75, 7600000000, 211681),
-            (80, 25000000000, 296479)
-        ]
-
-        # Find the closest entry (linear interpolation if between values)
-        if target_tlevel <= OPTIMAL_B1_TABLE[0][0]:
-            return (OPTIMAL_B1_TABLE[0][1], OPTIMAL_B1_TABLE[0][2])
-        if target_tlevel >= OPTIMAL_B1_TABLE[-1][0]:
-            return (OPTIMAL_B1_TABLE[-1][1], OPTIMAL_B1_TABLE[-1][2])
-
-        # Find surrounding entries and interpolate
-        for i in range(len(OPTIMAL_B1_TABLE) - 1):
-            digits1, b1_1, curves1 = OPTIMAL_B1_TABLE[i]
-            digits2, b1_2, curves2 = OPTIMAL_B1_TABLE[i + 1]
-
-            if digits1 <= target_tlevel <= digits2:
-                # Linear interpolation in log space for B1 (grows exponentially)
-                # Linear interpolation in linear space for curves
-                import math
-                log_b1_1 = math.log(b1_1)
-                log_b1_2 = math.log(b1_2)
-                fraction = (target_tlevel - digits1) / (digits2 - digits1)
-                log_b1 = log_b1_1 + fraction * (log_b1_2 - log_b1_1)
-                optimal_b1 = int(math.exp(log_b1))
-                expected_curves = int(curves1 + fraction * (curves2 - curves1))
-                return (optimal_b1, expected_curves)
-
-        # Fallback
-        return (OPTIMAL_B1_TABLE[-1][1], OPTIMAL_B1_TABLE[-1][2])
-
     def run_ecm_with_tlevel(self, composite: str, target_tlevel: float,
+                           start_tlevel: float = 0.0,
                            batch_size: int = 100, workers: int = 1,
                            use_two_stage: bool = False, verbose: bool = False,
                            start_b1: Optional[int] = None, no_submit: bool = False,
                            project: Optional[str] = None) -> Dict[str, Any]:
         """
         Run ECM progressively until target t-level reached.
-        Uses progressive approach: starts at t20 and increases by 5 digits each step.
+        Uses progressive approach: starts at specified t-level and increases by 5 digits each step.
         Fully factors any composite factors found.
 
         Args:
             composite: Number to factor
             target_tlevel: Target t-level in digits (e.g., 30.0, 40.0)
+            start_tlevel: Starting t-level (default: 0.0 for starting from scratch)
             batch_size: DEPRECATED - uses optimal curve counts from Zimmermann table
             workers: Number of parallel workers (default: 1)
             use_two_stage: Use two-stage GPU mode (default: False)
@@ -1155,22 +1233,38 @@ class ECMWrapper(BaseWrapper):
         total_curves = 0
         curve_history = []  # Track all curves run for t-level calculation
 
-        self.logger.info(f"Starting progressive ECM with target t{target_tlevel:.1f} on C{original_digits}")
+        if start_tlevel > 0:
+            self.logger.info(f"Resuming progressive ECM from t{start_tlevel:.1f} to t{target_tlevel:.1f} on C{original_digits}")
+        else:
+            self.logger.info(f"Starting progressive ECM with target t{target_tlevel:.1f} on C{original_digits}")
 
         start_time = time.time()
 
-        # Start at t0, work our way up in steps of 5 digits (20, 25, 30, 35...)
-        current_t_level = 0.0
+        # Build step targets starting from start_tlevel
+        current_t_level = start_tlevel
         step_targets = []
-        t = 20.0
+
+        # Start at t20 or the first step above start_tlevel
+        if start_tlevel <= 20.0:
+            t = 20.0
+        else:
+            # Round up to next 5-digit increment
+            t = ((int(start_tlevel) // 5) + 1) * 5.0
+
+        # Generate steps in 5-digit increments
         while t <= target_tlevel:
-            step_targets.append(t)
+            if t > start_tlevel:  # Only include steps after starting point
+                step_targets.append(t)
             t += 5.0
-        # Add final target if it's not already a step
-        if target_tlevel not in step_targets:
+
+        # Add final target if it's not already a step and is above start_tlevel
+        if target_tlevel not in step_targets and target_tlevel > start_tlevel:
             step_targets.append(target_tlevel)
 
-        self.logger.info(f"Progressive steps: {' → '.join([f't{t:.1f}' for t in step_targets])}")
+        if step_targets:
+            self.logger.info(f"Progressive steps: {' → '.join([f't{t:.1f}' for t in step_targets])}")
+        else:
+            self.logger.warning(f"No steps to run (already at or past target)")
 
         for step_target in step_targets:
             if current_composite == 1:
@@ -1179,7 +1273,7 @@ class ECMWrapper(BaseWrapper):
             cofactor_digits = len(str(current_composite))
 
             # Get optimal B1 for this step from Zimmermann table
-            optimal_b1, _ = self._get_optimal_b1_for_tlevel(step_target)
+            optimal_b1, _ = get_optimal_b1_for_tlevel(step_target)
 
             # Calculate exact curves needed to reach this step from current position
             curves_needed = self._calculate_curves_for_target(current_t_level, step_target, optimal_b1)
@@ -1187,7 +1281,7 @@ class ECMWrapper(BaseWrapper):
             if curves_needed is None or curves_needed <= 0:
                 self.logger.warning(f"Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, using Zimmermann estimate")
                 # Fallback to Zimmermann table estimate
-                _, curves_needed = self._get_optimal_b1_for_tlevel(step_target)
+                _, curves_needed = get_optimal_b1_for_tlevel(step_target)
 
             self.logger.info(f"Progressive ECM: t{current_t_level:.3f} → t{step_target:.1f} on C{cofactor_digits}, B1={optimal_b1}, {curves_needed} curves")
 
@@ -1222,7 +1316,7 @@ class ECMWrapper(BaseWrapper):
             # Update curve history and calculate new t-level
             param = batch_results.get('parametrization', 1)
             curve_history.append(f"{curves_completed}@{optimal_b1},p={param}")
-            current_t_level = self._calculate_tlevel(curve_history)
+            current_t_level = calculate_tlevel(curve_history)
             self.logger.info(f"Reached t{current_t_level:.3f} after {curves_completed} curves")
 
             # Submit this step's results if submission enabled
@@ -1285,8 +1379,8 @@ class ECMWrapper(BaseWrapper):
 
 
 def main():
-    from arg_parser import create_ecm_parser, validate_ecm_args, print_validation_errors
-    from arg_parser import get_method_defaults, resolve_gpu_settings, resolve_worker_count, get_stage2_workers_default
+    from lib.arg_parser import create_ecm_parser, validate_ecm_args, print_validation_errors
+    from lib.arg_parser import get_method_defaults, resolve_gpu_settings, resolve_worker_count, get_stage2_workers_default
 
     parser = create_ecm_parser()
     args = parser.parse_args()
@@ -1315,9 +1409,11 @@ def main():
     # Check for T-level mode first (highest priority)
     if hasattr(args, 'tlevel') and args.tlevel:
         # T-level mode: run ECM iteratively until target t-level reached
+        start_tlevel = args.start_tlevel if hasattr(args, 'start_tlevel') and args.start_tlevel else 0.0
         results = wrapper.run_ecm_with_tlevel(
             composite=args.composite,
             target_tlevel=args.tlevel,
+            start_tlevel=start_tlevel,
             batch_size=args.batch_size,
             workers=args.workers if args.multiprocess else 1,
             use_two_stage=args.two_stage,

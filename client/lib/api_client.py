@@ -86,7 +86,7 @@ class APIClient:
                 if hasattr(e, 'response') and e.response is not None:
                     try:
                         error_details = f" - Response: {e.response.text}"
-                    except:
+                    except (AttributeError, ValueError, UnicodeDecodeError):
                         pass
 
                 self.logger.error(
@@ -187,16 +187,23 @@ class APIClient:
         elif 'factors_found' in results and results['factors_found']:
             factor_found = results['factors_found'][0]  # Use first factor
 
-        # Build factors_found list if we have multiple factors
+        # Build factors_found list - use ecm_found_factors if available (excludes cofactor primes)
+        # Otherwise fall back to factors_found for backward compatibility
+        factors_to_submit = results.get('ecm_found_factors', results.get('factors_found', []))
+        cofactor_primes = results.get('cofactor_primes', [])
+
+        if cofactor_primes:
+            self.logger.info(f"Excluding {len(cofactor_primes)} cofactor prime(s) from API submission: {cofactor_primes}")
+
         factors_found_list = None
-        if 'factors_found' in results and len(results['factors_found']) > 0:
+        if factors_to_submit and len(factors_to_submit) > 0:
             factor_sigmas = results.get('factor_sigmas', {})
             factors_found_list = []
 
-            self.logger.debug(f"Building factors_found list from {len(results['factors_found'])} factors")
+            self.logger.debug(f"Building factors_found list from {len(factors_to_submit)} ECM-found factors")
             self.logger.debug(f"factor_sigmas available: {list(factor_sigmas.keys()) if factor_sigmas else 'None'}")
 
-            for factor in results['factors_found']:
+            for factor in factors_to_submit:
                 # Get sigma for this specific factor, or use main sigma
                 factor_sigma = factor_sigmas.get(factor, results.get('sigma'))
                 factors_found_list.append({

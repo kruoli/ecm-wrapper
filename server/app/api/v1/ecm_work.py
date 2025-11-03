@@ -31,7 +31,7 @@ async def get_ecm_work(
     priority: Optional[int] = None,
     min_digits: Optional[int] = None,
     max_digits: Optional[int] = None,
-    timeout_days: Optional[int] = 5,
+    timeout_days: int = 5,
     db: Session = Depends(get_db)
 ):
     """

@@ -35,8 +35,8 @@ class ECMPatterns:
     # Example: "********** Factor found in step 2: 154848006894803752593902015592419621459239"
     STANDARD_FACTOR = re.compile(r'\**\s*Factor found in step \d+: (\d+)', re.IGNORECASE)
 
-    # Sigma parameter extraction
-    SIGMA_PARAM = re.compile(r'-sigma (3:\d+|\d+)')
+    # Sigma parameter extraction (command-line or output)
+    SIGMA_PARAM = re.compile(r'-sigma ([0-3]:\d+|\d+)')
 
     # Step completion tracking
     STEP_COMPLETED = re.compile(r'Step 1 took')
@@ -48,8 +48,9 @@ class ECMPatterns:
     CURVE_COMPLETED_ALT = re.compile(r'ECM: Step 2 took (\d+)ms')
 
     # Sigma extraction patterns (used in ecm-wrapper.py line-by-line parsing)
-    SIGMA_COLON_FORMAT = re.compile(r'sigma=([1-3]:\d+)')
-    SIGMA_DASH_FORMAT = re.compile(r'-sigma (3:\d+|\d+)')
+    # Parametrization 0-3: 0 for large numbers (Brent-Suyama), 1 for Montgomery, 2/3 for twisted Edwards
+    SIGMA_COLON_FORMAT = re.compile(r'sigma=([0-3]:\d+)')
+    SIGMA_DASH_FORMAT = re.compile(r'-sigma ([0-3]:\d+|\d+)')
 
     # Curve count extraction from GPU output
     CURVE_COUNT = re.compile(r'\((\d+) curves\)')
@@ -97,8 +98,9 @@ class YAFUPatterns:
     # Version detection
     YAFU_VERSION = re.compile(r'YAFU Version (\d+\.\d+(?:\.\d+)?)')
 
-    # Sigma extraction for YAFU
-    SIGMA_USING_FORMAT = re.compile(r'Using.*?sigma=(?:3:)?(\d+)')
+    # Sigma extraction for YAFU/GMP-ECM "Using" lines
+    # Captures full sigma with parametrization (e.g., "0:12345" or "3:67890")
+    SIGMA_USING_FORMAT = re.compile(r'Using.*?sigma=([0-3]:\d+)')
 
 
 def extract_sigma_for_factor(output: str, factor: str, factor_position: Optional[int] = None) -> Optional[str]:
@@ -124,7 +126,8 @@ def extract_sigma_for_factor(output: str, factor: str, factor_position: Optional
         for line in reversed(lines):
             sigma_match = YAFUPatterns.SIGMA_USING_FORMAT.search(line)
             if sigma_match:
-                return f"3:{sigma_match.group(1)}"
+                # Regex now captures full format "0:12345" so return directly
+                return sigma_match.group(1)
 
     # Strategy 3: Global sigma parameter search
     sigma_match = ECMPatterns.SIGMA_PARAM.search(output)

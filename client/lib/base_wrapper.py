@@ -303,12 +303,12 @@ class BaseWrapper:
             program_input = kwargs.get('input')
 
             # Execute subprocess using unified utility
+            # Check explicitly for None to allow empty string override
             result = execute_subprocess(
                 cmd=cmd,
-                composite=program_input if program_input else composite,
+                composite=program_input if program_input is not None else composite,
                 verbose=verbose,
-                timeout=timeout,
-                logger=self.logger
+                timeout=timeout
             )
 
             stdout = result['stdout']
@@ -332,7 +332,7 @@ class BaseWrapper:
 
             # Parse curves completed for YAFU methods
             if kwargs.get('track_curves', False):
-                from parsing_utils import YAFUPatterns
+                from .parsing_utils import YAFUPatterns
                 curves_match = YAFUPatterns.CURVES_COMPLETED.search(stdout)
                 if curves_match:
                     results['curves_completed'] = int(curves_match.group(1))
@@ -342,11 +342,10 @@ class BaseWrapper:
                     if progress_match:
                         results['curves_completed'] = int(progress_match.group(1))
 
-            results['success'] = process.returncode == 0
+            results['success'] = result['returncode'] == 0
 
         except subprocess.TimeoutExpired:
             self.logger.error(f"{method.upper()} timed out after {timeout} seconds")
-            process.kill()
             results['success'] = False
             results['timeout'] = True
         except subprocess.SubprocessError as e:

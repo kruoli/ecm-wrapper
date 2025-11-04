@@ -10,8 +10,8 @@ Design note: multiprocessing requires pickleable functions, so we provide both:
 - A thin global function wrapper (for multiprocessing compatibility)
 """
 from typing import Optional, Dict, Any
-from lib.parsing_utils import parse_ecm_output, ECMPatterns
-from lib.subprocess_utils import execute_subprocess
+from .parsing_utils import parse_ecm_output, ECMPatterns
+from .subprocess_utils import execute_subprocess
 
 
 class ECMWorkerProcess:

@@ -252,6 +252,7 @@
                         <th>Factor</th>
                         <th>Composite</th>
                         <th>Found</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -262,6 +263,12 @@
                         <td><span class="number">{{ esc(factor.factor) }}</span></td>
                         <td><span class="number">{{ esc(composite_display) }}</span></td>
                         <td>{{ esc(found_str) }}</td>
+                        <td>
+                            <button onclick="deleteFactor({{ factor.id }}, '{{ esc(factor.factor) }}')"
+                                    style="background: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                                🗑️ Delete
+                            </button>
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -625,6 +632,24 @@
                 })
                 .catch(error => {
                     alert('Error cancelling work: ' + error);
+                });
+        }
+    }
+
+    function deleteFactor(factorId, factorValue) {
+        if (confirm(`Are you sure you want to delete factor ${factorValue}?\n\nThis action cannot be undone!`)) {
+            fetchWithAuth(`/api/v1/admin/factors/${factorId}`, {method: 'DELETE'})
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert(`Factor ${factorValue} deleted successfully.`);
+                        refreshPage();
+                    } else {
+                        alert('Error deleting factor: ' + JSON.stringify(data));
+                    }
+                })
+                .catch(error => {
+                    alert('Error deleting factor: ' + error);
                 });
         }
     }

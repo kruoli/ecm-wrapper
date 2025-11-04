@@ -188,14 +188,15 @@ class YAFUWrapper(BaseWrapper):
         # Build command with expression as first positional argument
         cmd = self._build_yafu_auto_cmd(method, composite, threads)
 
-        # Use unified subprocess execution with parsing (no stdin needed)
+        # Use unified subprocess execution with parsing (no stdin needed - composite is in command)
         results = self.run_subprocess_with_parsing(
             cmd=cmd,
             timeout=Timeouts.YAFU_AUTO,
-            composite=composite,
+            composite=composite,  # Used for metadata only
             method=method or 'auto',
             parse_function=parse_yafu_auto_factors,
-            verbose=verbose  # Pass verbose flag through
+            verbose=verbose,  # Pass verbose flag through
+            input=""  # Don't send to stdin - it's already in the command as siqs(...)
         )
 
         # Store command for debugging
@@ -240,7 +241,7 @@ class YAFUWrapper(BaseWrapper):
 
 
 def main():
-    from arg_parser import create_yafu_parser
+    from lib.arg_parser import create_yafu_parser
 
     parser = create_yafu_parser()
     args = parser.parse_args()

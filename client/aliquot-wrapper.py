@@ -335,7 +335,8 @@ class AliquotWrapper(BaseWrapper):
                 target_tlevel=target_t_level,
                 workers=self.threads if self.threads else 1,
                 verbose=self.verbose,
-                no_submit=True  # Never submit to API - aliquot-wrapper only submits to FactorDB
+                no_submit=True,  # Never submit to API - aliquot-wrapper only submits to FactorDB
+                auto_adjust_target=True  # Adjust target t-level when factors found
             )
 
             # Collect ECM factors (all are guaranteed to be prime)

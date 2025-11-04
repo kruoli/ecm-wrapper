@@ -65,8 +65,10 @@ def execute_subprocess(
     line_count = 0
 
     try:
-        # Determine stdin mode: PIPE if we're sending input, otherwise None
-        stdin_mode = subprocess.PIPE if composite else None
+        # Determine stdin mode: PIPE only if we actually have input to send
+        # Check for non-empty string to avoid opening stdin when not needed
+        # (some programs like YAFU switch to batchfile mode if stdin is open)
+        stdin_mode = subprocess.PIPE if (composite and composite.strip()) else None
 
         process = subprocess.Popen(
             cmd,
@@ -77,8 +79,8 @@ def execute_subprocess(
             bufsize=1  # Line buffered
         )
 
-        # Send composite to stdin if provided
-        if composite and process.stdin:
+        # Send composite to stdin if provided (and not empty)
+        if composite and composite.strip() and process.stdin:
             process.stdin.write(composite)
             process.stdin.close()
 

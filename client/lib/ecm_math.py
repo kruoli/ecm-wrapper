@@ -12,7 +12,7 @@ import logging
 import random
 import re
 from typing import List, Tuple, Optional
-from lib.subprocess_utils import execute_subprocess_simple
+from .subprocess_utils import execute_subprocess_simple
 
 
 logger = logging.getLogger(__name__)

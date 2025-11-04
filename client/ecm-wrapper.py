@@ -1200,7 +1200,8 @@ class ECMWrapper(BaseWrapper):
                            batch_size: int = 100, workers: int = 1,
                            use_two_stage: bool = False, verbose: bool = False,
                            start_b1: Optional[int] = None, no_submit: bool = False,
-                           project: Optional[str] = None) -> Dict[str, Any]:
+                           project: Optional[str] = None,
+                           auto_adjust_target: bool = False) -> Dict[str, Any]:
         """
         Run ECM progressively until target t-level reached.
         Uses progressive approach: starts at specified t-level and increases by 5 digits each step.
@@ -1217,6 +1218,9 @@ class ECMWrapper(BaseWrapper):
             start_b1: DEPRECATED - uses optimal B1 from Zimmermann table
             no_submit: Skip API submission if True (default: False)
             project: Optional project name for API submission
+            auto_adjust_target: Auto-adjust target t-level when factors found (default: False)
+                               Uses same ratio: new_target = (target/original_digits) * new_digits
+                               Keeps current_t_level to preserve work done
 
         Returns:
             Results dict with:
@@ -1269,6 +1273,11 @@ class ECMWrapper(BaseWrapper):
         for step_target in step_targets:
             if current_composite == 1:
                 break
+
+            # Skip steps that exceed adjusted target (when auto_adjust_target=True)
+            if step_target > target_tlevel:
+                self.logger.debug(f"Skipping step t{step_target:.1f} (exceeds adjusted target t{target_tlevel:.1f})")
+                continue
 
             cofactor_digits = len(str(current_composite))
 
@@ -1343,11 +1352,38 @@ class ECMWrapper(BaseWrapper):
                     self.logger.info("Fully factored by progressive ECM")
                     break
 
-                # Reset curve history for the new cofactor
-                # The work we've done doesn't directly apply to the smaller cofactor
-                curve_history = []
-                current_t_level = 0.0
-                self.logger.info(f"Starting fresh t-level progression on C{new_digits} cofactor")
+                # Handle target adjustment and curve history based on auto_adjust_target flag
+                if auto_adjust_target:
+                    # Calculate new target using same ratio as original
+                    old_target = target_tlevel
+                    target_tlevel = (old_target / original_digits) * new_digits
+                    self.logger.info(f"Target adjusted from t{old_target:.1f} to t{target_tlevel:.1f} for C{new_digits} (keeping t{current_t_level:.3f} progress)")
+
+                    # Regenerate step_targets for remaining work
+                    step_targets = []
+                    t = ((int(current_t_level) // 5) + 1) * 5.0 if current_t_level > 20.0 else 20.0
+                    while t <= target_tlevel:
+                        if t > current_t_level:
+                            step_targets.append(t)
+                        t += 5.0
+                    if target_tlevel not in step_targets and target_tlevel > current_t_level:
+                        step_targets.append(target_tlevel)
+
+                    if step_targets:
+                        self.logger.info(f"Remaining steps: {' → '.join([f't{t:.1f}' for t in step_targets])}")
+                    else:
+                        self.logger.info(f"Target t{target_tlevel:.1f} already reached at t{current_t_level:.3f}, stopping")
+                        break
+
+                    # Update original_digits reference for future adjustments
+                    original_digits = new_digits
+
+                    # Keep curve_history and current_t_level to preserve work done
+                else:
+                    # Legacy behavior: reset curve history for the new cofactor
+                    curve_history = []
+                    current_t_level = 0.0
+                    self.logger.info(f"Starting fresh t-level progression on C{new_digits} cofactor")
             else:
                 self.logger.info(f"No factors found at this step")
 

@@ -283,9 +283,21 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
                 if stage2_curves_completed > 0:
                     stage1_only_curves = curves - stage2_curves_completed
                     if stage1_only_curves > 0:
-                        logger.info(f"[CPU Thread] [{idx}/{total}] Submitting {stage1_only_curves} curves that completed Stage 1 only (B1={b1_actual}, B2=0)")
+                        # Calculate the cofactor (new composite after factor divided out)
+                        # Submit stage1-only curves against the NEW composite, not the original
+                        cofactor = number
+                        if all_factors:
+                            # Divide out all factors to get the cofactor
+                            cofactor_int = int(number)
+                            for factor, _ in all_factors:
+                                cofactor_int //= int(factor)
+                            cofactor = str(cofactor_int)
+                        elif stage2_factor:
+                            cofactor = str(int(number) // int(stage2_factor))
+
+                        logger.info(f"[CPU Thread] [{idx}/{total}] Submitting {stage1_only_curves} curves that completed Stage 1 only (B1={b1_actual}, B2=0) against cofactor")
                         stage1_only_results = {
-                            'composite': number,
+                            'composite': cofactor,  # Use cofactor, not original number
                             'b1': b1_actual,
                             'b2': 0,  # Stage 1 only
                             'curves_requested': stage1_only_curves,

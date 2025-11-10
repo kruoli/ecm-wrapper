@@ -525,11 +525,13 @@ class ECMWrapper(BaseWrapper):
             results['curves_completed'] = stage2_curves_completed
 
             # Submit stage1-only curves separately (if some didn't complete stage 2)
+            # NOTE: This submission happens BEFORE the main result submission (in the caller),
+            # so we use the original composite here. The main result will update it later.
             stage1_only_curves = actual_curves - stage2_curves_completed
             if stage1_only_curves > 0 and not no_submit:
                 self.logger.info(f"Submitting {stage1_only_curves} curves that completed Stage 1 only (B1={b1}, B2=0)")
                 stage1_only_results = {
-                    'composite': composite,
+                    'composite': composite,  # Use original composite (main result not submitted yet)
                     'b1': b1,
                     'b2': 0,  # Stage 1 only
                     'curves_requested': stage1_only_curves,

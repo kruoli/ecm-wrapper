@@ -2,6 +2,8 @@
 import subprocess
 import time
 import sys
+import signal
+import threading
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple, cast
 from lib.base_wrapper import BaseWrapper
@@ -25,6 +27,9 @@ class ECMWrapper(BaseWrapper):
         # Initialize new executor for config-based methods
         from lib.ecm_executor import ECMExecutor
         self.executor = ECMExecutor(self.config, self.run_subprocess_with_parsing)
+        # Graceful shutdown support
+        self.stop_event = threading.Event()
+        self.interrupted = False
 
     # ==================== NEW CONFIG-BASED METHODS ====================
     # These methods use configuration objects for cleaner interfaces
@@ -225,7 +230,7 @@ class ECMWrapper(BaseWrapper):
         batch_size = min(curves, 50)  # Process in batches to reduce overhead
         curves_completed = 0
 
-        while curves_completed < curves and not results['factor_found']:
+        while curves_completed < curves and not results['factor_found'] and not self.stop_event.is_set():
             curves_this_batch = min(batch_size, curves - curves_completed)
 
             # Build proper command: ecm [options] -c curves B1 [B2]
@@ -338,7 +343,9 @@ class ECMWrapper(BaseWrapper):
                          gpu_device: Optional[int] = None,
                          gpu_curves: Optional[int] = None,
                          continue_after_factor: bool = False,
-                         progress_interval: int = 0) -> Dict[str, Any]:
+                         progress_interval: int = 0,
+                         project: Optional[str] = None,
+                         no_submit: bool = False) -> Dict[str, Any]:
         """Run ECM using two-stage approach: GPU stage 1 + multi-threaded CPU stage 2"""
 
         # Note: B2 can be None to use GMP-ECM defaults
@@ -466,10 +473,17 @@ class ECMWrapper(BaseWrapper):
                 results['raw_output'] = f"Stage 1 unexpected error: {type(e).__name__}"
                 return results
 
-        # Stage 2: Multi-threaded CPU execution (skip if B2=0)
+        # Stage 2: Multi-threaded CPU execution (skip if B2=0 or interrupted)
         stage2_factor = None
         stage2_sigma = None
-        if b2 and b2 > 0:
+        if self.stop_event.is_set():
+            self.logger.info("Interrupt detected after Stage 1, skipping Stage 2")
+            # Return partial results from Stage 1
+            results['curves_completed'] = actual_curves
+            results['execution_time'] = time.time() - start_time
+            results['raw_output'] = stage1_output if 'stage1_output' in locals() else ""
+            return results
+        elif b2 and b2 > 0:
             self.logger.info(f"Starting Stage 2 ({stage2_workers} workers) with B1={b1}, B2={b2}")
             early_termination = self.config['programs']['gmp_ecm'].get('early_termination', True) and not continue_after_factor
             if continue_after_factor:
@@ -478,9 +492,10 @@ class ECMWrapper(BaseWrapper):
                 residue_file, b1, b2, stage2_workers, verbose, early_termination, progress_interval
             )
 
-            # Extract factor and sigma from stage 2 result
+            # Extract factor, sigma, and curves completed from stage 2 result
+            stage2_curves_completed = 0
             if stage2_result:
-                stage2_factor, stage2_sigma = stage2_result
+                stage2_factor, stage2_sigma, stage2_curves_completed = stage2_result
         else:
             self.logger.info("Skipping Stage 2 (B2=0 - Stage 1 only mode)")
 
@@ -504,7 +519,32 @@ class ECMWrapper(BaseWrapper):
                     parametrization = int(sigma_str.split(':')[0])
         results['parametrization'] = parametrization
 
-        results['curves_completed'] = actual_curves
+        # Determine curves completed based on which stage completed
+        if stage2_curves_completed > 0:
+            # Stage 2 ran - report those curves with B1+B2
+            results['curves_completed'] = stage2_curves_completed
+
+            # Submit stage1-only curves separately (if some didn't complete stage 2)
+            stage1_only_curves = actual_curves - stage2_curves_completed
+            if stage1_only_curves > 0 and not no_submit:
+                self.logger.info(f"Submitting {stage1_only_curves} curves that completed Stage 1 only (B1={b1}, B2=0)")
+                stage1_only_results = {
+                    'composite': composite,
+                    'b1': b1,
+                    'b2': 0,  # Stage 1 only
+                    'curves_requested': stage1_only_curves,
+                    'curves_completed': stage1_only_curves,
+                    'factor_found': None,
+                    'raw_output': '',
+                    'method': 'ecm',
+                    'execution_time': results.get('execution_time', 0),
+                    'parametrization': parametrization
+                }
+                self.submit_result(stage1_only_results, project, 'gmp-ecm-ecm')
+        else:
+            # Stage 2 didn't run or completed all curves - use Stage 1 count
+            results['curves_completed'] = actual_curves
+
         results['execution_time'] = time.time() - start_time
 
         return results
@@ -657,9 +697,17 @@ class ECMWrapper(BaseWrapper):
         completed_workers = 0
         results_received = []
         worker_progress = {}  # Track progress per worker: {worker_id: curves_completed}
+        stop_signaled = False  # Track if we've already signaled workers to stop
 
         # Use a shorter timeout and check processes more frequently
         while completed_workers < len(processes):
+            # Check for interruption signal
+            if self.stop_event.is_set() and not stop_signaled:
+                self.logger.info("Interrupt detected, signaling workers to stop...")
+                stop_event.set()
+                stop_signaled = True
+                # Don't break - continue collecting results as workers terminate
+
             got_result = False
 
             # Check for progress updates from workers
@@ -1301,6 +1349,11 @@ class ECMWrapper(BaseWrapper):
             self.logger.warning(f"No steps to run (already at or past target)")
 
         for step_target in step_targets:
+            # Check for interruption
+            if self.stop_event.is_set():
+                self.logger.info("Interrupt detected, stopping t-level progression")
+                break
+
             if current_composite == 1:
                 break
 
@@ -1460,6 +1513,19 @@ def main():
     errors = validate_ecm_args(args, wrapper.config)
     print_validation_errors(errors)
 
+    # Set up graceful shutdown handler for Ctrl+C
+    def signal_handler(signum, frame):  # noqa: ARG001
+        if not wrapper.interrupted:
+            wrapper.interrupted = True
+            print("\n^C Interrupt received. Stopping workers and preparing to submit partial results...")
+            wrapper.stop_event.set()
+        else:
+            # Second Ctrl+C forces immediate exit
+            print("\nForced exit (second interrupt)")
+            sys.exit(1)
+
+    signal.signal(signal.SIGINT, signal_handler)
+
     # Use shared argument processing utilities
     b1_default, b2_default = get_method_defaults(wrapper.config, args.method)
     b1 = args.b1 or b1_default
@@ -1549,7 +1615,9 @@ def main():
             gpu_device=gpu_device,
             gpu_curves=gpu_curves,
             continue_after_factor=args.continue_after_factor,
-            progress_interval=args.progress_interval
+            progress_interval=args.progress_interval,
+            project=args.project,
+            no_submit=args.no_submit
         )
     else:
         # Standard mode
@@ -1584,12 +1652,34 @@ def main():
     if not args.no_submit and not (hasattr(args, 'tlevel') and args.tlevel):
         # Only submit if we actually completed some curves (not a failure)
         if results.get('curves_completed', 0) > 0:
+            # Show detailed status if interrupted
+            if wrapper.interrupted:
+                curves_completed = results.get('curves_completed', 0)
+                curves_requested = results.get('curves_requested', curves)
+                exec_time = results.get('execution_time', 0)
+                print(f"\nCompleted {curves_completed}/{curves_requested} curves in {exec_time:.1f}s before interruption")
+                print("Submitting partial results...")
+
             program_name = f'gmp-ecm-{results.get("method", "ecm")}'
             success = wrapper.submit_result(results, args.project, program_name)
+
+            if wrapper.interrupted:
+                if success:
+                    print("Partial results submitted successfully")
+                else:
+                    print("Warning: Partial result submission failed (saved to data/results/ for retry)")
+
             sys.exit(0 if success else 1)
         else:
             wrapper.logger.warning("Skipping result submission due to failure (0 curves completed)")
             sys.exit(1)
+    elif args.no_submit and wrapper.interrupted:
+        # If interrupted and --no-submit, show what would have been submitted
+        curves_completed = results.get('curves_completed', 0)
+        curves_requested = results.get('curves_requested', curves)
+        exec_time = results.get('execution_time', 0)
+        print(f"\nCompleted {curves_completed}/{curves_requested} curves in {exec_time:.1f}s before interruption")
+        print("Skipping submission (--no-submit flag)")
 
 if __name__ == '__main__':
     main()

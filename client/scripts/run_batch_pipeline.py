@@ -212,11 +212,12 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
                 )
                 stage2_time = time.time() - stage2_start
 
-                # Extract factor and sigma from stage 2
+                # Extract factor, sigma, and curves completed from stage 2
                 stage2_factor = None
                 stage2_sigma = None
+                stage2_curves_completed = 0
                 if stage2_result:
-                    stage2_factor, stage2_sigma = stage2_result
+                    stage2_factor, stage2_sigma, stage2_curves_completed = stage2_result
                     logger.info(f"[CPU Thread] [{idx}/{total}] Factor found in stage 2: {stage2_factor}")
                     stats.increment_factors()
                 else:
@@ -231,13 +232,21 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
                 # Calculate total execution time (stage 1 + stage 2)
                 total_time = stage1_time + stage2_time
 
+                # Determine curves completed based on which stage completed
+                if stage2_curves_completed > 0:
+                    # Stage 2 ran - report only those curves with B1+B2
+                    curves_to_report = stage2_curves_completed
+                else:
+                    # Stage 2 didn't run - report all Stage 1 curves
+                    curves_to_report = curves
+
                 # Build results dict using wrapper's pattern
                 results = {
                     'composite': number,
                     'b1': b1_actual,
                     'b2': actual_b2,  # Use actual_b2 (0 when factor found in stage 1)
-                    'curves_requested': curves,
-                    'curves_completed': curves,
+                    'curves_requested': curves_to_report,
+                    'curves_completed': curves_to_report,
                     'method': 'ecm',
                     'two_stage': True,
                     'stage2_workers': stage2_workers,
@@ -269,6 +278,25 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
 
                 wrapper.submit_result(results, project, 'gmp-ecm-ecm')
                 logger.info(f"[CPU Thread] [{idx}/{total}] Submitted results (total time: {total_time:.1f}s)")
+
+                # Submit stage1-only curves separately (if some didn't complete stage 2)
+                if stage2_curves_completed > 0:
+                    stage1_only_curves = curves - stage2_curves_completed
+                    if stage1_only_curves > 0:
+                        logger.info(f"[CPU Thread] [{idx}/{total}] Submitting {stage1_only_curves} curves that completed Stage 1 only (B1={b1_actual}, B2=0)")
+                        stage1_only_results = {
+                            'composite': number,
+                            'b1': b1_actual,
+                            'b2': 0,  # Stage 1 only
+                            'curves_requested': stage1_only_curves,
+                            'curves_completed': stage1_only_curves,
+                            'factor_found': None,
+                            'raw_output': '',
+                            'method': 'ecm',
+                            'execution_time': total_time,
+                            'parametrization': parametrization
+                        }
+                        wrapper.submit_result(stage1_only_results, project, 'gmp-ecm-ecm')
 
             stats.increment_stage2()
             logger.info(f"[CPU Thread] [{idx}/{total}] Complete ({stats.get_summary()})")
@@ -370,8 +398,8 @@ def main():
     stats = PipelineStats()
     stats.total_numbers = len(numbers)
 
-    # Create bounded queue (maxsize=1 keeps stages synchronized)
-    residue_queue = queue.Queue(maxsize=1)
+    # Create unbounded queue (GPU can run ahead - CPU processes when ready)
+    residue_queue = queue.Queue()
 
     # Create shutdown event for graceful termination
     shutdown_event = threading.Event()

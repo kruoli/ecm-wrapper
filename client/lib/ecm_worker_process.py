@@ -139,7 +139,7 @@ class ECMWorkerProcess:
             # If no factor found during streaming, check full output
             if not factor_found and not result['terminated_early']:
                 factor_found, sigma_found = parse_ecm_output(result['stdout'])
-                curves_completed = self.curves  # All curves completed
+                # Use actual curve count from "Step 1 took" detections, don't assume all completed
             elif factor_found and not sigma_found:
                 # Factor was found during streaming but sigma was None (found on first curve)
                 # Re-parse the full output to get the sigma

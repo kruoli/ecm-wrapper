@@ -57,9 +57,11 @@ class Stage2Executor:
         self.stop_event = threading.Event()
         self.running_processes: List[subprocess.Popen] = []
         self.process_lock = threading.Lock()
+        self.curves_completed_total = 0
+        self.curves_lock = threading.Lock()
 
     def execute(self, early_termination: bool = True,
-                progress_interval: int = 0) -> Optional[Tuple[str, str]]:
+                progress_interval: int = 0) -> Optional[Tuple[str, str, int]]:
         """
         Execute Stage 2 with worker pool.
 
@@ -68,7 +70,7 @@ class Stage2Executor:
             progress_interval: Report progress every N curves (0 = no progress reporting)
 
         Returns:
-            Tuple of (factor, sigma) or None if no factor found
+            Tuple of (factor, sigma, curves_completed) or None if no factor found
         """
         # Extract B1 from residue file to ensure consistency
         residue_info = self.wrapper._parse_residue_file(self.residue_file)
@@ -118,7 +120,10 @@ class Stage2Executor:
         # Cleanup temporary chunk files and directory
         self._cleanup_chunks(residue_chunks)
 
-        return self.factor_found
+        # Return factor info along with curves completed
+        if self.factor_found:
+            return (self.factor_found[0], self.factor_found[1], self.curves_completed_total)
+        return None
 
     def _split_residue_file(self) -> List[Path]:
         """Split residue file into chunks for parallel processing."""
@@ -140,6 +145,7 @@ class Stage2Executor:
         cmd = [self.ecm_path, '-resume', str(chunk_file)]
         if self.verbose:
             cmd.append('-v')
+        cmd.append('-one')  # Stop after finding first factor (even if cofactor is composite)
         cmd.extend([str(b1), str(self.b2)])
 
         # Count total lines in this worker's chunk for progress reporting
@@ -182,6 +188,10 @@ class Stage2Executor:
 
             # Count curve completions from output
             curves_completed = full_output.count("Step 2 took")
+
+            # Add to total curves completed (thread-safe)
+            with self.curves_lock:
+                self.curves_completed_total += curves_completed
 
             # Progress reporting in verbose mode
             if self.verbose and total_lines > 0:

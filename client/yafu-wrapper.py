@@ -32,7 +32,8 @@ class YAFUWrapper(BaseWrapper):
             'factor.log',
             'session.log',
             'siqs.dat',
-            'nfs*'  # NFS files
+            'nfs*',  # NFS files
+            'YAFU_get_poly_score.out'  # Polynomial scoring output
         ]
 
         cleaned_files = []

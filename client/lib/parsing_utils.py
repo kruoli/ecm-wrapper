@@ -92,6 +92,10 @@ class YAFUPatterns:
     # Only match P (prime) factors, not C (composite) cofactors
     AUTO_FACTOR = re.compile(r'P\d+\s*=\s*(\d+)')
 
+    # Composite factor lines: "C37 = 3013157030613612614987357947254984059"
+    # Used to detect when YAFU returns composite factors that need further factorization
+    COMPOSITE_FACTOR = re.compile(r'C\d+\s*=\s*(\d+)')
+
     # Simple number lines (fallback)
     SIMPLE_NUMBER = re.compile(r'^\s*(\d+)\s*$')
 
@@ -384,6 +388,55 @@ def parse_yafu_auto_factors(output: str) -> List[Tuple[str, Optional[str]]]:
         logger.info(f"Parsed {len(factors)} factors from YAFU auto output")
 
     return factors
+
+
+def parse_yafu_output_with_composites(output: str) -> Dict[str, List[str]]:
+    """
+    Parse factors from YAFU output, separating primes and composites.
+
+    YAFU SIQS can return composite factors (marked with "C" prefix) that need
+    further factorization. This function detects both:
+    - Prime factors: P15 = 856395168938929
+    - Composite factors: C37 = 3013157030613612614987357947254984059
+
+    Args:
+        output: YAFU program output
+
+    Returns:
+        Dictionary with 'primes' and 'composites' keys, each containing a list of factors
+    """
+    lines = output.split('\n')
+    in_factor_section = False
+    primes: List[str] = []
+    composites: List[str] = []
+
+    for line in lines:
+        # Check for factor section start
+        if YAFUPatterns.FACTOR_SECTION_START.search(line):
+            logger.debug("Entered YAFU factor section")
+            in_factor_section = True
+            continue
+
+        if in_factor_section:
+            # Parse prime factor lines - keep ALL occurrences (multiplicity)
+            prime_match = YAFUPatterns.AUTO_FACTOR.search(line)
+            if prime_match:
+                factor = prime_match.group(1)
+                logger.debug(f"Found prime factor: {factor}")
+                primes.append(factor)
+                continue
+
+            # Parse composite factor lines
+            composite_match = YAFUPatterns.COMPOSITE_FACTOR.search(line)
+            if composite_match:
+                factor = composite_match.group(1)
+                logger.debug(f"Found composite factor: {factor}")
+                composites.append(factor)
+                continue
+
+    logger.info(f"Parsed {len(primes)} prime(s) and {len(composites)} composite(s) from YAFU output")
+
+    return {'primes': primes, 'composites': composites}
 
 
 def count_ecm_steps_completed(output: str) -> int:

@@ -383,12 +383,39 @@ class AliquotWrapper(BaseWrapper):
                 self.logger.error(f"YAFU SIQS failed to factor C{cofactor_digits}")
                 return False, {}, siqs_results
 
-            siqs_factors = siqs_results.get('factors_found', [])
-            if siqs_factors:
-                all_factors.extend(siqs_factors)
-            else:
+            # Parse the raw output to detect both primes and composites
+            # YAFU SIQS can return composite factors that need further factorization
+            from lib.parsing_utils import parse_yafu_output_with_composites
+            raw_output = siqs_results.get('raw_output', '')
+            parsed_factors = parse_yafu_output_with_composites(raw_output)
+
+            prime_factors = parsed_factors.get('primes', [])
+            composite_factors = parsed_factors.get('composites', [])
+
+            if not prime_factors and not composite_factors:
                 self.logger.error("YAFU SIQS succeeded but found no factors")
                 return False, {}, siqs_results
+
+            # Add prime factors
+            if prime_factors:
+                self.logger.info(f"YAFU SIQS found {len(prime_factors)} prime factor(s)")
+                all_factors.extend(prime_factors)
+
+            # Recursively factor any composite results
+            if composite_factors:
+                self.logger.warning(f"YAFU SIQS returned {len(composite_factors)} composite factor(s) - factoring recursively")
+                for composite_factor in composite_factors:
+                    self.logger.info(f"Recursively factoring C{len(composite_factor)} = {composite_factor}")
+                    success, sub_factorization, _ = self.factor_number(int(composite_factor))
+
+                    if not success:
+                        self.logger.error(f"Failed to recursively factor C{len(composite_factor)}")
+                        return False, {}, siqs_results
+
+                    # Add all prime factors from the sub-factorization
+                    for prime, exponent in sub_factorization.items():
+                        for _ in range(exponent):
+                            all_factors.append(str(prime))
 
             final_results = siqs_results
         else:

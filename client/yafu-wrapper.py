@@ -64,17 +64,18 @@ class YAFUWrapper(BaseWrapper):
             cmd.extend(['-threads', str(self.config['programs']['yafu']['threads'])])
 
     def _build_yafu_ecm_cmd(self, method: str, b1: Optional[int] = None, b2: Optional[int] = None,
-                           curves: int = 100, composite: str = "") -> List[str]:
+                           curves: int = 100, composite: str = "") -> tuple[List[str], str]:
         """Build YAFU command for ECM/P-1/P+1 methods.
 
         Returns:
-            Command list with expression as first positional argument
+            Tuple of (command_list, stdin_input)
+            - command_list: YAFU binary and flags only (no expression)
+            - stdin_input: The factor() expression to pass via stdin
         """
         yafu_path = self.config['programs']['yafu']['path']
 
-        # YAFU expects expression as first positional argument
-        method_input = self._build_yafu_method_input(composite, method)
-        cmd = [yafu_path, method_input]
+        # Build command with just binary and flags (no expression)
+        cmd = [yafu_path]
 
         # Add method-specific parameters
         if method == "pm1":
@@ -99,7 +100,9 @@ class YAFUWrapper(BaseWrapper):
                 cmd.append('-pretest')
             # Note: YAFU doesn't have a -curves option; it runs curves automatically
 
-        return cmd
+        # Return both command and stdin input separately
+        method_input = self._build_yafu_method_input(composite, method)
+        return cmd, method_input
 
     def _build_yafu_method_input(self, composite: str, method: str) -> str:
         """Build YAFU method input string.
@@ -109,7 +112,7 @@ class YAFUWrapper(BaseWrapper):
         """
         return f'factor({composite})'
 
-    def _build_yafu_auto_cmd(self, method: Optional[str] = None, composite: str = "", threads: Optional[int] = None) -> List[str]:
+    def _build_yafu_auto_cmd(self, method: Optional[str] = None, composite: str = "", threads: Optional[int] = None) -> tuple[List[str], str]:
         """Build YAFU command for automatic factorization.
 
         Args:
@@ -118,11 +121,18 @@ class YAFUWrapper(BaseWrapper):
             threads: Optional thread count override
 
         Returns:
-            Command list with expression as first positional argument
+            Tuple of (command_list, stdin_input)
+            - command_list: YAFU binary and flags only (no expression)
+            - stdin_input: The factor()/siqs()/nfs() expression to pass via stdin
         """
         yafu_path = self.config['programs']['yafu']['path']
 
-        # YAFU expects expression as first positional argument
+        # Build command with just binary and flags (no expression)
+        cmd = [yafu_path]
+
+        self._add_yafu_threading(cmd, threads)
+
+        # Build stdin input expression
         # For specific methods like SIQS/NFS, use direct function calls
         if method in ['siqs', 'nfs']:
             auto_input = f'{method}({composite})'
@@ -130,20 +140,16 @@ class YAFUWrapper(BaseWrapper):
             # For 'auto' or other methods, use factor()
             auto_input = f'factor({composite})'
 
-        cmd = [yafu_path, auto_input]
-
-        self._add_yafu_threading(cmd, threads)
-
-        return cmd
+        return cmd, auto_input
 
     def run_yafu_ecm(self, composite: str, b1: Optional[int] = None, b2: Optional[int] = None,
                      curves: int = 100, method: str = "ecm", verbose: bool = False) -> Dict[str, Any]:
         """Run YAFU in ECM/P-1/P+1 mode using unified base infrastructure."""
-        # Build command with expression as first positional argument
-        cmd = self._build_yafu_ecm_cmd(method, b1, b2, curves, composite)
+        # Build command and stdin input
+        cmd, stdin_input = self._build_yafu_ecm_cmd(method, b1, b2, curves, composite)
         self._add_yafu_threading(cmd)
 
-        # Use unified subprocess execution with parsing (no stdin needed)
+        # Use unified subprocess execution with parsing, passing expression via stdin
         results = self.run_subprocess_with_parsing(
             cmd=cmd,
             timeout=Timeouts.YAFU_ECM,
@@ -154,7 +160,8 @@ class YAFUWrapper(BaseWrapper):
             b1=b1,
             b2=b2,
             track_curves=True,  # Enable curves tracking for YAFU
-            verbose=verbose  # Pass verbose flag through
+            verbose=verbose,  # Pass verbose flag through
+            input=stdin_input  # Pass factor() expression via stdin
         )
 
         # Store command for debugging
@@ -186,10 +193,10 @@ class YAFUWrapper(BaseWrapper):
         Returns:
             Results dictionary
         """
-        # Build command with expression as first positional argument
-        cmd = self._build_yafu_auto_cmd(method, composite, threads)
+        # Build command and stdin input
+        cmd, stdin_input = self._build_yafu_auto_cmd(method, composite, threads)
 
-        # Use unified subprocess execution with parsing (no stdin needed - composite is in command)
+        # Use unified subprocess execution with parsing, passing expression via stdin
         results = self.run_subprocess_with_parsing(
             cmd=cmd,
             timeout=Timeouts.YAFU_AUTO,
@@ -197,7 +204,7 @@ class YAFUWrapper(BaseWrapper):
             method=method or 'auto',
             parse_function=parse_yafu_auto_factors,
             verbose=verbose,  # Pass verbose flag through
-            input=""  # Don't send to stdin - it's already in the command as siqs(...)
+            input=stdin_input  # Pass factor()/siqs()/nfs() expression via stdin
         )
 
         # Store command for debugging

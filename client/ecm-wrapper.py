@@ -498,6 +498,9 @@ class ECMWrapper(BaseWrapper):
                 stage2_factor, stage2_sigma, stage2_curves_completed = stage2_result
         else:
             self.logger.info("Skipping Stage 2 (B2=0 - Stage 1 only mode)")
+            stage2_factor = None
+            stage2_sigma = None
+            stage2_curves_completed = 0
 
         factor_found = stage1_factor or stage2_factor
         if factor_found:
@@ -1350,7 +1353,9 @@ class ECMWrapper(BaseWrapper):
         else:
             self.logger.warning(f"No steps to run (already at or past target)")
 
-        for step_target in step_targets:
+        # Use while loop instead of for loop to support dynamic step_targets regeneration
+        step_index = 0
+        while step_index < len(step_targets):
             # Check for interruption
             if self.stop_event.is_set():
                 self.logger.info("Interrupt detected, stopping t-level progression")
@@ -1359,9 +1364,12 @@ class ECMWrapper(BaseWrapper):
             if current_composite == 1:
                 break
 
+            step_target = step_targets[step_index]
+
             # Skip steps that exceed adjusted target (when auto_adjust_target=True)
             if step_target > target_tlevel:
                 self.logger.debug(f"Skipping step t{step_target:.1f} (exceeds adjusted target t{target_tlevel:.1f})")
+                step_index += 1
                 continue
 
             cofactor_digits = len(str(current_composite))
@@ -1466,7 +1474,12 @@ class ECMWrapper(BaseWrapper):
                     # Update original_digits reference for future adjustments
                     original_digits = new_digits
 
+                    # Reset step_index to start from beginning of regenerated step_targets
+                    step_index = 0
+
                     # Keep curve_history and current_t_level to preserve work done
+                    # Continue to restart loop with regenerated step_targets
+                    continue
                 else:
                     # Legacy behavior: reset curve history for the new cofactor
                     curve_history = []
@@ -1474,6 +1487,9 @@ class ECMWrapper(BaseWrapper):
                     self.logger.info(f"Starting fresh t-level progression on C{new_digits} cofactor")
             else:
                 self.logger.info(f"No factors found at this step")
+
+            # Move to next step (only reached if not regenerating step_targets)
+            step_index += 1
 
         execution_time = time.time() - start_time
 

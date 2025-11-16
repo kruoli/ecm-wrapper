@@ -13,7 +13,7 @@ import logging
 from typing import Optional, Tuple, Dict, Any, List, Union, cast
 
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, or_
 
 from ..models.composites import Composite
 from ..models.attempts import ECMAttempt
@@ -876,6 +876,93 @@ class CompositeService:
 
         logger.info("Created new project: %s", project_name)
         return project, True
+
+    def get_method_breakdown(self, composite_id: int, db: Session) -> Dict[str, Any]:
+        """
+        Get statistics grouped by method for a composite.
+
+        Args:
+            composite_id: ID of the composite
+            db: Database session
+
+        Returns:
+            Dictionary with method-specific statistics
+        """
+        attempts = db.query(ECMAttempt).filter(
+            ECMAttempt.composite_id == composite_id
+        ).all()
+
+        breakdown = {}
+
+        for method in ['ecm', 'pm1', 'pp1']:
+            method_attempts = [a for a in attempts if a.method == method]
+
+            # Get factors found by this method
+            factors = []
+            for attempt in method_attempts:
+                if attempt.factor_found:
+                    factors.append({
+                        'factor': attempt.factor_found,
+                        'sigma': attempt.sigma,
+                        'b1': attempt.b1,
+                        'b2': attempt.b2
+                    })
+
+            breakdown[method] = {
+                'total_attempts': len(method_attempts),
+                'total_curves': sum(a.curves_completed for a in method_attempts if a.curves_completed),
+                'factors_found': factors,
+                'max_b1': max((a.b1 for a in method_attempts if a.b1), default=0),
+                'min_b1': min((a.b1 for a in method_attempts if a.b1), default=0),
+                'avg_b1': sum(a.b1 for a in method_attempts if a.b1) / len(method_attempts) if method_attempts else 0,
+                'attempts': method_attempts
+            }
+
+        return breakdown
+
+    def get_milestone_groups(self, db: Session) -> Dict[int, Dict[str, list]]:
+        """
+        Group composites by t-level milestones (t30, t35, t40, etc.).
+
+        Args:
+            db: Database session
+
+        Returns:
+            Dictionary mapping milestone to grouped composites
+        """
+        milestones = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80]
+        groups = {}
+
+        # Get all composites with t-level data
+        composites = db.query(Composite).filter(
+            or_(Composite.is_prime.is_(None), Composite.is_prime == False),
+            Composite.is_fully_factored == False
+        ).all()
+
+        for milestone in milestones:
+            complete = []
+            in_progress = []
+            not_started = []
+
+            for comp in composites:
+                # Only consider if targeting this milestone or higher
+                if comp.target_t_level is not None and comp.target_t_level >= milestone:
+                    current_t = comp.current_t_level if comp.current_t_level is not None else 0
+                    if current_t >= milestone:
+                        complete.append(comp)
+                    elif current_t > 0:
+                        in_progress.append(comp)
+                    else:
+                        not_started.append(comp)
+
+            groups[milestone] = {
+                'complete': complete,
+                'in_progress': in_progress,
+                'not_started': not_started,
+                'total': len(complete) + len(in_progress) + len(not_started)
+            }
+
+        return groups
 
     def add_composite_to_project(
         self,

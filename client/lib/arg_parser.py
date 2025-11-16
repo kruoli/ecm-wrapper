@@ -8,6 +8,35 @@ import multiprocessing
 from typing import Dict, Any, Optional
 
 
+def parse_int_with_scientific(value: str) -> int:
+    """
+    Parse integer from string, supporting scientific notation.
+
+    Examples:
+        "1000000" -> 1000000
+        "1e6" -> 1000000
+        "26e7" -> 260000000
+        "4e11" -> 400000000000
+
+    Args:
+        value: String representation of number
+
+    Returns:
+        Integer value
+
+    Raises:
+        argparse.ArgumentTypeError: If value cannot be parsed
+    """
+    try:
+        # Convert through float to handle scientific notation, then to int
+        result = int(float(value))
+        if result < 0:
+            raise argparse.ArgumentTypeError(f"Value must be positive: {value}")
+        return result
+    except (ValueError, OverflowError) as e:
+        raise argparse.ArgumentTypeError(f"Invalid integer or scientific notation: {value}") from e
+
+
 def create_ecm_parser() -> argparse.ArgumentParser:
     """Create argument parser for ECM wrapper."""
     parser = argparse.ArgumentParser(description='ECM Wrapper Client')
@@ -17,8 +46,8 @@ def create_ecm_parser() -> argparse.ArgumentParser:
 
     # Core parameters
     parser.add_argument('--composite', '-n', help='Number to factor (not required in --auto-work mode)')
-    parser.add_argument('--b1', type=int, help='B1 bound (overrides config)')
-    parser.add_argument('--b2', type=int, help='B2 bound')
+    parser.add_argument('--b1', type=parse_int_with_scientific, help='B1 bound (supports scientific notation, e.g., 26e7)')
+    parser.add_argument('--b2', type=parse_int_with_scientific, help='B2 bound (supports scientific notation, e.g., 4e11)')
     parser.add_argument('--curves', '-c', type=int, help='Number of curves')
     parser.add_argument('--tlevel', '-t', type=float, help='Target t-level (alternative to --curves, runs ECM iteratively)')
     parser.add_argument('--start-tlevel', type=float, help='Starting t-level (for resuming, requires --tlevel)')
@@ -89,8 +118,8 @@ def create_yafu_parser() -> argparse.ArgumentParser:
                        default='ecm', help='Factorization mode')
 
     # ECM parameters
-    parser.add_argument('--b1', type=int, help='B1 bound for ECM')
-    parser.add_argument('--b2', type=int, help='B2 bound for ECM')
+    parser.add_argument('--b1', type=parse_int_with_scientific, help='B1 bound for ECM (supports scientific notation, e.g., 26e7)')
+    parser.add_argument('--b2', type=parse_int_with_scientific, help='B2 bound for ECM (supports scientific notation, e.g., 4e11)')
     parser.add_argument('--curves', '-c', type=int, default=100, help='Number of curves for ECM')
 
     # General parameters

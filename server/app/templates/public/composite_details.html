@@ -2,6 +2,28 @@
 
 {% block title %}Composite Details - {{ composite.id }}{% endblock %}
 
+{% block extra_head %}
+<script>
+    function switchTab(tabName) {
+        // Hide all tab contents
+        document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.remove('active');
+        });
+
+        // Remove active from all tabs
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.classList.remove('active');
+        });
+
+        // Show selected tab content
+        document.getElementById(tabName + '-content').classList.add('active');
+
+        // Activate selected tab
+        document.getElementById(tabName + '-tab').classList.add('active');
+    }
+</script>
+{% endblock %}
+
 {% block body %}
 <div class="container">
     <div style="margin-bottom: 20px;">
@@ -144,51 +166,178 @@
     {% endif %}
 
     <div class="card">
-        <h2>Recent ECM Attempts</h2>
-        {% if recent_attempts %}
-        <div class="table-wrapper">
-            <table>
-                <tr>
-                    <th>Method</th>
-                    <th>B1</th>
-                    <th>B2</th>
-                    <th>Param</th>
-                    <th>Curves Completed</th>
-                    <th>Factor Found</th>
-                    <th>Client</th>
-                    <th>Submitted</th>
-                </tr>
-                {% for attempt in recent_attempts %}
-                <tr>
-                    <td>{{ esc(attempt.method) }}</td>
-                    <td>{{ "{:,}".format(attempt.b1) }}</td>
-                    <td>{% if attempt.b2 is none %}Default{% elif attempt.b2 == 0 %}Stage 1 only{% else %}{{ "{:,}".format(attempt.b2) }}{% endif %}</td>
-                    <td>{{ attempt.parametrization if attempt.parametrization is not none else "" }}</td>
-                    <td>{{ "{:,}".format(attempt.curves_completed) }}</td>
-                    <td class="number-display">
-                        {% if attempt.factor_found %}
-                        {# Check if multiple factors were found by this attempt #}
-                        {% set attempt_factors = db.query(Factor).filter(Factor.found_by_attempt_id == attempt.id).all() %}
-                        {% if attempt_factors|length > 1 %}
-                        <span style="cursor: help;" title="This attempt found {{ attempt_factors|length }} factors total">
-                            {{ esc(attempt.factor_found[:30]) }}... <strong style="color: #2ecc71;">[+{{ attempt_factors|length - 1 }} more]</strong>
-                        </span>
-                        {% else %}
-                        {{ esc(attempt.factor_found) }}
-                        {% endif %}
-                        {% else %}
-                        None
-                        {% endif %}
-                    </td>
-                    <td>{{ esc(attempt.client_id) }}</td>
-                    <td>{{ esc(attempt.created_at) }}</td>
-                </tr>
-                {% endfor %}
-            </table>
+        <h2>Factorization Attempts by Method</h2>
+
+        <div class="tabs">
+            <div id="ecm-tab" class="tab active" onclick="switchTab('ecm')">
+                ECM
+                <span class="tab-badge">{{ "{:,}".format(method_breakdown.ecm.total_curves) }} curves</span>
+            </div>
+            <div id="pm1-tab" class="tab" onclick="switchTab('pm1')">
+                P-1
+                <span class="tab-badge">{{ method_breakdown.pm1.total_attempts }} attempts</span>
+            </div>
+            <div id="pp1-tab" class="tab" onclick="switchTab('pp1')">
+                P+1
+                <span class="tab-badge">{{ method_breakdown.pp1.total_attempts }} attempts</span>
+            </div>
         </div>
-        {% else %}
-        <p>No attempts yet.</p>
-        {% endif %}
+
+        <!-- ECM Tab Content -->
+        <div id="ecm-content" class="tab-content active">
+            <div style="margin-bottom: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                <strong>ECM Statistics:</strong>
+                <div style="margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                    <div><strong>Total Attempts:</strong> {{ method_breakdown.ecm.total_attempts }}</div>
+                    <div><strong>Total Curves:</strong> {{ "{:,}".format(method_breakdown.ecm.total_curves) }}</div>
+                    <div><strong>Factors Found:</strong> {{ method_breakdown.ecm.factors_found|length }}</div>
+                    {% if method_breakdown.ecm.total_attempts > 0 %}
+                    <div><strong>B1 Range:</strong> {{ "{:,}".format(method_breakdown.ecm.min_b1|int) }} - {{ "{:,}".format(method_breakdown.ecm.max_b1|int) }}</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if method_breakdown.ecm.attempts %}
+            <div class="table-wrapper">
+                <table>
+                    <tr>
+                        <th>B1</th>
+                        <th>B2</th>
+                        <th>Param</th>
+                        <th>Curves</th>
+                        <th>Factor Found</th>
+                        <th>Client</th>
+                        <th>Submitted</th>
+                    </tr>
+                    {% for attempt in method_breakdown.ecm.attempts[:20] %}
+                    <tr>
+                        <td>{{ "{:,}".format(attempt.b1) }}</td>
+                        <td>{% if attempt.b2 is none %}Default{% elif attempt.b2 == 0 %}Stage 1 only{% else %}{{ "{:,}".format(attempt.b2) }}{% endif %}</td>
+                        <td>{{ attempt.parametrization if attempt.parametrization is not none else "" }}</td>
+                        <td>{{ "{:,}".format(attempt.curves_completed) }}</td>
+                        <td class="number-display">
+                            {% if attempt.factor_found %}
+                            {% set attempt_factors = db.query(Factor).filter(Factor.found_by_attempt_id == attempt.id).all() %}
+                            {% if attempt_factors|length > 1 %}
+                            <span style="cursor: help;" title="This attempt found {{ attempt_factors|length }} factors total">
+                                {{ esc(attempt.factor_found[:30]) }}... <strong style="color: #2ecc71;">[+{{ attempt_factors|length - 1 }} more]</strong>
+                            </span>
+                            {% else %}
+                            {{ esc(attempt.factor_found) }}
+                            {% endif %}
+                            {% else %}
+                            None
+                            {% endif %}
+                        </td>
+                        <td>{{ esc(attempt.client_id) }}</td>
+                        <td class="small-text">{{ attempt.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+            {% if method_breakdown.ecm.attempts|length > 20 %}
+            <p class="small-text" style="margin-top: 10px; color: #666;">Showing 20 most recent of {{ method_breakdown.ecm.attempts|length }} total attempts.</p>
+            {% endif %}
+            {% else %}
+            <p>No ECM attempts yet.</p>
+            {% endif %}
+        </div>
+
+        <!-- P-1 Tab Content -->
+        <div id="pm1-content" class="tab-content">
+            <div style="margin-bottom: 15px; padding: 15px; background: #fff3cd; border-radius: 8px;">
+                <strong>P-1 Statistics:</strong>
+                <div style="margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                    <div><strong>Total Attempts:</strong> {{ method_breakdown.pm1.total_attempts }}</div>
+                    <div><strong>Factors Found:</strong> {{ method_breakdown.pm1.factors_found|length }}</div>
+                    {% if method_breakdown.pm1.total_attempts > 0 %}
+                    <div><strong>B1 Range:</strong> {{ "{:,}".format(method_breakdown.pm1.min_b1|int) }} - {{ "{:,}".format(method_breakdown.pm1.max_b1|int) }}</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if method_breakdown.pm1.attempts %}
+            <div class="table-wrapper">
+                <table>
+                    <tr>
+                        <th>B1</th>
+                        <th>B2</th>
+                        <th>Factor Found</th>
+                        <th>Client</th>
+                        <th>Submitted</th>
+                    </tr>
+                    {% for attempt in method_breakdown.pm1.attempts[:20] %}
+                    <tr>
+                        <td>{{ "{:,}".format(attempt.b1) }}</td>
+                        <td>{% if attempt.b2 is none %}Default{% elif attempt.b2 == 0 %}Stage 1 only{% else %}{{ "{:,}".format(attempt.b2) }}{% endif %}</td>
+                        <td class="number-display">
+                            {% if attempt.factor_found %}
+                            {{ esc(attempt.factor_found) }}
+                            {% else %}
+                            None
+                            {% endif %}
+                        </td>
+                        <td>{{ esc(attempt.client_id) }}</td>
+                        <td class="small-text">{{ attempt.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+            {% if method_breakdown.pm1.attempts|length > 20 %}
+            <p class="small-text" style="margin-top: 10px; color: #666;">Showing 20 most recent of {{ method_breakdown.pm1.attempts|length }} total attempts.</p>
+            {% endif %}
+            {% else %}
+            <p>No P-1 attempts yet.</p>
+            {% endif %}
+        </div>
+
+        <!-- P+1 Tab Content -->
+        <div id="pp1-content" class="tab-content">
+            <div style="margin-bottom: 15px; padding: 15px; background: #d1ecf1; border-radius: 8px;">
+                <strong>P+1 Statistics:</strong>
+                <div style="margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                    <div><strong>Total Attempts:</strong> {{ method_breakdown.pp1.total_attempts }}</div>
+                    <div><strong>Factors Found:</strong> {{ method_breakdown.pp1.factors_found|length }}</div>
+                    {% if method_breakdown.pp1.total_attempts > 0 %}
+                    <div><strong>B1 Range:</strong> {{ "{:,}".format(method_breakdown.pp1.min_b1|int) }} - {{ "{:,}".format(method_breakdown.pp1.max_b1|int) }}</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if method_breakdown.pp1.attempts %}
+            <div class="table-wrapper">
+                <table>
+                    <tr>
+                        <th>B1</th>
+                        <th>B2</th>
+                        <th>Factor Found</th>
+                        <th>Client</th>
+                        <th>Submitted</th>
+                    </tr>
+                    {% for attempt in method_breakdown.pp1.attempts[:20] %}
+                    <tr>
+                        <td>{{ "{:,}".format(attempt.b1) }}</td>
+                        <td>{% if attempt.b2 is none %}Default{% elif attempt.b2 == 0 %}Stage 1 only{% else %}{{ "{:,}".format(attempt.b2) }}{% endif %}</td>
+                        <td class="number-display">
+                            {% if attempt.factor_found %}
+                            {{ esc(attempt.factor_found) }}
+                            {% else %}
+                            None
+                            {% endif %}
+                        </td>
+                        <td>{{ esc(attempt.client_id) }}</td>
+                        <td class="small-text">{{ attempt.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+            {% if method_breakdown.pp1.attempts|length > 20 %}
+            <p class="small-text" style="margin-top: 10px; color: #666;">Showing 20 most recent of {{ method_breakdown.pp1.attempts|length }} total attempts.</p>
+            {% endif %}
+            {% else %}
+            <p>No P+1 attempts yet.</p>
+            {% endif %}
+        </div>
     </div>
 </div>
 {% endblock %}

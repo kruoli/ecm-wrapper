@@ -32,6 +32,13 @@
 {% block body %}
 <h1>ECM Distributed Factorization Dashboard</h1>
 
+<div style="margin-bottom: 20px; padding: 12px; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+    <a href="/api/v1/dashboard/testing-status" class="btn btn-primary" style="margin-right: 10px;">
+        📊 Testing Status by T-Level
+    </a>
+    <span style="color: #666; font-size: 0.9em;">View progress toward t-level milestones and method coverage</span>
+</div>
+
 <div class="stats-grid" style="margin-bottom: 30px;">
     <div class="stat-card">
         <div class="stat-number">{{ total_composites }}</div>

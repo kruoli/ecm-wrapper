@@ -9,7 +9,6 @@ import logging
 import json
 
 from ...database import get_db
-from ...schemas.ecm_work import ECMWorkResponse
 from ...models.composites import Composite
 from ...models.attempts import ECMAttempt
 from ...models.work_assignments import WorkAssignment
@@ -51,7 +50,7 @@ async def get_ecm_work(
         db: Database session
 
     Returns:
-        ECMWorkResponse with assigned work or explanation if no work available
+        JSON response with work assignment details or explanation if no work available
     """
     with transaction_scope(db, "get_ecm_work"):
         # Validate work_type parameter
@@ -88,6 +87,8 @@ async def get_ecm_work(
             and_(
                 Composite.is_fully_factored == False,
                 or_(Composite.is_prime.is_(None), Composite.is_prime == False),
+                Composite.target_t_level.isnot(None),
+                Composite.current_t_level.isnot(None),
                 Composite.current_t_level < Composite.target_t_level
             )
         )

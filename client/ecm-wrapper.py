@@ -1701,8 +1701,8 @@ def main():
                                 continue_after_factor=continue_after_factor
                             )
 
-                        # Submit results for B1/B2 modes (t-level and two-stage handle submission internally)
-                        if not args.two_stage and results.get('curves_completed', 0) > 0:
+                        # Submit results for B1/B2 modes (t-level mode handles submission in each batch)
+                        if results.get('curves_completed', 0) > 0:
                             program_name = f'gmp-ecm-{results.get("method", "ecm")}'
                             success = wrapper.submit_result(results, args.project, program_name)
 

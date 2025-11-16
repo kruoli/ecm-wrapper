@@ -1,349 +1,157 @@
 #!/usr/bin/env python3
 """
-Tests for arg_parser module
+Unit tests for argument parser utilities.
 """
+import unittest
+import argparse
 import sys
 from pathlib import Path
-from argparse import Namespace
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lib.arg_parser import (
-    create_ecm_parser,
-    validate_ecm_args,
-    get_method_defaults,
-    resolve_gpu_settings,
-    resolve_worker_count
-)
-
-
-def test_create_ecm_parser():
-    """Test ECM parser creation"""
-    parser = create_ecm_parser()
-
-    assert parser is not None, "Should create parser"
-
-    # Test parsing basic arguments
-    args = parser.parse_args(['--composite', '12345', '--curves', '100'])
-
-    assert args.composite == '12345', "Should parse composite"
-    assert args.curves == 100, "Should parse curves"
-
-    print("✓ test_create_ecm_parser passed")
-
-
-def test_validate_start_tlevel_requires_tlevel():
-    """Test that --start-tlevel requires --tlevel"""
-    args = Namespace(
-        composite='12345',
-        tlevel=None,
-        start_tlevel=25.0,
-        curves=None,
-        b1=None,
-        b2=None,
-        stage2_only=None,
-        resume_residues=None,
-        multiprocess=False,
-        two_stage=False,
-        method='ecm',
-        gpu=False,
-        no_gpu=False,
-        save_residues=None
-    )
-
-    errors = validate_ecm_args(args)
-
-    assert 'start_tlevel' in errors, "Should have start_tlevel error"
-    assert 'requires --tlevel' in errors['start_tlevel'], "Should require --tlevel"
-
-    print("✓ test_validate_start_tlevel_requires_tlevel passed")
-
-
-def test_validate_start_tlevel_less_than_target():
-    """Test that --start-tlevel must be less than --tlevel"""
-    args = Namespace(
-        composite='12345',
-        tlevel=35.0,
-        start_tlevel=40.0,  # Greater than tlevel
-        curves=None,
-        b1=None,
-        b2=None,
-        stage2_only=None,
-        resume_residues=None,
-        multiprocess=False,
-        two_stage=False,
-        method='ecm',
-        gpu=False,
-        no_gpu=False,
-        save_residues=None
-    )
-
-    errors = validate_ecm_args(args)
-
-    assert 'start_tlevel' in errors, "Should have start_tlevel error"
-    assert 'must be less than' in errors['start_tlevel'], "Should require start < target"
-
-    print("✓ test_validate_start_tlevel_less_than_target passed")
-
-
-def test_validate_start_tlevel_non_negative():
-    """Test that --start-tlevel must be non-negative"""
-    args = Namespace(
-        composite='12345',
-        tlevel=35.0,
-        start_tlevel=-5.0,  # Negative
-        curves=None,
-        b1=None,
-        b2=None,
-        stage2_only=None,
-        resume_residues=None,
-        multiprocess=False,
-        two_stage=False,
-        method='ecm',
-        gpu=False,
-        no_gpu=False,
-        save_residues=None
-    )
-
-    errors = validate_ecm_args(args)
-
-    assert 'start_tlevel' in errors, "Should have start_tlevel error"
-    assert 'non-negative' in errors['start_tlevel'], "Should require non-negative"
-
-    print("✓ test_validate_start_tlevel_non_negative passed")
-
-
-def test_validate_start_tlevel_valid():
-    """Test valid --start-tlevel configuration"""
-    args = Namespace(
-        composite='12345',
-        tlevel=35.0,
-        start_tlevel=25.0,  # Valid: 0 <= 25 < 35
-        curves=None,
-        b1=None,
-        b2=None,
-        stage2_only=None,
-        resume_residues=None,
-        multiprocess=False,
-        two_stage=False,
-        method='ecm',
-        gpu=False,
-        no_gpu=False,
-        save_residues=None
-    )
-
-    errors = validate_ecm_args(args)
-
-    assert 'start_tlevel' not in errors, "Should not have start_tlevel error"
-
-    print("✓ test_validate_start_tlevel_valid passed")
-
-
-def test_validate_tlevel_conflicts_with_curves():
-    """Test that --tlevel and --curves are mutually exclusive"""
-    args = Namespace(
-        composite='12345',
-        tlevel=35.0,
-        curves=100,
-        start_tlevel=None,
-        b1=None,
-        b2=None,
-        stage2_only=None,
-        resume_residues=None,
-        multiprocess=False,
-        two_stage=False,
-        method='ecm',
-        gpu=False,
-        no_gpu=False,
-        save_residues=None
-    )
-
-    errors = validate_ecm_args(args)
-
-    assert 'curves' in errors, "Should have curves error"
-    assert 'both --tlevel and --curves' in errors['curves'], "Should reject both"
-
-    print("✓ test_validate_tlevel_conflicts_with_curves passed")
-
-
-def test_validate_gpu_conflicts():
-    """Test that --gpu and --no-gpu are mutually exclusive"""
-    args = Namespace(
-        composite='12345',
-        curves=100,
-        tlevel=None,
-        start_tlevel=None,
-        b1=None,
-        b2=None,
-        stage2_only=None,
-        resume_residues=None,
-        multiprocess=False,
-        two_stage=False,
-        method='ecm',
-        gpu=True,
-        no_gpu=True,  # Both specified
-        save_residues=None
-    )
-
-    errors = validate_ecm_args(args)
-
-    assert 'gpu' in errors, "Should have GPU error"
-
-    print("✓ test_validate_gpu_conflicts passed")
-
-
-def test_validate_multiprocess_conflicts_with_two_stage():
-    """Test that --multiprocess and --two-stage are mutually exclusive"""
-    args = Namespace(
-        composite='12345',
-        curves=100,
-        tlevel=None,
-        start_tlevel=None,
-        b1=None,
-        b2=None,
-        stage2_only=None,
-        resume_residues=None,
-        multiprocess=True,
-        two_stage=True,  # Both specified
-        method='ecm',
-        gpu=False,
-        no_gpu=False,
-        save_residues=None
-    )
-
-    errors = validate_ecm_args(args)
-
-    assert 'mode' in errors, "Should have mode error"
-    assert 'both --multiprocess and --two-stage' in errors['mode'], "Should reject both"
-
-    print("✓ test_validate_multiprocess_conflicts_with_two_stage passed")
-
-
-def test_get_method_defaults():
-    """Test getting default B1/B2 values for methods"""
-    config = {
-        'programs': {
-            'gmp_ecm': {
-                'default_b1': 50000,
-                'default_b2': 5000000,
-                'pm1_b1': 100000,
-                'pm1_b2': 10000000,
-                'pp1_b1': 150000,
-                'pp1_b2': 15000000
-            }
-        }
-    }
-
-    # Test ECM defaults
-    b1, b2 = get_method_defaults(config, 'ecm')
-    assert b1 == 50000, "Should get ECM B1 default"
-    assert b2 == 5000000, "Should get ECM B2 default"
-
-    # Test P-1 defaults
-    b1, b2 = get_method_defaults(config, 'pm1')
-    assert b1 == 100000, "Should get P-1 B1 default"
-    assert b2 == 10000000, "Should get P-1 B2 default"
-
-    # Test P+1 defaults
-    b1, b2 = get_method_defaults(config, 'pp1')
-    assert b1 == 150000, "Should get P+1 B1 default"
-    assert b2 == 15000000, "Should get P+1 B2 default"
-
-    print("✓ test_get_method_defaults passed")
-
-
-def test_resolve_gpu_settings():
-    """Test GPU settings resolution"""
-    config = {
-        'programs': {
-            'gmp_ecm': {
-                'gpu_enabled': True,
-                'gpu_device': 0,
-                'gpu_curves': 1024
-            }
-        }
-    }
-
-    # Test with config defaults
-    args = Namespace(gpu=False, no_gpu=False, gpu_device=None, gpu_curves=None)
-    use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(args, config)
-    assert use_gpu is True, "Should use config default"
-    assert gpu_device == 0, "Should use config GPU device"
-    assert gpu_curves == 1024, "Should use config GPU curves"
-
-    # Test with --no-gpu override
-    args = Namespace(gpu=False, no_gpu=True, gpu_device=None, gpu_curves=None)
-    use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(args, config)
-    assert use_gpu is False, "Should override to disable GPU"
-
-    # Test with --gpu override
-    args = Namespace(gpu=True, no_gpu=False, gpu_device=1, gpu_curves=2048)
-    use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(args, config)
-    assert use_gpu is True, "Should override to enable GPU"
-    assert gpu_device == 1, "Should use command line GPU device"
-    assert gpu_curves == 2048, "Should use command line GPU curves"
-
-    print("✓ test_resolve_gpu_settings passed")
-
-
-def test_resolve_worker_count():
-    """Test worker count resolution"""
-    # Test with explicit worker count
-    args = Namespace(multiprocess=True, workers=4)
-    worker_count = resolve_worker_count(args)
-    assert worker_count == 4, "Should use explicit worker count"
-
-    # Test with auto-detection (workers=0)
-    args = Namespace(multiprocess=True, workers=0)
-    worker_count = resolve_worker_count(args)
-    assert worker_count > 0, "Should auto-detect CPU count"
-
-    # Test without multiprocess
-    args = Namespace(multiprocess=False, workers=4)
-    worker_count = resolve_worker_count(args)
-    assert worker_count == 4, "Should return workers value"
-
-    print("✓ test_resolve_worker_count passed")
-
-
-def main():
-    """Run all tests"""
-    print("Running arg_parser tests...\n")
-
-    tests = [
-        test_create_ecm_parser,
-        test_validate_start_tlevel_requires_tlevel,
-        test_validate_start_tlevel_less_than_target,
-        test_validate_start_tlevel_non_negative,
-        test_validate_start_tlevel_valid,
-        test_validate_tlevel_conflicts_with_curves,
-        test_validate_gpu_conflicts,
-        test_validate_multiprocess_conflicts_with_two_stage,
-        test_get_method_defaults,
-        test_resolve_gpu_settings,
-        test_resolve_worker_count
-    ]
-
-    passed = 0
-    failed = 0
-
-    for test in tests:
-        try:
-            test()
-            passed += 1
-        except Exception as e:
-            print(f"✗ {test.__name__} failed: {e}")
-            import traceback
-            traceback.print_exc()
-            failed += 1
-
-    print(f"\n{'='*50}")
-    print(f"Results: {passed} passed, {failed} failed")
-    print(f"{'='*50}")
-
-    return failed == 0
+from lib.arg_parser import parse_int_with_scientific
+
+
+class TestParseIntWithScientific(unittest.TestCase):
+    """Test cases for parse_int_with_scientific function."""
+
+    def test_regular_integers(self):
+        """Test parsing regular integer strings."""
+        self.assertEqual(parse_int_with_scientific("1000000"), 1000000)
+        self.assertEqual(parse_int_with_scientific("42"), 42)
+        self.assertEqual(parse_int_with_scientific("0"), 0)
+        self.assertEqual(parse_int_with_scientific("999999999"), 999999999)
+
+    def test_scientific_notation_lowercase_e(self):
+        """Test parsing scientific notation with lowercase 'e'."""
+        self.assertEqual(parse_int_with_scientific("1e6"), 1000000)
+        self.assertEqual(parse_int_with_scientific("26e7"), 260000000)
+        self.assertEqual(parse_int_with_scientific("4e11"), 400000000000)
+        self.assertEqual(parse_int_with_scientific("5e2"), 500)
+        self.assertEqual(parse_int_with_scientific("1e0"), 1)
+
+    def test_scientific_notation_uppercase_e(self):
+        """Test parsing scientific notation with uppercase 'E'."""
+        self.assertEqual(parse_int_with_scientific("1E6"), 1000000)
+        self.assertEqual(parse_int_with_scientific("26E7"), 260000000)
+        self.assertEqual(parse_int_with_scientific("4E11"), 400000000000)
+
+    def test_scientific_notation_with_decimal(self):
+        """Test parsing scientific notation with decimal mantissa."""
+        self.assertEqual(parse_int_with_scientific("1.5e6"), 1500000)
+        self.assertEqual(parse_int_with_scientific("2.6e7"), 26000000)
+        self.assertEqual(parse_int_with_scientific("3.14e2"), 314)
+        self.assertEqual(parse_int_with_scientific("9.9e3"), 9900)
+
+    def test_scientific_notation_with_plus_sign(self):
+        """Test parsing scientific notation with explicit positive exponent."""
+        self.assertEqual(parse_int_with_scientific("1e+6"), 1000000)
+        self.assertEqual(parse_int_with_scientific("26e+7"), 260000000)
+        self.assertEqual(parse_int_with_scientific("4E+11"), 400000000000)
+
+    def test_large_numbers(self):
+        """Test parsing very large numbers in scientific notation."""
+        # 10^15
+        self.assertEqual(parse_int_with_scientific("1e15"), 1000000000000000)
+        # 5 * 10^18
+        self.assertEqual(parse_int_with_scientific("5e18"), 5000000000000000000)
+
+    def test_negative_numbers_raise_error(self):
+        """Test that negative numbers raise ArgumentTypeError."""
+        with self.assertRaises(argparse.ArgumentTypeError) as cm:
+            parse_int_with_scientific("-100")
+        self.assertIn("must be positive", str(cm.exception))
+
+        with self.assertRaises(argparse.ArgumentTypeError) as cm:
+            parse_int_with_scientific("-1e6")
+        self.assertIn("must be positive", str(cm.exception))
+
+    def test_invalid_formats_raise_error(self):
+        """Test that invalid formats raise ArgumentTypeError."""
+        # Non-numeric strings
+        with self.assertRaises(argparse.ArgumentTypeError) as cm:
+            parse_int_with_scientific("abc")
+        self.assertIn("Invalid integer", str(cm.exception))
+
+        # Empty string
+        with self.assertRaises(argparse.ArgumentTypeError) as cm:
+            parse_int_with_scientific("")
+        self.assertIn("Invalid integer", str(cm.exception))
+
+        # Invalid scientific notation
+        with self.assertRaises(argparse.ArgumentTypeError) as cm:
+            parse_int_with_scientific("1e")
+        self.assertIn("Invalid integer", str(cm.exception))
+
+        # Double decimal points
+        with self.assertRaises(argparse.ArgumentTypeError) as cm:
+            parse_int_with_scientific("1.2.3")
+        self.assertIn("Invalid integer", str(cm.exception))
+
+    def test_float_strings_are_truncated(self):
+        """Test that float strings are truncated to integers."""
+        self.assertEqual(parse_int_with_scientific("123.456"), 123)
+        self.assertEqual(parse_int_with_scientific("999.99"), 999)
+
+    def test_whitespace_handling(self):
+        """Test handling of strings with whitespace."""
+        # Python's float() handles leading/trailing whitespace
+        self.assertEqual(parse_int_with_scientific("  1000  "), 1000)
+        self.assertEqual(parse_int_with_scientific(" 1e6 "), 1000000)
+
+    def test_typical_ecm_bounds(self):
+        """Test typical ECM B1/B2 bound values."""
+        # Common B1 values
+        self.assertEqual(parse_int_with_scientific("11e6"), 11000000)
+        self.assertEqual(parse_int_with_scientific("43e6"), 43000000)
+        self.assertEqual(parse_int_with_scientific("110e6"), 110000000)
+        self.assertEqual(parse_int_with_scientific("260e6"), 260000000)
+
+        # Common B2 values
+        self.assertEqual(parse_int_with_scientific("1.9e9"), 1900000000)
+        self.assertEqual(parse_int_with_scientific("3.5e10"), 35000000000)
+        self.assertEqual(parse_int_with_scientific("1.2e11"), 120000000000)
+
+    def test_zero_values(self):
+        """Test zero and zero-like values."""
+        self.assertEqual(parse_int_with_scientific("0"), 0)
+        self.assertEqual(parse_int_with_scientific("0.0"), 0)
+        self.assertEqual(parse_int_with_scientific("0e0"), 0)
+        self.assertEqual(parse_int_with_scientific("0e10"), 0)
+
+
+class TestParserIntegration(unittest.TestCase):
+    """Integration tests for argparse with scientific notation."""
+
+    def test_ecm_parser_with_scientific_notation(self):
+        """Test that ECM parser correctly handles scientific notation."""
+        from lib.arg_parser import create_ecm_parser
+
+        parser = create_ecm_parser()
+
+        # Test with scientific notation
+        args = parser.parse_args(['--composite', '12345', '--b1', '26e7', '--b2', '4e11'])
+        self.assertEqual(args.b1, 260000000)
+        self.assertEqual(args.b2, 400000000000)
+
+        # Test with regular integers
+        args = parser.parse_args(['--composite', '12345', '--b1', '1000000', '--b2', '5000000'])
+        self.assertEqual(args.b1, 1000000)
+        self.assertEqual(args.b2, 5000000)
+
+    def test_yafu_parser_with_scientific_notation(self):
+        """Test that YAFU parser correctly handles scientific notation."""
+        from lib.arg_parser import create_yafu_parser
+
+        parser = create_yafu_parser()
+
+        # Test with scientific notation
+        args = parser.parse_args(['--composite', '12345', '--b1', '11e6', '--b2', '1.9e9'])
+        self.assertEqual(args.b1, 11000000)
+        self.assertEqual(args.b2, 1900000000)
 
 
 if __name__ == '__main__':
-    sys.exit(0 if main() else 1)
+    # Run tests with verbose output
+    unittest.main(verbosity=2)

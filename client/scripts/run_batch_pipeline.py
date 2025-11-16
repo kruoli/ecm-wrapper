@@ -25,6 +25,9 @@ from typing import Optional
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Import the scientific notation parser
+from lib.arg_parser import parse_int_with_scientific
+
 # Import wrapper and utilities using importlib to handle hyphenated module name
 import importlib.util
 spec = importlib.util.spec_from_file_location("ecm_wrapper",
@@ -347,10 +350,10 @@ def main():
                        help='File containing numbers to factor (one per line)')
     parser.add_argument('--config', default='client.yaml',
                        help='Configuration file')
-    parser.add_argument('--b1', type=int, default=160000000,
-                       help='B1 bound for stage 1')
-    parser.add_argument('--b2', type=int, default=None,
-                       help='B2 bound for stage 2 (0 to skip stage 2)')
+    parser.add_argument('--b1', type=parse_int_with_scientific, default=160000000,
+                       help='B1 bound for stage 1 (supports scientific notation, e.g., 16e7)')
+    parser.add_argument('--b2', type=parse_int_with_scientific, default=None,
+                       help='B2 bound for stage 2 (supports scientific notation, e.g., 4e11, 0 to skip stage 2)')
     parser.add_argument('--curves', type=int, default=1,
                        help='Number of curves per number (default: 1, which is 3072 curves on GPU)')
     parser.add_argument('--stage2-workers', type=int, default=4,

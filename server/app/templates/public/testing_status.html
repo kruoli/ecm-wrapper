@@ -1,0 +1,391 @@
+{% extends "base.html" %}
+
+{% block title %}Testing Status - ECM Distributed Factorization{% endblock %}
+
+{% block extra_head %}
+<script>
+    function sortTable(columnIndex) {
+        const table = document.getElementById('composites-table');
+        const tbody = table.querySelector('tbody');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+
+        // Determine sort direction
+        const currentSort = table.dataset.sortColumn;
+        const currentDir = table.dataset.sortDir || 'asc';
+        const newDir = (currentSort == columnIndex && currentDir === 'asc') ? 'desc' : 'asc';
+
+        // Sort rows
+        rows.sort((a, b) => {
+            const aVal = a.cells[columnIndex].dataset.value || a.cells[columnIndex].textContent;
+            const bVal = b.cells[columnIndex].dataset.value || b.cells[columnIndex].textContent;
+
+            const aNum = parseFloat(aVal);
+            const bNum = parseFloat(bVal);
+
+            if (!isNaN(aNum) && !isNaN(bNum)) {
+                return newDir === 'asc' ? aNum - bNum : bNum - aNum;
+            } else {
+                return newDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+            }
+        });
+
+        // Update table
+        rows.forEach(row => tbody.appendChild(row));
+
+        // Update sort indicators
+        table.querySelectorAll('th').forEach((th, idx) => {
+            th.classList.remove('sort-asc', 'sort-desc');
+            if (idx === columnIndex) {
+                th.classList.add(newDir === 'asc' ? 'sort-asc' : 'sort-desc');
+            }
+        });
+
+        table.dataset.sortColumn = columnIndex;
+        table.dataset.sortDir = newDir;
+    }
+</script>
+
+<style>
+    .milestone-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 15px;
+        margin-bottom: 30px;
+    }
+
+    .milestone-card {
+        background: white;
+        border-radius: 8px;
+        padding: 15px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        transition: transform 0.2s;
+    }
+
+    .milestone-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+
+    .milestone-title {
+        font-size: 1.5em;
+        font-weight: bold;
+        color: #667eea;
+        margin-bottom: 10px;
+    }
+
+    .milestone-stats {
+        font-size: 0.85em;
+        color: #666;
+    }
+
+    .milestone-bar {
+        height: 8px;
+        background: #e9ecef;
+        border-radius: 4px;
+        overflow: hidden;
+        margin: 10px 0;
+    }
+
+    .milestone-bar-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #28a745, #20c997);
+        transition: width 0.3s ease;
+    }
+
+    .status-dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-right: 5px;
+    }
+
+    .status-red { background: #dc3545; }
+    .status-yellow { background: #ffc107; }
+    .status-orange { background: #fd7e14; }
+    .status-blue { background: #0d6efd; }
+    .status-green { background: #28a745; }
+
+    .method-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        margin: 2px;
+        border-radius: 4px;
+        font-size: 0.75em;
+        font-weight: bold;
+    }
+
+    .method-ecm {
+        background: #e7f3ff;
+        color: #0d6efd;
+    }
+
+    .method-pm1 {
+        background: #fff3cd;
+        color: #856404;
+    }
+
+    .method-pp1 {
+        background: #d1ecf1;
+        color: #0c5460;
+    }
+
+    th.sortable {
+        cursor: pointer;
+        user-select: none;
+    }
+
+    th.sortable:hover {
+        background-color: #e9ecef;
+    }
+
+    th.sort-asc::after {
+        content: ' ▲';
+        font-size: 0.8em;
+    }
+
+    th.sort-desc::after {
+        content: ' ▼';
+        font-size: 0.8em;
+    }
+
+    .nav-links {
+        margin-bottom: 20px;
+    }
+
+    .nav-links a {
+        color: #667eea;
+        text-decoration: none;
+        margin-right: 15px;
+        font-weight: 500;
+    }
+
+    .nav-links a:hover {
+        text-decoration: underline;
+    }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="nav-links">
+    <a href="/api/v1/dashboard/">← Back to Dashboard</a>
+</div>
+
+<h1>ECM Testing Status</h1>
+
+<div class="section">
+    <div class="section-header">T-Level Milestone Progress</div>
+    <div class="section-content">
+        <div class="milestone-grid">
+            {% for milestone in [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80] %}
+            {% set group = milestone_groups.get(milestone, {}) %}
+            {% set total = group.get('total', 0) %}
+            {% set complete = group.get('complete', [])|length %}
+            {% set in_progress = group.get('in_progress', [])|length %}
+            {% set not_started = group.get('not_started', [])|length %}
+            {% set pct = (complete / total * 100)|round(1) if total > 0 else 0 %}
+
+            <div class="milestone-card">
+                <div class="milestone-title">t{{ milestone }}</div>
+                <div class="milestone-bar">
+                    <div class="milestone-bar-fill" style="width: {{ pct }}%"></div>
+                </div>
+                <div class="milestone-stats">
+                    <div><strong>{{ complete }}</strong> / {{ total }} complete</div>
+                    {% if total > 0 %}
+                    <div style="margin-top: 5px;">
+                        <span style="color: #28a745;">✓ {{ complete }}</span><br/>
+                        <span style="color: #ffc107;">⟳ {{ in_progress }}</span><br/>
+                        <span style="color: #6c757d;">○ {{ not_started }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- Filters Section -->
+<div class="section">
+    <div class="section-header">Filter Composites</div>
+    <div class="section-content">
+        <form method="GET" action="/api/v1/dashboard/testing-status" style="display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-end;">
+            <div style="flex: 1; min-width: 150px;">
+                <label for="min_t_level" style="display: block; margin-bottom: 5px; font-weight: 500; font-size: 0.9em;">Min T-Level</label>
+                <input type="number" id="min_t_level" name="min_t_level"
+                       value="{{ min_t_level if min_t_level is not none else '' }}"
+                       step="0.1" min="0"
+                       placeholder="e.g., 30.0"
+                       style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+            <div style="flex: 1; min-width: 150px;">
+                <label for="max_t_level" style="display: block; margin-bottom: 5px; font-weight: 500; font-size: 0.9em;">Max T-Level</label>
+                <input type="number" id="max_t_level" name="max_t_level"
+                       value="{{ max_t_level if max_t_level is not none else '' }}"
+                       step="0.1" min="0"
+                       placeholder="e.g., 50.0"
+                       style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+            <div style="flex: 1; min-width: 150px;">
+                <label for="min_priority" style="display: block; margin-bottom: 5px; font-weight: 500; font-size: 0.9em;">Min Priority</label>
+                <input type="number" id="min_priority" name="min_priority"
+                       value="{{ min_priority if min_priority is not none else '' }}"
+                       min="0"
+                       placeholder="e.g., 10"
+                       style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+            <div style="flex: 1; min-width: 150px;">
+                <label for="snfs_difficulty" style="display: block; margin-bottom: 5px; font-weight: 500; font-size: 0.9em;">SNFS Difficulty</label>
+                <input type="number" id="snfs_difficulty" name="snfs_difficulty"
+                       value="{{ snfs_difficulty if snfs_difficulty is not none else '' }}"
+                       min="0"
+                       placeholder="e.g., 250"
+                       style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+            <div style="display: flex; gap: 10px; align-items: flex-end;">
+                <button type="submit" style="padding: 8px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                    Apply Filters
+                </button>
+                <a href="/api/v1/dashboard/testing-status" style="padding: 8px 20px; background-color: #6c757d; color: white; text-decoration: none; border-radius: 4px; display: inline-block; font-weight: 500;">
+                    Clear Filters
+                </a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="section">
+    <div class="section-header">Composites by Testing Progress</div>
+    <div class="section-content">
+        <p style="margin-bottom: 10px; color: #666; font-style: italic;">
+            Showing {{ showing_from }} to {{ showing_to }} of {{ total }} composites
+        </p>
+        <p style="margin-bottom: 15px; color: #666; font-style: italic;">
+            Click column headers to sort. Click composite ID to view details.
+        </p>
+        <div class="table-wrapper">
+            <table id="composites-table">
+                <thead>
+                    <tr>
+                        <th class="sortable" onclick="sortTable(0)">ID</th>
+                        <th class="sortable" onclick="sortTable(1)">Digits</th>
+                        <th class="sortable" onclick="sortTable(2)">Priority</th>
+                        <th class="sortable" onclick="sortTable(3)">Status</th>
+                        <th class="sortable" onclick="sortTable(4)">T-Level Progress</th>
+                        <th>Methods Used</th>
+                        <th class="sortable" onclick="sortTable(6)">ECM Curves</th>
+                        <th class="sortable" onclick="sortTable(7)">P-1</th>
+                        <th class="sortable" onclick="sortTable(8)">P+1</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for comp in composites %}
+                    <tr>
+                        <td data-value="{{ comp.id }}">
+                            <a href="/api/v1/dashboard/composites/{{ comp.id }}/details" style="color: #667eea; text-decoration: none; font-weight: 500;">
+                                #{{ comp.id }}
+                            </a>
+                        </td>
+                        <td data-value="{{ comp.digit_length }}">{{ comp.digit_length }}</td>
+                        <td data-value="{{ comp.priority }}">{{ comp.priority }}</td>
+                        <td data-value="{{ comp.status }}">
+                            <span class="status-dot status-{{ comp.status_color }}"></span>
+                            {{ comp.status_label }}
+                        </td>
+                        <td data-value="{{ comp.progress_pct }}">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <div class="progress" style="width: 100px;">
+                                    <div class="progress-bar" style="width: {{ [comp.progress_pct, 100]|min }}%; background-color: {{ '#28a745' if comp.progress_pct >= 100 else '#ffc107' if comp.progress_pct >= 50 else '#dc3545' }}"></div>
+                                </div>
+                                <span class="small-text" style="font-weight: bold;">
+                                    t{{ (comp.current_t_level or 0)|round(1) }}/t{{ (comp.target_t_level or 0)|round(1) }}
+                                </span>
+                            </div>
+                        </td>
+                        <td data-value="{{ comp.methods_used }}">
+                            {% if comp.ecm_curves > 0 %}
+                            <span class="method-badge method-ecm">ECM</span>
+                            {% endif %}
+                            {% if comp.pm1_count > 0 %}
+                            <span class="method-badge method-pm1">P-1</span>
+                            {% endif %}
+                            {% if comp.pp1_count > 0 %}
+                            <span class="method-badge method-pp1">P+1</span>
+                            {% endif %}
+                            {% if comp.methods_used == 0 %}
+                            <span style="color: #999;">None</span>
+                            {% endif %}
+                        </td>
+                        <td data-value="{{ comp.ecm_curves }}">
+                            {% if comp.ecm_curves > 0 %}
+                            {{ "{:,}".format(comp.ecm_curves) }}
+                            {% else %}
+                            <span style="color: #999;">-</span>
+                            {% endif %}
+                        </td>
+                        <td data-value="{{ comp.pm1_count }}">
+                            {% if comp.pm1_count > 0 %}
+                            {{ comp.pm1_count }} attempt{{ 's' if comp.pm1_count > 1 else '' }}
+                            {% else %}
+                            <span style="color: #999;">-</span>
+                            {% endif %}
+                        </td>
+                        <td data-value="{{ comp.pp1_count }}">
+                            {% if comp.pp1_count > 0 %}
+                            {{ comp.pp1_count }} attempt{{ 's' if comp.pp1_count > 1 else '' }}
+                            {% else %}
+                            <span style="color: #999;">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
+            <div style="color: #666;">
+                <strong>Page {{ page }} of {{ total_pages }}</strong>
+                ({{ showing_from }}-{{ showing_to }} of {{ total }} composites)
+            </div>
+            <div style="display: flex; gap: 10px;">
+                {% if has_prev %}
+                <a href="?offset={{ offset - limit }}&limit={{ limit }}{% if min_t_level is not none %}&min_t_level={{ min_t_level }}{% endif %}{% if max_t_level is not none %}&max_t_level={{ max_t_level }}{% endif %}{% if min_priority is not none %}&min_priority={{ min_priority }}{% endif %}{% if snfs_difficulty is not none %}&snfs_difficulty={{ snfs_difficulty }}{% endif %}"
+                   style="padding: 8px 16px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; font-weight: 500;">
+                    ← Previous
+                </a>
+                {% else %}
+                <span style="padding: 8px 16px; background-color: #e9ecef; color: #6c757d; border-radius: 4px; font-weight: 500;">
+                    ← Previous
+                </span>
+                {% endif %}
+
+                {% if has_next %}
+                <a href="?offset={{ offset + limit }}&limit={{ limit }}{% if min_t_level is not none %}&min_t_level={{ min_t_level }}{% endif %}{% if max_t_level is not none %}&max_t_level={{ max_t_level }}{% endif %}{% if min_priority is not none %}&min_priority={{ min_priority }}{% endif %}{% if snfs_difficulty is not none %}&snfs_difficulty={{ snfs_difficulty }}{% endif %}"
+                   style="padding: 8px 16px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; font-weight: 500;">
+                    Next →
+                </a>
+                {% else %}
+                <span style="padding: 8px 16px; background-color: #e9ecef; color: #6c757d; border-radius: 4px; font-weight: 500;">
+                    Next →
+                </span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="small-text" style="margin-top: 20px;">
+    <p>
+        <strong>Status Legend:</strong>
+        <span class="status-dot status-red"></span> Not Started (t=0) |
+        <span class="status-dot status-yellow"></span> Initial (t&lt;30) |
+        <span class="status-dot status-orange"></span> Standard (t30-39) |
+        <span class="status-dot status-blue"></span> Advanced (t40-49) |
+        <span class="status-dot status-green"></span> Deep (t≥50)
+    </p>
+    <p><a href="/api/v1/dashboard/">Back to Dashboard</a></p>
+</div>
+{% endblock %}

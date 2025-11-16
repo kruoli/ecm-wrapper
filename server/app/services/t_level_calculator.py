@@ -396,6 +396,17 @@ class TLevelCalculator:
         Returns:
             Dictionary with suggested B1, B2, and curves
         """
+        # Defensive null checks
+        if target_t_level is None or current_t_level is None:
+            # Fallback to default parameters if t-levels are not set
+            logger.warning(
+                f"suggest_next_ecm_parameters called with None values: "
+                f"target={target_t_level}, current={current_t_level}"
+            )
+            # Use default t-level 30 for the target if not set
+            target_t_level = target_t_level or 30.0
+            current_t_level = current_t_level or 0.0
+
         if current_t_level >= target_t_level:
             return {
                 'status': 'target_reached',

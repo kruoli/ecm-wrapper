@@ -2092,8 +2092,116 @@ def main():
     # Resolve stage2 workers from config if not explicitly set
     stage2_workers = args.stage2_workers if hasattr(args, 'stage2_workers') and args.stage2_workers != 4 else get_stage2_workers_default(wrapper.config)
 
+    # Manual stage1-only mode (without auto-work)
+    if hasattr(args, 'stage1_only') and args.stage1_only and not (hasattr(args, 'auto_work') and args.auto_work):
+        # Use config defaults if B1/curves not specified
+        if args.b1 is None:
+            args.b1 = wrapper.config['programs']['gmp_ecm']['default_b1']
+            print(f"Using default B1 from config: {args.b1}")
+        if args.curves is None:
+            args.curves = wrapper.config['programs']['gmp_ecm']['default_curves']
+            print(f"Using default curves from config: {args.curves}")
+
+        # Generate residue file path
+        residue_dir = Path(wrapper.config['execution'].get('residue_dir', 'data/residues'))
+        residue_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        residue_file = residue_dir / f"stage1_manual_{timestamp}.txt"
+
+        # Parse sigma if provided
+        sigma = None
+        if hasattr(args, 'sigma') and args.sigma:
+            sigma = args.sigma if ':' in args.sigma else int(args.sigma)
+
+        # Get param if provided, default to 3 for GPU
+        param = args.param if hasattr(args, 'param') and args.param is not None else (3 if use_gpu else None)
+
+        print()
+        print("=" * 60)
+        print("Manual Stage 1 Only Mode")
+        print(f"Composite: {args.composite[:50]}... ({len(args.composite)} digits)")
+        print(f"Parameters: B1={args.b1}, curves={args.curves}")
+        print(f"Residue file: {residue_file}")
+        print("=" * 60)
+        print()
+
+        # Run stage 1
+        success, factor, actual_curves, raw_output, all_factors = wrapper._run_stage1(
+            composite=args.composite,
+            b1=args.b1,
+            curves=args.curves,
+            residue_file=str(residue_file),
+            sigma=sigma,
+            param=param,
+            use_gpu=use_gpu,
+            gpu_device=gpu_device,
+            gpu_curves=gpu_curves,
+            verbose=args.verbose
+        )
+
+        if not success:
+            wrapper.logger.error("Stage 1 execution failed")
+            sys.exit(1)
+
+        # Build results for stage 1 (B2=0)
+        results = {
+            'composite': args.composite,
+            'b1': args.b1,
+            'b2': 0,  # Stage 1 only
+            'curves_requested': args.curves,
+            'curves_completed': actual_curves,
+            'factors_found': all_factors if all_factors else [],
+            'factor_found': factor,
+            'raw_output': raw_output[-10000:] if len(raw_output) > 10000 else raw_output,
+            'method': 'ecm',
+            'parametrization': param if param is not None else 3,
+            'execution_time': 0,
+        }
+
+        # Submit stage 1 results
+        if not args.no_submit:
+            print("Submitting stage 1 results...")
+            program_name = 'gmp-ecm-ecm'
+            submit_response = wrapper.submit_result(results, args.project, program_name)
+
+            if not submit_response:
+                wrapper.logger.error("Failed to submit stage 1 results")
+                sys.exit(1)
+
+            # Extract attempt_id from response
+            stage1_attempt_id = submit_response.get('attempt_id')
+            if stage1_attempt_id:
+                print(f"Stage 1 attempt ID: {stage1_attempt_id}")
+
+            # Upload residue file
+            print(f"Uploading residue file ({residue_file.stat().st_size} bytes)...")
+            client_id = wrapper.config['client']['username'] + '-' + wrapper.config['client']['cpu_name']
+            upload_result = wrapper.api_client.upload_residue(
+                client_id=client_id,
+                residue_file_path=str(residue_file),
+                stage1_attempt_id=stage1_attempt_id,
+                expiry_days=7
+            )
+
+            if upload_result:
+                print(f"Residue uploaded: ID {upload_result['residue_id']}, "
+                      f"{upload_result['curve_count']} curves")
+            else:
+                wrapper.logger.error("Failed to upload residue file")
+
+        # Clean up local residue file
+        if residue_file.exists():
+            residue_file.unlink()
+            wrapper.logger.info(f"Deleted local residue file: {residue_file}")
+
+        print()
+        print("=" * 60)
+        print("Stage 1 complete")
+        print("=" * 60)
+        sys.exit(0)
+
     # Check for T-level mode first (highest priority)
-    if hasattr(args, 'tlevel') and args.tlevel:
+    elif hasattr(args, 'tlevel') and args.tlevel:
         # T-level mode: run ECM iteratively until target t-level reached
         start_tlevel = args.start_tlevel if hasattr(args, 'start_tlevel') and args.start_tlevel else 0.0
         results = wrapper.run_ecm_with_tlevel(

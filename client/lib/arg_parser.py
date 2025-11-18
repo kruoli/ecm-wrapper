@@ -153,16 +153,21 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
     if hasattr(args, 'stage1_only') and args.stage1_only:
         if hasattr(args, 'stage2_work') and args.stage2_work:
             errors['mode'] = "Cannot use both --stage1-only and --stage2-work"
-        if not hasattr(args, 'auto_work') or not args.auto_work:
-            errors['auto_work'] = "--stage1-only requires --auto-work mode"
         if hasattr(args, 'tlevel') and args.tlevel is not None:
             errors['tlevel'] = "--stage1-only not compatible with --tlevel. Use --b1/--curves instead."
-        if args.b1 is None:
-            errors['b1'] = "--stage1-only requires --b1 to be specified"
-        if args.curves is None:
-            errors['curves'] = "--stage1-only requires --curves to be specified"
         if args.b2 is not None and args.b2 != 0:
             errors['b2'] = "--stage1-only runs stage 1 only. B2 should be 0 or omitted."
+
+        # Auto-work mode: B1 and curves must be specified
+        if hasattr(args, 'auto_work') and args.auto_work:
+            if args.b1 is None:
+                errors['b1'] = "--stage1-only with --auto-work requires --b1 to be specified"
+            if args.curves is None:
+                errors['curves'] = "--stage1-only with --auto-work requires --curves to be specified"
+        # Manual mode: composite required, B1/curves use config defaults if not specified
+        else:
+            if not args.composite:
+                errors['composite'] = "--stage1-only without --auto-work requires --composite to be specified"
 
     if hasattr(args, 'stage2_work') and args.stage2_work:
         if hasattr(args, 'stage1_only') and args.stage1_only:

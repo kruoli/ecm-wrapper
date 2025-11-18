@@ -341,19 +341,31 @@ class APIClient:
         """
         url = f"{self.api_endpoint}/work/{work_id}/complete"
 
-        try:
-            response = requests.post(
-                url,
-                params={'client_id': client_id},
-                timeout=self.timeout
-            )
-            response.raise_for_status()
-            self.logger.info(f"Marked work {work_id} as complete")
-            return True
+        # Retry logic with exponential backoff (critical for releasing work claims)
+        for attempt in range(1, self.retry_attempts + 1):
+            try:
+                response = requests.post(
+                    url,
+                    params={'client_id': client_id},
+                    timeout=self.timeout
+                )
+                response.raise_for_status()
+                self.logger.info(f"Marked work {work_id} as complete")
+                return True
 
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Failed to mark work {work_id} as complete: {e}")
-            return False
+            except requests.exceptions.RequestException as e:
+                if attempt < self.retry_attempts:
+                    delay = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
+                    self.logger.warning(
+                        f"Failed to mark work {work_id} as complete (attempt {attempt}/{self.retry_attempts}): {e}. "
+                        f"Retrying in {delay}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    self.logger.error(f"Failed to mark work {work_id} as complete after {self.retry_attempts} attempts: {e}")
+                    return False
+
+        return False
 
     def abandon_work(self, work_id: str, reason: str = "client_terminated") -> bool:
         """
@@ -368,15 +380,27 @@ class APIClient:
         """
         url = f"{self.api_endpoint}/work/{work_id}"
 
-        try:
-            response = requests.delete(url, timeout=self.timeout)
-            response.raise_for_status()
-            self.logger.info(f"Abandoned work {work_id} (reason: {reason})")
-            return True
+        # Retry logic with exponential backoff (critical for releasing work claims)
+        for attempt in range(1, self.retry_attempts + 1):
+            try:
+                response = requests.delete(url, timeout=self.timeout)
+                response.raise_for_status()
+                self.logger.info(f"Abandoned work {work_id} (reason: {reason})")
+                return True
 
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Failed to abandon work {work_id}: {e}")
-            return False
+            except requests.exceptions.RequestException as e:
+                if attempt < self.retry_attempts:
+                    delay = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
+                    self.logger.warning(
+                        f"Failed to abandon work {work_id} (attempt {attempt}/{self.retry_attempts}): {e}. "
+                        f"Retrying in {delay}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    self.logger.error(f"Failed to abandon work {work_id} after {self.retry_attempts} attempts: {e}")
+                    return False
+
+        return False
 
     # ==================== Residue Management Methods ====================
 
@@ -573,24 +597,36 @@ class APIClient:
         headers = {'X-Client-ID': client_id}
         payload = {'stage2_attempt_id': stage2_attempt_id}
 
-        try:
-            response = requests.post(
-                url,
-                json=payload,
-                headers=headers,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
+        # Retry logic with exponential backoff (critical for releasing residue claims)
+        for attempt in range(1, self.retry_attempts + 1):
+            try:
+                response = requests.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=self.timeout
+                )
+                response.raise_for_status()
 
-            data = response.json()
-            self.logger.info(
-                f"Completed residue {residue_id}: {data.get('message', 'Success')}"
-            )
-            return data
+                data = response.json()
+                self.logger.info(
+                    f"Completed residue {residue_id}: {data.get('message', 'Success')}"
+                )
+                return data
 
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Failed to complete residue {residue_id}: {e}")
-            return None
+            except requests.exceptions.RequestException as e:
+                if attempt < self.retry_attempts:
+                    delay = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
+                    self.logger.warning(
+                        f"Failed to complete residue {residue_id} (attempt {attempt}/{self.retry_attempts}): {e}. "
+                        f"Retrying in {delay}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    self.logger.error(f"Failed to complete residue {residue_id} after {self.retry_attempts} attempts: {e}")
+                    return None
+
+        return None
 
     def abandon_residue(self, client_id: str, residue_id: int) -> bool:
         """
@@ -607,12 +643,24 @@ class APIClient:
 
         headers = {'X-Client-ID': client_id}
 
-        try:
-            response = requests.delete(url, headers=headers, timeout=self.timeout)
-            response.raise_for_status()
-            self.logger.info(f"Released claim on residue {residue_id}")
-            return True
+        # Retry logic with exponential backoff (critical for releasing residue claims)
+        for attempt in range(1, self.retry_attempts + 1):
+            try:
+                response = requests.delete(url, headers=headers, timeout=self.timeout)
+                response.raise_for_status()
+                self.logger.info(f"Released claim on residue {residue_id}")
+                return True
 
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Failed to release residue {residue_id}: {e}")
-            return False
+            except requests.exceptions.RequestException as e:
+                if attempt < self.retry_attempts:
+                    delay = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
+                    self.logger.warning(
+                        f"Failed to release residue {residue_id} (attempt {attempt}/{self.retry_attempts}): {e}. "
+                        f"Retrying in {delay}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    self.logger.error(f"Failed to release residue {residue_id} after {self.retry_attempts} attempts: {e}")
+                    return False
+
+        return False

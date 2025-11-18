@@ -127,10 +127,6 @@ async def submit_result(
             factor_status = "no_factor"
             factors_to_process = []
 
-            # Debug: Log what we received
-            logger.info(f"DEBUG: result_request.results.factors_found = {result_request.results.factors_found}")
-            logger.info(f"DEBUG: result_request.results.factor_found = {result_request.results.factor_found}")
-
             # Collect factors from new or legacy format
             if result_request.results.factors_found:
                 # New format: multiple factors with sigmas

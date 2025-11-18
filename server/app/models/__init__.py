@@ -5,6 +5,7 @@ from .attempts import ECMAttempt
 from .factors import Factor
 from .clients import Client
 from .work_assignments import WorkAssignment
+from .residues import ECMResidue
 
 __all__ = [
     "Base",
@@ -14,5 +15,6 @@ __all__ = [
     "ECMAttempt",
     "Factor",
     "Client",
-    "WorkAssignment"
+    "WorkAssignment",
+    "ECMResidue"
 ]

@@ -7,6 +7,7 @@ from .ecm_work import router as ecm_work_router
 from .projects import router as projects_router
 from .factors import router as factors_router
 from .admin import router as admin_router
+from .residues import router as residues_router
 
 # Main v1 API router
 v1_router = APIRouter(prefix="/v1")
@@ -20,3 +21,4 @@ v1_router.include_router(ecm_work_router, tags=["ecm-work"])
 v1_router.include_router(projects_router, tags=["projects"])
 v1_router.include_router(factors_router, tags=["factors"])
 v1_router.include_router(admin_router, tags=["admin"])
+v1_router.include_router(residues_router, prefix="/residues", tags=["residues"])

@@ -39,8 +39,13 @@ class ECMAttempt(Base, TimestampMixin):
     assigned_at = Column(DateTime, nullable=True)
     started_at = Column(DateTime, nullable=True)
 
+    # Stage supersession tracking (for decoupled two-stage ECM)
+    # When stage 2 completes, it supersedes the stage 1 attempt
+    superseded_by = Column(Integer, ForeignKey("ecm_attempts.id"), nullable=True)
+
     # Relationships
     composite = relationship("Composite")
+    superseding_attempt = relationship("ECMAttempt", remote_side=[id], uselist=False)
 
     @classmethod
     def generate_work_hash(cls, composite: str, method: str, b1: int, b2: Optional[int] = None,

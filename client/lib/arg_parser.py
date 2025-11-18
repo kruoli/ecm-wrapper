@@ -65,6 +65,12 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     parser.add_argument('--work-type', choices=['standard', 'progressive'], default='standard',
                        help='Work assignment strategy: standard (smallest first) or progressive (least ECM done first, default: standard)')
 
+    # Decoupled two-stage mode (stage 1 and stage 2 run separately)
+    parser.add_argument('--stage1-only', action='store_true',
+                       help='Run stage 1 only, submit results and upload residue file to server (GPU producer mode)')
+    parser.add_argument('--stage2-work', action='store_true',
+                       help='Request and process stage 2 work from server residue pool (CPU consumer mode)')
+
     # GPU options
     parser.add_argument('--gpu', action='store_true', help='Use GPU acceleration (CGBN)')
     parser.add_argument('--no-gpu', action='store_true', help='Disable GPU acceleration')
@@ -142,6 +148,34 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
         Dictionary mapping argument names to error messages
     """
     errors = {}
+
+    # Decoupled two-stage mode validation
+    if hasattr(args, 'stage1_only') and args.stage1_only:
+        if hasattr(args, 'stage2_work') and args.stage2_work:
+            errors['mode'] = "Cannot use both --stage1-only and --stage2-work"
+        if not hasattr(args, 'auto_work') or not args.auto_work:
+            errors['auto_work'] = "--stage1-only requires --auto-work mode"
+        if hasattr(args, 'tlevel') and args.tlevel is not None:
+            errors['tlevel'] = "--stage1-only not compatible with --tlevel. Use --b1/--curves instead."
+        if args.b1 is None:
+            errors['b1'] = "--stage1-only requires --b1 to be specified"
+        if args.curves is None:
+            errors['curves'] = "--stage1-only requires --curves to be specified"
+        if args.b2 is not None and args.b2 != 0:
+            errors['b2'] = "--stage1-only runs stage 1 only. B2 should be 0 or omitted."
+
+    if hasattr(args, 'stage2_work') and args.stage2_work:
+        if hasattr(args, 'stage1_only') and args.stage1_only:
+            errors['mode'] = "Cannot use both --stage1-only and --stage2-work"
+        if not hasattr(args, 'auto_work') or not args.auto_work:
+            errors['auto_work'] = "--stage2-work requires --auto-work mode"
+        if args.composite:
+            errors['composite'] = "--stage2-work gets composites from residue pool. Do not specify --composite."
+        if args.b1 is not None:
+            errors['b1'] = "--stage2-work uses B1 from residue file. Do not specify --b1."
+        if args.curves is not None:
+            errors['curves'] = "--stage2-work uses curves from residue file. Do not specify --curves."
+        # B2 can be specified (client chooses B2), or use server suggestion
 
     # Auto-work mode validation (check first, before other modes)
     if hasattr(args, 'auto_work') and args.auto_work:

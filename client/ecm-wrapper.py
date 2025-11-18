@@ -1548,11 +1548,22 @@ def main():
     if hasattr(args, 'auto_work') and args.auto_work:
         work_count_limit = args.work_count if hasattr(args, 'work_count') and args.work_count else None
 
+        # Check for decoupled two-stage modes
+        is_stage1_only = hasattr(args, 'stage1_only') and args.stage1_only
+        is_stage2_work = hasattr(args, 'stage2_work') and args.stage2_work
+
         print("=" * 60)
-        if work_count_limit:
-            print(f"Auto-work mode enabled - will process {work_count_limit} assignment(s)")
+        if is_stage1_only:
+            mode_name = "Stage 1 Producer (GPU)"
+        elif is_stage2_work:
+            mode_name = "Stage 2 Consumer (CPU)"
         else:
-            print("Auto-work mode enabled - requesting work from server")
+            mode_name = "Auto-work"
+
+        if work_count_limit:
+            print(f"{mode_name} mode enabled - will process {work_count_limit} assignment(s)")
+        else:
+            print(f"{mode_name} mode enabled - requesting work from server")
             print("Press Ctrl+C to stop")
         print("=" * 60)
         print()
@@ -1560,8 +1571,329 @@ def main():
         # Get client ID from config
         client_id = wrapper.config['client']['username']
         current_work_id = None
+        current_residue_id = None  # For stage2-work mode
         completed_count = 0
 
+        # Stage 1 Only Mode
+        if is_stage1_only:
+            try:
+                while not wrapper.interrupted:
+                    # Request regular ECM work
+                    work = wrapper.api_client.get_ecm_work(
+                        client_id=client_id,
+                        min_digits=args.min_digits if hasattr(args, 'min_digits') else None,
+                        max_digits=args.max_digits if hasattr(args, 'max_digits') else None,
+                        priority=args.priority if hasattr(args, 'priority') else None,
+                        work_type=args.work_type if hasattr(args, 'work_type') else 'standard'
+                    )
+
+                    if not work:
+                        wrapper.logger.info("No work available, waiting 30 seconds before retry...")
+                        time.sleep(30)
+                        continue
+
+                    current_work_id = work['work_id']
+                    composite = work['composite']
+                    digit_length = work['digit_length']
+
+                    print()
+                    print("=" * 60)
+                    print(f"Stage 1 work assignment {current_work_id}")
+                    print(f"Composite: {composite[:50]}... ({digit_length} digits)")
+                    print(f"Parameters: B1={args.b1}, curves={args.curves}")
+                    print("=" * 60)
+                    print()
+
+                    try:
+                        # Resolve GPU settings
+                        use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(args, wrapper.config)
+
+                        # Generate residue file path
+                        residue_dir = Path(wrapper.config['execution'].get('residue_dir', 'data/residues'))
+                        residue_dir.mkdir(parents=True, exist_ok=True)
+                        timestamp = time.strftime("%Y%m%d_%H%M%S")
+                        residue_file = residue_dir / f"stage1_{timestamp}_{composite[:20]}.txt"
+
+                        # Run stage 1 only (B2=0)
+                        sigma = None
+                        if hasattr(args, 'sigma') and args.sigma:
+                            sigma = args.sigma if ':' in args.sigma else int(args.sigma)
+                        param = args.param if hasattr(args, 'param') and args.param is not None else (3 if use_gpu else None)
+
+                        print(f"Running ECM stage 1 (B1={args.b1}, curves={args.curves})...")
+                        print(f"Saving residues to: {residue_file}")
+
+                        success, factor, actual_curves, raw_output, all_factors = wrapper._run_stage1(
+                            composite=composite,
+                            b1=args.b1,
+                            curves=args.curves,
+                            residue_file=str(residue_file),
+                            sigma=sigma,
+                            param=param,
+                            use_gpu=use_gpu,
+                            gpu_device=gpu_device,
+                            gpu_curves=gpu_curves,
+                            verbose=args.verbose
+                        )
+
+                        if not success:
+                            wrapper.logger.error("Stage 1 execution failed")
+                            wrapper.api_client.abandon_work(current_work_id, reason="stage1_failed")
+                            current_work_id = None
+                            continue
+
+                        # Build results for stage 1 (B2=0)
+                        results = {
+                            'composite': composite,
+                            'b1': args.b1,
+                            'b2': 0,  # Stage 1 only
+                            'curves_requested': args.curves,
+                            'curves_completed': actual_curves,
+                            'factors_found': all_factors if all_factors else [],
+                            'factor_found': factor,
+                            'raw_output': raw_output[-10000:] if len(raw_output) > 10000 else raw_output,
+                            'method': 'ecm',
+                            'parametrization': param if param is not None else 3,
+                            'execution_time': 0,  # Will be filled by subprocess
+                        }
+
+                        # Submit stage 1 results
+                        print("Submitting stage 1 results...")
+                        program_name = 'gmp-ecm-ecm'
+                        submit_response = wrapper.submit_result(results, args.project, program_name)
+
+                        if not submit_response:
+                            wrapper.logger.error("Failed to submit stage 1 results")
+                            wrapper.api_client.abandon_work(current_work_id, reason="submission_failed")
+                            current_work_id = None
+                            # Clean up residue file
+                            if residue_file.exists():
+                                residue_file.unlink()
+                            continue
+
+                        # Extract attempt_id from response
+                        stage1_attempt_id = submit_response.get('attempt_id')
+                        if stage1_attempt_id:
+                            print(f"Stage 1 attempt ID: {stage1_attempt_id}")
+
+                        # Upload residue file
+                        print(f"Uploading residue file ({residue_file.stat().st_size} bytes)...")
+                        upload_result = wrapper.api_client.upload_residue(
+                            client_id=client_id,
+                            residue_file_path=str(residue_file),
+                            stage1_attempt_id=stage1_attempt_id,
+                            expiry_days=7
+                        )
+
+                        if not upload_result:
+                            wrapper.logger.error("Failed to upload residue file")
+                            # Still mark work as complete since stage 1 was submitted
+                        else:
+                            print(f"Residue uploaded: ID {upload_result['residue_id']}, "
+                                  f"{upload_result['curve_count']} curves")
+
+                        # Clean up local residue file after upload
+                        if residue_file.exists():
+                            residue_file.unlink()
+                            wrapper.logger.info(f"Deleted local residue file: {residue_file}")
+
+                        # Mark work as complete
+                        wrapper.api_client.complete_work(current_work_id, client_id)
+                        current_work_id = None
+                        completed_count += 1
+
+                        print()
+                        if work_count_limit:
+                            print(f"Stage 1 complete ({completed_count}/{work_count_limit})")
+                        else:
+                            print(f"Stage 1 complete (total: {completed_count})")
+                        print("=" * 60)
+                        print()
+
+                        if work_count_limit and completed_count >= work_count_limit:
+                            print(f"Reached work count limit ({work_count_limit}), exiting...")
+                            break
+
+                    except Exception as e:
+                        wrapper.logger.exception(f"Error in stage 1 processing: {e}")
+                        if current_work_id:
+                            wrapper.api_client.abandon_work(current_work_id, reason="execution_error")
+                            current_work_id = None
+
+            except KeyboardInterrupt:
+                print("\nShutdown requested...")
+                if current_work_id:
+                    print(f"Abandoning work assignment {current_work_id}...")
+                    wrapper.api_client.abandon_work(current_work_id, reason="client_interrupted")
+
+            print(f"Stage 1 Producer mode stopped - completed {completed_count} assignment(s)")
+            sys.exit(0)
+
+        # Stage 2 Work Mode
+        elif is_stage2_work:
+            try:
+                while not wrapper.interrupted:
+                    # Request residue work from server
+                    residue_work = wrapper.api_client.get_residue_work(
+                        client_id=client_id,
+                        min_digits=args.min_digits if hasattr(args, 'min_digits') else None,
+                        max_digits=args.max_digits if hasattr(args, 'max_digits') else None,
+                        min_priority=args.priority if hasattr(args, 'priority') else None,
+                        claim_timeout_hours=24
+                    )
+
+                    if not residue_work:
+                        wrapper.logger.info("No residue work available, waiting 30 seconds before retry...")
+                        time.sleep(30)
+                        continue
+
+                    current_residue_id = residue_work['residue_id']
+                    composite = residue_work['composite']
+                    digit_length = residue_work['digit_length']
+                    b1 = residue_work['b1']
+                    curve_count = residue_work['curve_count']
+                    stage1_attempt_id = residue_work.get('stage1_attempt_id')
+                    suggested_b2 = residue_work.get('suggested_b2', b1 * 100)
+
+                    # Use client-specified B2 or server suggestion
+                    b2 = args.b2 if args.b2 is not None else suggested_b2
+
+                    print()
+                    print("=" * 60)
+                    print(f"Stage 2 residue work {current_residue_id}")
+                    print(f"Composite: {composite[:50]}... ({digit_length} digits)")
+                    print(f"Parameters: B1={b1}, B2={b2}, curves={curve_count}")
+                    print(f"Stage 1 attempt ID: {stage1_attempt_id}")
+                    print("=" * 60)
+                    print()
+
+                    try:
+                        # Download residue file
+                        residue_dir = Path(wrapper.config['execution'].get('residue_dir', 'data/residues'))
+                        residue_dir.mkdir(parents=True, exist_ok=True)
+                        local_residue_file = residue_dir / f"s2_residue_{current_residue_id}.txt"
+
+                        print(f"Downloading residue file...")
+                        download_success = wrapper.api_client.download_residue(
+                            client_id=client_id,
+                            residue_id=current_residue_id,
+                            output_path=str(local_residue_file)
+                        )
+
+                        if not download_success:
+                            wrapper.logger.error("Failed to download residue file")
+                            wrapper.api_client.abandon_residue(client_id, current_residue_id)
+                            current_residue_id = None
+                            continue
+
+                        print(f"Downloaded {local_residue_file.stat().st_size} bytes")
+
+                        # Get stage2 workers
+                        stage2_workers = args.stage2_workers if hasattr(args, 'stage2_workers') else get_stage2_workers_default(wrapper.config)
+
+                        # Run stage 2 on residue file
+                        print(f"Running stage 2 with {stage2_workers} workers...")
+                        stage2_executor = Stage2Executor(
+                            wrapper, str(local_residue_file), b1, b2, stage2_workers, args.verbose
+                        )
+                        stage2_factor, stage2_all_factors, stage2_curves, stage2_time = stage2_executor.execute(
+                            early_termination=not (hasattr(args, 'continue_after_factor') and args.continue_after_factor),
+                            progress_interval=args.progress_interval if hasattr(args, 'progress_interval') else 0
+                        )
+
+                        # Build results
+                        results = {
+                            'composite': composite,
+                            'b1': b1,
+                            'b2': b2,
+                            'curves_requested': curve_count,
+                            'curves_completed': stage2_curves,
+                            'factors_found': stage2_all_factors if stage2_all_factors else [],
+                            'factor_found': stage2_factor,
+                            'raw_output': f"Stage 2 from residue {current_residue_id}",
+                            'method': 'ecm',
+                            'parametrization': residue_work.get('parametrization', 3),
+                            'execution_time': stage2_time,
+                        }
+
+                        # Submit stage 2 results
+                        print("Submitting stage 2 results...")
+                        program_name = 'gmp-ecm-ecm'
+                        submit_response = wrapper.submit_result(results, args.project, program_name)
+
+                        if not submit_response:
+                            wrapper.logger.error("Failed to submit stage 2 results")
+                            wrapper.api_client.abandon_residue(client_id, current_residue_id)
+                            current_residue_id = None
+                            if local_residue_file.exists():
+                                local_residue_file.unlink()
+                            continue
+
+                        # Extract attempt_id from response
+                        stage2_attempt_id = submit_response.get('attempt_id')
+                        if stage2_attempt_id:
+                            print(f"Stage 2 attempt ID: {stage2_attempt_id}")
+                        else:
+                            wrapper.logger.error("No attempt_id returned from submit")
+                            wrapper.api_client.abandon_residue(client_id, current_residue_id)
+                            current_residue_id = None
+                            if local_residue_file.exists():
+                                local_residue_file.unlink()
+                            continue
+
+                        # Complete residue (supersedes stage 1, deletes server file)
+                        print("Completing residue work...")
+                        complete_result = wrapper.api_client.complete_residue(
+                            client_id=client_id,
+                            residue_id=current_residue_id,
+                            stage2_attempt_id=stage2_attempt_id
+                        )
+
+                        if complete_result:
+                            new_t_level = complete_result.get('new_t_level')
+                            if new_t_level is not None:
+                                print(f"T-level updated to {new_t_level:.2f}")
+                        else:
+                            wrapper.logger.warning("Failed to complete residue on server")
+
+                        # Clean up local residue file
+                        if local_residue_file.exists():
+                            local_residue_file.unlink()
+                            wrapper.logger.info(f"Deleted local residue file: {local_residue_file}")
+
+                        current_residue_id = None
+                        completed_count += 1
+
+                        print()
+                        if work_count_limit:
+                            print(f"Stage 2 complete ({completed_count}/{work_count_limit})")
+                        else:
+                            print(f"Stage 2 complete (total: {completed_count})")
+                        print("=" * 60)
+                        print()
+
+                        if work_count_limit and completed_count >= work_count_limit:
+                            print(f"Reached work count limit ({work_count_limit}), exiting...")
+                            break
+
+                    except Exception as e:
+                        wrapper.logger.exception(f"Error in stage 2 processing: {e}")
+                        if current_residue_id:
+                            wrapper.api_client.abandon_residue(client_id, current_residue_id)
+                            current_residue_id = None
+                        if local_residue_file.exists():
+                            local_residue_file.unlink()
+
+            except KeyboardInterrupt:
+                print("\nShutdown requested...")
+                if current_residue_id:
+                    print(f"Releasing residue claim {current_residue_id}...")
+                    wrapper.api_client.abandon_residue(client_id, current_residue_id)
+
+            print(f"Stage 2 Consumer mode stopped - completed {completed_count} assignment(s)")
+            sys.exit(0)
+
+        # Standard auto-work mode
         try:
             while not wrapper.interrupted:
                 # Request work from server
@@ -1704,9 +2036,9 @@ def main():
                         # Submit results for B1/B2 modes (t-level mode handles submission in each batch)
                         if results.get('curves_completed', 0) > 0:
                             program_name = f'gmp-ecm-{results.get("method", "ecm")}'
-                            success = wrapper.submit_result(results, args.project, program_name)
+                            submit_response = wrapper.submit_result(results, args.project, program_name)
 
-                            if not success:
+                            if not submit_response:
                                 wrapper.logger.error("Failed to submit results, abandoning work assignment")
                                 wrapper.api_client.abandon_work(current_work_id, reason="submission_failed")
                                 current_work_id = None
@@ -1880,15 +2212,15 @@ def main():
                 print("Submitting partial results...")
 
             program_name = f'gmp-ecm-{results.get("method", "ecm")}'
-            success = wrapper.submit_result(results, args.project, program_name)
+            submit_response = wrapper.submit_result(results, args.project, program_name)
 
             if wrapper.interrupted:
-                if success:
+                if submit_response:
                     print("Partial results submitted successfully")
                 else:
                     print("Warning: Partial result submission failed (saved to data/results/ for retry)")
 
-            sys.exit(0 if success else 1)
+            sys.exit(0 if submit_response else 1)
         else:
             wrapper.logger.warning("Skipping result submission due to failure (0 curves completed)")
             sys.exit(1)

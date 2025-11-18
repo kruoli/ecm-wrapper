@@ -45,7 +45,7 @@ class APIClient:
     def submit_result(
         self, payload: Dict[str, Any], save_on_failure: bool = True,
         results_context: Optional[Dict[str, Any]] = None
-    ) -> bool:
+    ) -> Optional[Dict[str, Any]]:
         """
         Submit result to API with retry logic.
 
@@ -55,7 +55,8 @@ class APIClient:
             results_context: Optional full results dict for failure persistence
 
         Returns:
-            True if submission succeeded, False otherwise
+            Response dictionary with keys: status, attempt_id, composite_id, message, factor_status
+            Returns None if submission failed
         """
         url = f"{self.api_endpoint}/submit_result"
 
@@ -78,8 +79,9 @@ class APIClient:
                     )
 
                 response.raise_for_status()
-                self.logger.info(f"Successfully submitted results: {response.json()}")
-                return True
+                response_data = response.json()
+                self.logger.info(f"Successfully submitted results: {response_data}")
+                return response_data
 
             except requests.exceptions.RequestException as e:
                 error_details = ""
@@ -104,7 +106,7 @@ class APIClient:
             self.save_failed_submission(results_context, payload)
 
         self.logger.error(f"Failed to submit results after {self.retry_attempts} attempts")
-        return False
+        return None
 
     def save_failed_submission(
         self, results: Dict[str, Any], payload: Dict[str, Any],
@@ -374,4 +376,243 @@ class APIClient:
 
         except requests.exceptions.RequestException as e:
             self.logger.error(f"Failed to abandon work {work_id}: {e}")
+            return False
+
+    # ==================== Residue Management Methods ====================
+
+    def upload_residue(
+        self,
+        client_id: str,
+        residue_file_path: str,
+        stage1_attempt_id: Optional[int] = None,
+        expiry_days: int = 7
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Upload a residue file after completing stage 1 ECM.
+
+        Args:
+            client_id: Client identifier
+            residue_file_path: Path to the residue file
+            stage1_attempt_id: Optional ID of the stage 1 attempt to link
+            expiry_days: Days until residue expires if not consumed
+
+        Returns:
+            Dictionary with residue info (residue_id, composite, b1, curves, etc.)
+            Returns None on error
+        """
+        url = f"{self.api_endpoint}/residues/upload"
+
+        try:
+            with open(residue_file_path, 'rb') as f:
+                files = {'file': (Path(residue_file_path).name, f, 'text/plain')}
+                headers = {'X-Client-ID': client_id}
+                params = {'expiry_days': expiry_days}
+                if stage1_attempt_id is not None:
+                    params['stage1_attempt_id'] = stage1_attempt_id
+
+                response = requests.post(
+                    url,
+                    files=files,
+                    headers=headers,
+                    params=params,
+                    timeout=120  # Longer timeout for file upload
+                )
+                response.raise_for_status()
+
+                data = response.json()
+                self.logger.info(
+                    f"Uploaded residue: ID {data['residue_id']}, "
+                    f"{data['curve_count']} curves, B1={data['b1']}"
+                )
+                return data
+
+        except FileNotFoundError:
+            self.logger.error(f"Residue file not found: {residue_file_path}")
+            return None
+        except requests.exceptions.RequestException as e:
+            error_details = ""
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_details = f" - Response: {e.response.text}"
+                except (AttributeError, ValueError, UnicodeDecodeError):
+                    pass
+            self.logger.error(f"Failed to upload residue: {e}{error_details}")
+            return None
+
+    def get_residue_work(
+        self,
+        client_id: str,
+        min_digits: Optional[int] = None,
+        max_digits: Optional[int] = None,
+        min_priority: Optional[int] = None,
+        claim_timeout_hours: int = 24
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Request stage 2 work (available residue file).
+
+        Args:
+            client_id: Client identifier
+            min_digits: Minimum composite digit length
+            max_digits: Maximum composite digit length
+            min_priority: Minimum composite priority
+            claim_timeout_hours: Hours until claim expires
+
+        Returns:
+            Dictionary with residue work info (residue_id, composite, b1, download_url, etc.)
+            Returns None if no work available or on error
+        """
+        url = f"{self.api_endpoint}/residues/work"
+
+        headers = {'X-Client-ID': client_id}
+        params = {'claim_timeout_hours': claim_timeout_hours}
+        if min_digits is not None:
+            params['min_digits'] = min_digits
+        if max_digits is not None:
+            params['max_digits'] = max_digits
+        if min_priority is not None:
+            params['min_priority'] = min_priority
+
+        try:
+            response = requests.get(
+                url,
+                headers=headers,
+                params=params,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+
+            data = response.json()
+
+            if data.get('residue_id'):
+                self.logger.info(
+                    f"Received residue work: ID {data['residue_id']}, "
+                    f"{data['curve_count']} curves, B1={data['b1']}, "
+                    f"composite {data['composite'][:30]}..."
+                )
+                return data
+            else:
+                message = data.get('message', 'No residues available')
+                self.logger.info(f"No residue work available: {message}")
+                return None
+
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Failed to request residue work: {e}")
+            return None
+
+    def download_residue(
+        self,
+        client_id: str,
+        residue_id: int,
+        output_path: str
+    ) -> bool:
+        """
+        Download a residue file for stage 2 processing.
+
+        Args:
+            client_id: Client identifier (must match claimer)
+            residue_id: ID of the residue to download
+            output_path: Local path to save the downloaded file
+
+        Returns:
+            True if download succeeded, False otherwise
+        """
+        url = f"{self.api_endpoint}/residues/{residue_id}/download"
+
+        headers = {'X-Client-ID': client_id}
+
+        try:
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=120,  # Longer timeout for file download
+                stream=True
+            )
+            response.raise_for_status()
+
+            # Write file in chunks
+            with open(output_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+            file_size = Path(output_path).stat().st_size
+            self.logger.info(
+                f"Downloaded residue {residue_id} to {output_path} ({file_size} bytes)"
+            )
+            return True
+
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Failed to download residue {residue_id}: {e}")
+            return False
+        except IOError as e:
+            self.logger.error(f"Failed to write residue file: {e}")
+            return False
+
+    def complete_residue(
+        self,
+        client_id: str,
+        residue_id: int,
+        stage2_attempt_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Mark residue as completed after stage 2 finishes.
+
+        This supersedes the stage 1 attempt and deletes the residue file on the server.
+
+        Args:
+            client_id: Client identifier
+            residue_id: ID of the completed residue
+            stage2_attempt_id: ID of the stage 2 ECM attempt
+
+        Returns:
+            Dictionary with completion info (new_t_level, etc.)
+            Returns None on error
+        """
+        url = f"{self.api_endpoint}/residues/{residue_id}/complete"
+
+        headers = {'X-Client-ID': client_id}
+        payload = {'stage2_attempt_id': stage2_attempt_id}
+
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            self.logger.info(
+                f"Completed residue {residue_id}: {data.get('message', 'Success')}"
+            )
+            return data
+
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Failed to complete residue {residue_id}: {e}")
+            return None
+
+    def abandon_residue(self, client_id: str, residue_id: int) -> bool:
+        """
+        Release a claimed residue back to the available pool.
+
+        Args:
+            client_id: Client identifier
+            residue_id: ID of the residue to release
+
+        Returns:
+            True if successfully released, False otherwise
+        """
+        url = f"{self.api_endpoint}/residues/{residue_id}/claim"
+
+        headers = {'X-Client-ID': client_id}
+
+        try:
+            response = requests.delete(url, headers=headers, timeout=self.timeout)
+            response.raise_for_status()
+            self.logger.info(f"Released claim on residue {residue_id}")
+            return True
+
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Failed to release residue {residue_id}: {e}")
             return False

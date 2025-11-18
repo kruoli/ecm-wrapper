@@ -358,6 +358,9 @@ class TLevelCalculator:
         """
         Recalculate the t-level for a composite based on all its ECM attempts.
 
+        Excludes attempts that have been superseded (e.g., stage 1 attempts
+        that were replaced by full stage 1+2 attempts).
+
         Args:
             db: Database session
             composite: Composite model instance
@@ -367,9 +370,10 @@ class TLevelCalculator:
         """
         from ..models.attempts import ECMAttempt
 
-        # Get all ECM attempts for this composite
+        # Get all ECM attempts for this composite, excluding superseded ones
         attempts = db.query(ECMAttempt).filter(
-            ECMAttempt.composite_id == composite.id
+            ECMAttempt.composite_id == composite.id,
+            ECMAttempt.superseded_by.is_(None)  # Exclude superseded attempts
         ).all()
 
         # Calculate new t-level

@@ -187,7 +187,7 @@ class BaseWrapper:
 
     def submit_payload_to_endpoints(self, payload: Dict[str, Any],
                                     save_on_failure: bool = True,
-                                    results_context: Optional[Dict[str, Any]] = None) -> bool:
+                                    results_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         Submit a pre-built payload to all configured API endpoints.
 
@@ -197,24 +197,30 @@ class BaseWrapper:
             results_context: Optional full results dict for failure persistence
 
         Returns:
-            True if at least one submission succeeded, False otherwise
+            Response dictionary from first successful submission (contains attempt_id, composite_id, etc.)
+            Returns None if all submissions failed
         """
         submission_results = []
+        first_success_response = None
+
         for api_client_info in self.api_clients:
             api_client = api_client_info['client']
             endpoint_name = api_client_info['name']
 
             try:
                 self.logger.info(f"Submitting to {endpoint_name} ({api_client_info['url']})")
-                success = api_client.submit_result(
+                response = api_client.submit_result(
                     payload=payload,
                     save_on_failure=save_on_failure,
                     results_context=results_context
                 )
 
-                if success:
+                if response:
                     self.logger.info(f"✓ Successfully submitted to {endpoint_name}")
                     submission_results.append(True)
+                    # Keep track of first successful response (contains attempt_id)
+                    if first_success_response is None:
+                        first_success_response = response
                 else:
                     self.logger.warning(f"✗ Failed to submit to {endpoint_name}")
                     submission_results.append(False)
@@ -229,16 +235,16 @@ class BaseWrapper:
             total_count = len(submission_results)
             self.logger.info(f"Submission summary: {success_count}/{total_count} endpoints succeeded")
 
-        # Return True if at least one submission succeeded
-        return any(submission_results)
+        # Return first successful response (or None if all failed)
+        return first_success_response
 
     def submit_result(self, results: Dict[str, Any], project: Optional[str] = None,
-                     program: str = "unknown") -> bool:
+                     program: str = "unknown") -> Optional[Dict[str, Any]]:
         """
         Submit results to API endpoint(s) with retry logic.
 
         If multiple endpoints are configured, submits to all of them.
-        Returns True if at least one submission succeeded.
+        Returns response from first successful submission (contains attempt_id).
         """
         # Build payload once (same for all endpoints)
         payload = self.api_clients[0]['client'].build_submission_payload(

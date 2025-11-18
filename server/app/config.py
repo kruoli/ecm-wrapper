@@ -63,6 +63,12 @@ class Settings(BaseSettings):
         description="Path to t-level executable binary"
     )
 
+    # Residue storage
+    residue_storage_path: str = Field(
+        default=os.getenv("RESIDUE_STORAGE_PATH", "data/residues"),
+        description="Path to store ECM residue files for two-stage decoupling"
+    )
+
     # Security
     secret_key: str = Field(
         default_factory=lambda: (

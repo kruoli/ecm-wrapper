@@ -14,25 +14,44 @@ from ...utils.query_helpers import get_aggregated_attempts
 router = APIRouter()
 
 @router.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, db: Session = Depends(get_db)):
+async def dashboard(
+    request: Request,
+    db: Session = Depends(get_db),
+    priority: Optional[int] = Query(None, ge=1, description="Filter by priority level")
+):
     """
     Simple dashboard showing all factorization results.
+    Optionally filter by priority level.
     """
 
-    # Get recent composites with their attempts and factors
-    composites = db.query(Composite).order_by(desc(Composite.created_at)).limit(50).all()
+    # Build query for composites with optional priority filter
+    composites_query = db.query(Composite)
+    if priority is not None:
+        composites_query = composites_query.filter(Composite.priority == priority)
+    composites = composites_query.order_by(desc(Composite.created_at)).limit(50).all()
 
-    # Get recent attempts (aggregated by composite)
-    attempts = get_aggregated_attempts(db, limit=50)
+    # Get recent attempts (aggregated by composite), filtered by priority
+    attempts = get_aggregated_attempts(db, limit=50, priority=priority)
 
-    # Get all factors
+    # Get all factors (no priority filter - show all)
     factors = db.query(Factor).order_by(desc(Factor.created_at)).all()
 
-    # Build summary stats
-    total_composites = db.query(Composite).count()
-    total_attempts = db.query(ECMAttempt).count()
+    # Build summary stats (filtered by priority if specified)
+    stats_query = db.query(Composite)
+    if priority is not None:
+        stats_query = stats_query.filter(Composite.priority == priority)
+
+    total_composites = stats_query.count()
+    fully_factored = stats_query.filter(Composite.is_fully_factored == True).count()
+
+    # Total attempts - need to join through composites if filtering by priority
+    attempts_query = db.query(ECMAttempt).filter(ECMAttempt.superseded_by.is_(None))
+    if priority is not None:
+        attempts_query = attempts_query.join(Composite).filter(Composite.priority == priority)
+    total_attempts = attempts_query.count()
+
+    # Total factors count (all priorities)
     total_factors = db.query(Factor).count()
-    fully_factored = db.query(Composite).filter(Composite.is_fully_factored == True).count()
 
     return templates.TemplateResponse("public/dashboard.html", {
         "request": request,
@@ -43,6 +62,7 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
         "total_attempts": total_attempts,
         "total_factors": total_factors,
         "fully_factored": fully_factored,
+        "priority": priority,
         "db": db,
         "Composite": Composite,
         "ECMAttempt": ECMAttempt,

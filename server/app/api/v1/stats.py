@@ -52,8 +52,11 @@ async def get_composite_stats(
     else:
         status = "composite"
 
-    # Get ECM work summary
-    attempts = db.query(ECMAttempt).filter(ECMAttempt.composite_id == comp.id).all()
+    # Get ECM work summary (exclude superseded stage 1 attempts)
+    attempts = db.query(ECMAttempt).filter(
+        ECMAttempt.composite_id == comp.id,
+        ECMAttempt.superseded_by.is_(None)
+    ).all()
 
     total_attempts = len(attempts)
     total_curves = sum(attempt.curves_completed for attempt in attempts)

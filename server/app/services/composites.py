@@ -438,10 +438,11 @@ class CompositeService:
             if not composite:
                 return False
 
-            # Get all ECM attempts for this composite
+            # Get all ECM attempts for this composite (exclude superseded stage 1)
             ecm_attempts = db.query(ECMAttempt).filter(
                 ECMAttempt.composite_id == composite_id,
-                ECMAttempt.method == 'ecm'
+                ECMAttempt.method == 'ecm',
+                ECMAttempt.superseded_by.is_(None)
             ).all()
 
             # Calculate current t-level
@@ -693,9 +694,10 @@ class CompositeService:
         if not composite:
             return None
 
-        # Get attempts
+        # Get attempts (exclude superseded stage 1 attempts)
         attempts = db.query(ECMAttempt).filter(
-            ECMAttempt.composite_id == composite_id
+            ECMAttempt.composite_id == composite_id,
+            ECMAttempt.superseded_by.is_(None)
         ).order_by(ECMAttempt.created_at.desc()).all()
 
         # Get active work assignments
@@ -888,15 +890,19 @@ class CompositeService:
         Returns:
             Dictionary with method-specific statistics
         """
-        attempts = db.query(ECMAttempt).filter(
+        # Get ALL attempts for display (including superseded)
+        all_attempts = db.query(ECMAttempt).filter(
             ECMAttempt.composite_id == composite_id
         ).all()
+
+        # Get non-superseded attempts for statistics
+        active_attempts = [a for a in all_attempts if a.superseded_by is None]
 
         breakdown = {}
 
         # Prefetch all factors for these attempts to avoid N+1 queries
         from ..models import Factor
-        attempt_ids = [a.id for a in attempts]
+        attempt_ids = [a.id for a in all_attempts]
         factors_by_attempt = {}
         if attempt_ids:
             factors_query = db.query(Factor).filter(
@@ -905,11 +911,14 @@ class CompositeService:
             factors_by_attempt = {f.found_by_attempt_id: f for f in factors_query}
 
         for method in ['ecm', 'pm1', 'pp1']:
-            method_attempts = [a for a in attempts if a.method == method]
+            # Use ALL attempts for display
+            method_all_attempts = [a for a in all_attempts if a.method == method]
+            # Use active attempts for statistics
+            method_active_attempts = [a for a in active_attempts if a.method == method]
 
-            # Get factors found by this method
+            # Get factors found by this method (from active attempts only)
             factors = []
-            for attempt in method_attempts:
+            for attempt in method_active_attempts:
                 if attempt.factor_found:
                     # Get sigma from prefetched Factor model
                     factor_record = factors_by_attempt.get(attempt.id)
@@ -922,13 +931,15 @@ class CompositeService:
                     })
 
             breakdown[method] = {
-                'total_attempts': len(method_attempts),
-                'total_curves': sum(a.curves_completed for a in method_attempts if a.curves_completed),
+                # Statistics exclude superseded attempts
+                'total_attempts': len(method_active_attempts),
+                'total_curves': sum(a.curves_completed for a in method_active_attempts if a.curves_completed),
                 'factors_found': factors,
-                'max_b1': max((a.b1 for a in method_attempts if a.b1), default=0),
-                'min_b1': min((a.b1 for a in method_attempts if a.b1), default=0),
-                'avg_b1': sum(a.b1 for a in method_attempts if a.b1) / len(method_attempts) if method_attempts else 0,
-                'attempts': method_attempts
+                'max_b1': max((a.b1 for a in method_active_attempts if a.b1), default=0),
+                'min_b1': min((a.b1 for a in method_active_attempts if a.b1), default=0),
+                'avg_b1': sum(a.b1 for a in method_active_attempts if a.b1) / len(method_active_attempts) if method_active_attempts else 0,
+                # Display includes ALL attempts (superseded marked in template)
+                'attempts': method_all_attempts
             }
 
         return breakdown

@@ -1573,6 +1573,8 @@ def main():
         current_work_id = None
         current_residue_id = None  # For stage2-work mode
         completed_count = 0
+        consecutive_failures = 0  # Track consecutive failures to prevent infinite loops
+        MAX_CONSECUTIVE_FAILURES = 3
 
         # Stage 1 Only Mode
         if is_stage1_only:
@@ -1701,6 +1703,7 @@ def main():
                         wrapper.api_client.complete_work(current_work_id, client_id)
                         current_work_id = None
                         completed_count += 1
+                        consecutive_failures = 0  # Reset on success
 
                         print()
                         if work_count_limit:
@@ -1716,9 +1719,23 @@ def main():
 
                     except Exception as e:
                         wrapper.logger.exception(f"Error in stage 1 processing: {e}")
+                        consecutive_failures += 1
+
                         if current_work_id:
                             wrapper.api_client.abandon_work(current_work_id, reason="execution_error")
                             current_work_id = None
+
+                        # Check for too many consecutive failures (circuit breaker)
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                            wrapper.logger.error(
+                                f"Too many consecutive failures ({consecutive_failures}), exiting..."
+                            )
+                            break
+
+                        # Check if we've reached work count limit
+                        if work_count_limit and completed_count >= work_count_limit:
+                            print(f"Reached work count limit ({work_count_limit}), exiting...")
+                            break
 
             except KeyboardInterrupt:
                 print("\nShutdown requested...")
@@ -1863,6 +1880,7 @@ def main():
 
                         current_residue_id = None
                         completed_count += 1
+                        consecutive_failures = 0  # Reset on success
 
                         print()
                         if work_count_limit:
@@ -1878,11 +1896,25 @@ def main():
 
                     except Exception as e:
                         wrapper.logger.exception(f"Error in stage 2 processing: {e}")
+                        consecutive_failures += 1
+
                         if current_residue_id:
                             wrapper.api_client.abandon_residue(client_id, current_residue_id)
                             current_residue_id = None
                         if local_residue_file.exists():
                             local_residue_file.unlink()
+
+                        # Check for too many consecutive failures (circuit breaker)
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                            wrapper.logger.error(
+                                f"Too many consecutive failures ({consecutive_failures}), exiting..."
+                            )
+                            break
+
+                        # Check if we've reached work count limit
+                        if work_count_limit and completed_count >= work_count_limit:
+                            print(f"Reached work count limit ({work_count_limit}), exiting...")
+                            break
 
             except KeyboardInterrupt:
                 print("\nShutdown requested...")

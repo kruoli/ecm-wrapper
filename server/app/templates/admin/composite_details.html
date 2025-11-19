@@ -218,10 +218,17 @@
                     <th>Submitted</th>
                 </tr>
                 {% for attempt in recent_attempts %}
-                <tr>
+                <tr {% if attempt.superseded_by %}style="opacity: 0.5; background-color: #f9f9f9;"{% endif %}>
                     <td>{{ esc(attempt.method) }}</td>
                     <td>{{ "{:,}".format(attempt.b1) }}</td>
-                    <td>{% if attempt.b2 is none %}Default{% elif attempt.b2 == 0 %}Stage 1 only{% else %}{{ "{:,}".format(attempt.b2) }}{% endif %}</td>
+                    <td>
+                        {% if attempt.b2 is none %}Default{% elif attempt.b2 == 0 %}
+                        <span>Stage 1 only</span>
+                        {% if attempt.superseded_by %}
+                        <span style="display: inline-block; margin-left: 5px; padding: 2px 6px; background: #f39c12; color: white; border-radius: 3px; font-size: 0.75em; font-weight: bold;" title="Superseded by attempt #{{ attempt.superseded_by }}">SUPERSEDED</span>
+                        {% endif %}
+                        {% else %}{{ "{:,}".format(attempt.b2) }}{% endif %}
+                    </td>
                     <td>{{ "{:,}".format(attempt.curves_completed) }}</td>
                     <td>
                         {% if attempt.factor_found %}

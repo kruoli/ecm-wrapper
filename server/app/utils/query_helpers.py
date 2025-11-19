@@ -161,7 +161,7 @@ def get_recent_attempts(db: Session, limit: int = 100, method: Optional[str] = N
     return query.order_by(desc(ECMAttempt.created_at)).limit(limit).all()
 
 
-def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] = None):
+def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] = None, priority: Optional[int] = None):
     """
     Get recent ECM attempts aggregated by composite.
 
@@ -177,6 +177,7 @@ def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] 
         db: Database session
         limit: Maximum number of composites to return
         method: Filter by method (ecm, pm1, pp1, etc.)
+        priority: Filter by composite priority level
 
     Returns:
         List of dicts with aggregated attempt data per composite
@@ -190,7 +191,13 @@ def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] 
     query = db.query(
         ECMAttempt.composite_id,
         func.max(ECMAttempt.created_at).label('latest_attempt')
-    ).group_by(ECMAttempt.composite_id)
+    )
+
+    # Join with Composite table if filtering by priority
+    if priority is not None:
+        query = query.join(Composite).filter(Composite.priority == priority)
+
+    query = query.group_by(ECMAttempt.composite_id)
 
     if method:
         query = query.filter(ECMAttempt.method == method)

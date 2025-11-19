@@ -4,7 +4,7 @@
 
 {% block extra_head %}
 <script>
-    // Auto-refresh every 30 seconds
+    // Auto-refresh every 30 seconds, preserving query parameters
     setTimeout(function() {
         window.location.reload();
     }, 30000);
@@ -37,6 +37,27 @@
         📊 Testing Status by T-Level
     </a>
     <span style="color: #666; font-size: 0.9em;">View progress toward t-level milestones and method coverage</span>
+</div>
+
+<div style="margin-bottom: 20px; padding: 15px; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+    <div style="margin-bottom: 10px; font-weight: 600; color: #333;">
+        🔍 Filter by Priority:
+    </div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+        <a href="/api/v1/dashboard/" class="btn {% if priority is none %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 8px 16px;">
+            All Priorities
+        </a>
+        {% for p in range(1, 11) %}
+        <a href="/api/v1/dashboard/?priority={{ p }}" class="btn {% if priority == p %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 8px 16px;">
+            Priority {{ p }}
+        </a>
+        {% endfor %}
+    </div>
+    {% if priority is not none %}
+    <div style="margin-top: 10px; color: #666; font-size: 0.9em;">
+        Currently showing: <strong>Priority {{ priority }}</strong> composites only
+    </div>
+    {% endif %}
 </div>
 
 <div class="stats-grid" style="margin-bottom: 30px;">

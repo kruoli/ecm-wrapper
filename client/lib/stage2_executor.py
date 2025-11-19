@@ -61,7 +61,7 @@ class Stage2Executor:
         self.curves_lock = threading.Lock()
 
     def execute(self, early_termination: bool = True,
-                progress_interval: int = 0) -> Optional[Tuple[str, str, int]]:
+                progress_interval: int = 0) -> Tuple[Optional[str], List[str], int, float]:
         """
         Execute Stage 2 with worker pool.
 
@@ -70,8 +70,14 @@ class Stage2Executor:
             progress_interval: Report progress every N curves (0 = no progress reporting)
 
         Returns:
-            Tuple of (factor, sigma, curves_completed) or None if no factor found
+            Tuple of (factor, all_factors, curves_completed, execution_time)
+            - factor: First factor found (or None)
+            - all_factors: List of all factors found (empty list if none)
+            - curves_completed: Total curves processed
+            - execution_time: Total execution time in seconds
         """
+        start_time = time.time()
+
         # Extract B1 from residue file to ensure consistency
         residue_info = self.wrapper._parse_residue_file(self.residue_file)
         actual_b1 = residue_info['b1']
@@ -84,7 +90,8 @@ class Stage2Executor:
 
         if not residue_chunks:
             self.logger.error("Failed to split residue file")
-            return None
+            execution_time = time.time() - start_time
+            return (None, [], 0, execution_time)
 
         # Run workers in parallel
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
@@ -120,10 +127,17 @@ class Stage2Executor:
         # Cleanup temporary chunk files and directory
         self._cleanup_chunks(residue_chunks)
 
+        # Calculate execution time
+        execution_time = time.time() - start_time
+
         # Return factor info along with curves completed
         if self.factor_found:
-            return (self.factor_found[0], self.factor_found[1], self.curves_completed_total)
-        return None
+            # Build all_factors list (currently only tracking one factor)
+            factor = self.factor_found[0]
+            all_factors = [factor] if factor else []
+            return (factor, all_factors, self.curves_completed_total, execution_time)
+
+        return (None, [], self.curves_completed_total, execution_time)
 
     def _split_residue_file(self) -> List[Path]:
         """Split residue file into chunks for parallel processing."""

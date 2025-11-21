@@ -581,12 +581,13 @@
                         const ids = data.orphaned_residues.map(r => r.id).join(', ');
                         alert(`Cleaned up ${data.cleaned_up} orphaned residue(s)\n\nIDs: ${ids}\n\nThese residues had database records but missing files and have been marked as expired.`);
                     } else {
-                        // Show debugging info
-                        const debugInfo = data.all_residues_checked.map(r =>
-                            `ID ${r.id}: ${r.exists ? '✓' : '✗'} ${r.storage_path}`
-                        ).join('\n');
-                        alert(`No orphaned residues found.\n\nChecked ${data.total_checked} residue(s).\n\nSee browser console for detailed path information.`);
-                        console.log('All residues checked:', data.all_residues_checked);
+                        // Show debugging info if available
+                        if (data.all_residues_checked && data.all_residues_checked.length > 0) {
+                            alert(`No orphaned residues found.\n\nChecked ${data.total_checked || data.all_residues_checked.length} residue(s).\n\nSee browser console for detailed path information.`);
+                            console.log('All residues checked:', data.all_residues_checked);
+                        } else {
+                            alert(`No orphaned residues found.\n\n${data.message || 'All residue records have corresponding files.'}`);
+                        }
                     }
                     refreshPage();
                 })

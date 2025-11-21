@@ -406,7 +406,7 @@ async def cleanup_orphaned_residues(
                         'claimed_by': residue.claimed_by if old_status == 'claimed' else None,
                         'storage_path': str(residue.storage_path),
                         'absolute_path': str(file_path.absolute()),
-                        'curves': residue.curves,
+                        'curve_count': residue.curve_count,
                         'b1': residue.b1
                     })
 

@@ -4,10 +4,10 @@
 
 {% block extra_head %}
 <script>
-    // Auto-refresh every 30 seconds, preserving query parameters
+    // Auto-refresh every 120 seconds, preserving query parameters
     setTimeout(function() {
         window.location.reload();
-    }, 30000);
+    }, 120000);
 
     function toggleExpand(compositeId) {
         // Get the icon
@@ -248,6 +248,6 @@
 </div>
 
 <div class="small-text" style="margin-top: 20px;">
-    <p>Dashboard auto-refreshes every 30 seconds. API Documentation: <a href="/docs">/docs</a></p>
+    <p>Dashboard auto-refreshes every 2 minutes. API Documentation: <a href="/docs">/docs</a></p>
 </div>
 {% endblock %}

@@ -269,7 +269,7 @@ class APIClient:
         min_digits: Optional[int] = None,
         max_digits: Optional[int] = None,
         priority: Optional[int] = None,
-        timeout_days: int = 5,
+        timeout_days: int = 1,
         work_type: str = "standard"
     ) -> Optional[Dict[str, Any]]:
         """
@@ -280,7 +280,7 @@ class APIClient:
             min_digits: Minimum composite digit length (optional)
             max_digits: Maximum composite digit length (optional)
             priority: Minimum priority filter (optional)
-            timeout_days: Work assignment expiration in days (default: 5)
+            timeout_days: Work assignment expiration in days (default: 1)
             work_type: Work assignment strategy - "standard" (smallest first) or "progressive" (least ECM done first)
 
         Returns:
@@ -367,23 +367,29 @@ class APIClient:
 
         return False
 
-    def abandon_work(self, work_id: str, reason: str = "client_terminated") -> bool:
+    def abandon_work(self, work_id: str, reason: str = "client_terminated", client_id: Optional[str] = None) -> bool:
         """
         Abandon work assignment (release it back to the pool).
 
         Args:
             work_id: Work assignment ID to abandon
             reason: Reason for abandoning (optional)
+            client_id: Client ID that owns the work (required for server validation)
 
         Returns:
             True if successfully abandoned, False otherwise
         """
         url = f"{self.api_endpoint}/work/{work_id}"
 
+        # Build query parameters
+        params = {'reason': reason}
+        if client_id:
+            params['client_id'] = client_id
+
         # Retry logic with exponential backoff (critical for releasing work claims)
         for attempt in range(1, self.retry_attempts + 1):
             try:
-                response = requests.delete(url, timeout=self.timeout)
+                response = requests.delete(url, params=params, timeout=self.timeout)
                 response.raise_for_status()
                 self.logger.info(f"Abandoned work {work_id} (reason: {reason})")
                 return True

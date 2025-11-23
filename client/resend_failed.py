@@ -152,15 +152,39 @@ class FailedResultsResender(BaseWrapper):
             print(f"❌ Error processing {result_file}: {e}")
             return None
 
-    def submit_result(self, submission: Dict[str, Any]) -> bool:
-        """Submit a single result to all configured API endpoints using BaseWrapper infrastructure."""
+    def submit_result(self, submission: Dict[str, Any], work_id: Optional[str] = None) -> bool:
+        """Submit a single result to all configured API endpoints using BaseWrapper infrastructure.
+
+        Args:
+            submission: API payload to submit
+            work_id: Optional work assignment ID to abandon after successful submission
+
+        Returns:
+            True if submission succeeded, False otherwise
+        """
         # Use BaseWrapper's submit_payload_to_endpoints method
         # Note: save_on_failure=False since we're already retrying a failed submission
-        return self.submit_payload_to_endpoints(
+        success = self.submit_payload_to_endpoints(
             payload=submission,
             save_on_failure=False,
             results_context=None
         )
+
+        # If submission succeeded and we have a work_id, try to abandon it
+        if success and work_id:
+            print(f"   Releasing orphaned work assignment {work_id}...")
+            try:
+                # Try to abandon the work (may fail if already timed out, which is fine)
+                # Use BaseWrapper's convenience method which automatically passes client_id
+                if self.abandon_work(work_id, reason="recovered_from_failed_submission"):
+                    print(f"   ✓ Released work assignment {work_id}")
+                else:
+                    print(f"   ℹ️  Could not release work {work_id} (may be already expired)")
+            except Exception as e:
+                # Don't fail the whole operation if work abandonment fails
+                print(f"   ⚠️  Failed to release work {work_id}: {e}")
+
+        return success
 
     def mark_as_submitted(self, result_file: str):
         """Mark a result file as successfully submitted."""
@@ -196,21 +220,29 @@ class FailedResultsResender(BaseWrapper):
             stats["total"] += 1
             result_file = result_data.pop('_file_path')
 
+            # Extract work_id if present (for auto-work mode failures)
+            work_id = result_data.get('work_id')
+
             # Create submission
             submission = self.create_submission_from_saved_data(result_file)
             if not submission:
                 stats["failed"] += 1
                 continue
 
-            print(f"📡 Resubmitting: {submission['composite'][:50]}...")
+            composite_display = submission['composite'][:50] if len(submission['composite']) > 50 else submission['composite']
+            print(f"📡 Resubmitting: {composite_display}...")
+            if work_id:
+                print(f"   (associated with work assignment {work_id})")
 
-            # Attempt submission
-            if self.submit_result(submission):
+            # Attempt submission (and abandon work if successful)
+            if self.submit_result(submission, work_id=work_id if not self.dry_run else None):
                 stats["success"] += 1
                 if not self.dry_run:
                     self.mark_as_submitted(result_file)
                 else:
                     print("   [DRY RUN] File not marked as submitted")
+                    if work_id:
+                        print(f"   [DRY RUN] Work {work_id} not released")
             else:
                 stats["failed"] += 1
 

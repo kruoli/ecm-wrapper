@@ -5,8 +5,7 @@
 {% block extra_head %}
 <script>
     // Check if API key exists, redirect to login if not
-    const API_KEY = sessionStorage.getItem('admin_api_key');
-    if (!API_KEY) {
+    if (!sessionStorage.getItem('admin_api_key')) {
         window.location.href = '/api/v1/admin/login';
     }
 
@@ -576,18 +575,11 @@
             fetchWithAuth('/api/v1/admin/residues/cleanup-orphaned', {method: 'POST'})
                 .then(response => response.json())
                 .then(data => {
-                    console.log('Cleanup response:', data);
                     if (data.cleaned_up > 0) {
                         const ids = data.orphaned_residues.map(r => r.id).join(', ');
                         alert(`Cleaned up ${data.cleaned_up} orphaned residue(s)\n\nIDs: ${ids}\n\nThese residues had database records but missing files and have been marked as expired.`);
                     } else {
-                        // Show debugging info if available
-                        if (data.all_residues_checked && data.all_residues_checked.length > 0) {
-                            alert(`No orphaned residues found.\n\nChecked ${data.total_checked || data.all_residues_checked.length} residue(s).\n\nSee browser console for detailed path information.`);
-                            console.log('All residues checked:', data.all_residues_checked);
-                        } else {
-                            alert(`No orphaned residues found.\n\n${data.message || 'All residue records have corresponding files.'}`);
-                        }
+                        alert(`No orphaned residues found.\n\n${data.message || 'All active residue records have corresponding files.'}`);
                     }
                     refreshPage();
                 })

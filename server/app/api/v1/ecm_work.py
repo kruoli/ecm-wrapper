@@ -30,7 +30,7 @@ async def get_ecm_work(
     priority: Optional[int] = None,
     min_digits: Optional[int] = None,
     max_digits: Optional[int] = None,
-    timeout_days: int = 5,
+    timeout_days: int = 1,
     work_type: str = "standard",
     db: Session = Depends(get_db)
 ):
@@ -45,7 +45,7 @@ async def get_ecm_work(
         priority: Minimum priority level (filters for priority >= this value)
         min_digits: Minimum number of digits
         max_digits: Maximum number of digits
-        timeout_days: Work assignment expiration in days (default: 5)
+        timeout_days: Work assignment expiration in days (default: 1)
         work_type: Work assignment strategy - "standard" (smallest first) or "progressive" (least ECM done first)
         db: Database session
 
@@ -60,11 +60,12 @@ async def get_ecm_work(
                 detail=f"Invalid work_type: {work_type}. Must be 'standard' or 'progressive'"
             )
 
-        # Check if client has too much active work
+        # Check if client has too much active work (exclude expired assignments)
         active_work_count = db.query(WorkAssignment).filter(
             and_(
                 WorkAssignment.client_id == client_id,
-                WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+                WorkAssignment.status.in_(['assigned', 'claimed', 'running']),
+                WorkAssignment.expires_at > datetime.utcnow()
             )
         ).count()
 

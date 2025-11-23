@@ -264,6 +264,19 @@ class BaseWrapper:
             results_context=results
         )
 
+    def abandon_work(self, work_id: str, reason: str = "client_terminated") -> bool:
+        """
+        Abandon work assignment (convenience wrapper that automatically passes client_id).
+
+        Args:
+            work_id: Work assignment ID to abandon
+            reason: Reason for abandoning (optional)
+
+        Returns:
+            True if successfully abandoned, False otherwise
+        """
+        return self.api_client.abandon_work(work_id, reason=reason, client_id=self.client_id)
+
     def create_base_results(self, composite: str, method: str = "ecm", **kwargs) -> Dict[str, Any]:
         """Create standardized results dictionary."""
         return {
@@ -281,7 +294,7 @@ class BaseWrapper:
             **kwargs
         }
 
-    def run_subprocess_with_parsing(self, cmd: List[str], timeout: int,
+    def run_subprocess_with_parsing(self, cmd: List[str], timeout: Optional[int],
                                   composite: str, method: str,
                                   parse_function: Callable,
                                   **kwargs) -> Dict[str, Any]:
@@ -290,7 +303,7 @@ class BaseWrapper:
 
         Args:
             cmd: Command list to execute
-            timeout: Timeout in seconds
+            timeout: Timeout in seconds (None for no timeout)
             composite: Number being factored
             method: Method name (ecm, pm1, pp1, etc.)
             parse_function: Function to parse output (factor, sigma)
@@ -351,7 +364,8 @@ class BaseWrapper:
             results['success'] = result['returncode'] == 0
 
         except subprocess.TimeoutExpired:
-            self.logger.error(f"{method.upper()} timed out after {timeout} seconds")
+            timeout_msg = f"{timeout} seconds" if timeout is not None else "limit"
+            self.logger.error(f"{method.upper()} timed out after {timeout_msg}")
             results['success'] = False
             results['timeout'] = True
         except subprocess.SubprocessError as e:

@@ -367,6 +367,11 @@ class ECMWrapper(BaseWrapper):
             'stage2_workers': stage2_workers
         }
 
+        # Initialize variables that may not be set in all code paths
+        stage1_output = ""
+        stage1_factor = None
+        actual_curves = curves
+
         # Handle residue file location
         if resume_residues:
             # Resume from existing residues - skip stage 1
@@ -377,7 +382,7 @@ class ECMWrapper(BaseWrapper):
                 return results
 
             self.logger.info(f"Resuming from residue file: {residue_file}")
-            stage1_factor = None  # No stage 1 run
+            # stage1_factor already initialized to None above
             residue_info = self._parse_residue_file(residue_file)
             actual_curves = residue_info['curve_count']
 
@@ -398,7 +403,7 @@ class ECMWrapper(BaseWrapper):
                 residue_file = Path(tempfile.gettempdir()) / f"residue_{composite_hash}_{timestamp}.txt"
                 self.logger.info(f"Using temporary residue file: {residue_file}")
 
-            actual_curves = curves  # Initialize fallback
+            # actual_curves already initialized to curves above
             try:
                 # Stage 1: GPU or CPU execution with residue saving
                 stage1_mode = "GPU" if use_gpu else "CPU"
@@ -492,10 +497,11 @@ class ECMWrapper(BaseWrapper):
                 residue_file, b1, b2, stage2_workers, verbose, early_termination, progress_interval
             )
 
-            # Extract factor, sigma, and curves completed from stage 2 result
+            # Extract factor and curves completed from stage 2 result (Stage2Executor returns 4 values)
             stage2_curves_completed = 0
             if stage2_result:
-                stage2_factor, stage2_sigma, stage2_curves_completed = stage2_result
+                stage2_factor, all_factors, stage2_curves_completed, stage2_time = stage2_result
+                stage2_sigma = None  # Stage2Executor doesn't currently return sigma values
         else:
             self.logger.info("Skipping Stage 2 (B2=0 - Stage 1 only mode)")
             stage2_factor = None
@@ -608,13 +614,16 @@ class ECMWrapper(BaseWrapper):
             self.logger.exception(f"Stage 1 unexpected error: {e}")
             return False, None, curves, "", []
 
-    def _run_stage2_multithread(self, residue_file: Path, b1: int, b2: int,
+    def _run_stage2_multithread(self, residue_file: Path, b1: int, b2: Optional[int],
                                workers: int, verbose: bool, early_termination: bool = True,
-                               progress_interval: int = 0) -> Optional[Tuple[str, str]]:
+                               progress_interval: int = 0) -> Tuple[Optional[str], List[str], int, float]:
         """
         Run Stage 2 with multiple CPU workers.
 
         This is now a thin wrapper around Stage2Executor.
+
+        Returns:
+            Tuple of (factor, all_factors, curves_completed, execution_time)
         """
         executor = Stage2Executor(self, residue_file, b1, b2, workers, verbose)
         return executor.execute(early_termination, progress_interval)
@@ -854,7 +863,7 @@ class ECMWrapper(BaseWrapper):
 
         return results
 
-    def run_stage2_only(self, residue_file: str, b1: int, b2: int,
+    def run_stage2_only(self, residue_file: str, b1: int, b2: Optional[int],
                        stage2_workers: int = 4, verbose: bool = False,
                        continue_after_factor: bool = False,
                        progress_interval: int = 0) -> Dict[str, Any]:
@@ -897,11 +906,13 @@ class ECMWrapper(BaseWrapper):
             residue_path, actual_b1, b2, stage2_workers, verbose, early_termination, progress_interval
         )
 
-        # Extract factor and sigma from result
+        # Extract factor from result (Stage2Executor returns 4 values)
         factor_found = None
         sigma_found = None
         if stage2_result:
-            factor_found, sigma_found = stage2_result
+            factor_found, all_factors, stage2_curves, stage2_time = stage2_result
+            # Note: Stage2Executor doesn't currently return sigma values
+            # sigma_found would need to be tracked separately if needed
 
         execution_time = time.time() - start_time
 
@@ -1284,7 +1295,8 @@ class ECMWrapper(BaseWrapper):
                            start_b1: Optional[int] = None, no_submit: bool = False,
                            project: Optional[str] = None,
                            auto_adjust_target: bool = False,
-                           progress_interval: int = 0) -> Dict[str, Any]:
+                           progress_interval: int = 0,
+                           work_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Run ECM progressively until target t-level reached.
         Uses progressive approach: starts at specified t-level and increases by 5 digits each step.
@@ -1426,6 +1438,9 @@ class ECMWrapper(BaseWrapper):
 
             # Submit this step's results if submission enabled
             if not no_submit and curves_completed > 0:
+                # Include work_id for failed submission recovery
+                if work_id:
+                    batch_results['work_id'] = work_id
                 program_name = f'gmp-ecm-{batch_results.get("method", "ecm")}'
                 self.logger.info(f"Submitting results for t{step_target:.1f} step (B1={optimal_b1}, {curves_completed} curves)")
                 self.submit_result(batch_results, project, program_name)
@@ -1629,7 +1644,7 @@ def main():
                             composite=composite,
                             b1=args.b1,
                             curves=args.curves,
-                            residue_file=str(residue_file),
+                            residue_file=residue_file,
                             sigma=sigma,
                             param=param,
                             use_gpu=use_gpu,
@@ -1640,7 +1655,7 @@ def main():
 
                         if not success:
                             wrapper.logger.error("Stage 1 execution failed")
-                            wrapper.api_client.abandon_work(current_work_id, reason="stage1_failed")
+                            wrapper.abandon_work(current_work_id, reason="stage1_failed")
                             current_work_id = None
                             continue
 
@@ -1657,6 +1672,7 @@ def main():
                             'method': 'ecm',
                             'parametrization': param if param is not None else 3,
                             'execution_time': 0,  # Will be filled by subprocess
+                            'work_id': current_work_id  # For failed submission recovery
                         }
 
                         # Submit stage 1 results
@@ -1666,7 +1682,7 @@ def main():
 
                         if not submit_response:
                             wrapper.logger.error("Failed to submit stage 1 results")
-                            wrapper.api_client.abandon_work(current_work_id, reason="submission_failed")
+                            wrapper.abandon_work(current_work_id, reason="submission_failed")
                             current_work_id = None
                             # Clean up residue file
                             if residue_file.exists():
@@ -1722,7 +1738,7 @@ def main():
                         consecutive_failures += 1
 
                         if current_work_id:
-                            wrapper.api_client.abandon_work(current_work_id, reason="execution_error")
+                            wrapper.abandon_work(current_work_id, reason="execution_error")
                             current_work_id = None
 
                         # Check for too many consecutive failures (circuit breaker)
@@ -1741,7 +1757,7 @@ def main():
                 print("\nShutdown requested...")
                 if current_work_id:
                     print(f"Abandoning work assignment {current_work_id}...")
-                    wrapper.api_client.abandon_work(current_work_id, reason="client_interrupted")
+                    wrapper.abandon_work(current_work_id, reason="client_interrupted")
 
             print(f"Stage 1 Producer mode stopped - completed {completed_count} assignment(s)")
             sys.exit(0)
@@ -1784,6 +1800,9 @@ def main():
                     print("=" * 60)
                     print()
 
+                    # Initialize local_residue_file to None in case exception occurs before download
+                    local_residue_file = None
+
                     try:
                         # Download residue file
                         residue_dir = Path(wrapper.config['execution'].get('residue_dir', 'data/residues'))
@@ -1811,7 +1830,7 @@ def main():
                         # Run stage 2 on residue file
                         print(f"Running stage 2 with {stage2_workers} workers...")
                         stage2_executor = Stage2Executor(
-                            wrapper, str(local_residue_file), b1, b2, stage2_workers, args.verbose
+                            wrapper, local_residue_file, b1, b2, stage2_workers, args.verbose
                         )
                         stage2_factor, stage2_all_factors, stage2_curves, stage2_time = stage2_executor.execute(
                             early_termination=not (hasattr(args, 'continue_after_factor') and args.continue_after_factor),
@@ -1901,7 +1920,7 @@ def main():
                         if current_residue_id:
                             wrapper.api_client.abandon_residue(client_id, current_residue_id)
                             current_residue_id = None
-                        if local_residue_file.exists():
+                        if local_residue_file and local_residue_file.exists():
                             local_residue_file.unlink()
 
                         # Check for too many consecutive failures (circuit breaker)
@@ -1988,7 +2007,8 @@ def main():
                             verbose=args.verbose,
                             no_submit=False,  # Always submit in auto-work mode
                             project=args.project,
-                            progress_interval=args.progress_interval if hasattr(args, 'progress_interval') else 0
+                            progress_interval=args.progress_interval if hasattr(args, 'progress_interval') else 0,
+                            work_id=current_work_id  # For failed submission recovery
                         )
 
                     else:
@@ -2067,12 +2087,14 @@ def main():
 
                         # Submit results for B1/B2 modes (t-level mode handles submission in each batch)
                         if results.get('curves_completed', 0) > 0:
+                            # Include work_id for failed submission recovery
+                            results['work_id'] = current_work_id
                             program_name = f'gmp-ecm-{results.get("method", "ecm")}'
                             submit_response = wrapper.submit_result(results, args.project, program_name)
 
                             if not submit_response:
                                 wrapper.logger.error("Failed to submit results, abandoning work assignment")
-                                wrapper.api_client.abandon_work(current_work_id, reason="submission_failed")
+                                wrapper.abandon_work(current_work_id, reason="submission_failed")
                                 current_work_id = None
                                 continue
 
@@ -2097,14 +2119,14 @@ def main():
                 except Exception as e:
                     wrapper.logger.exception(f"Error processing work assignment: {e}")
                     if current_work_id:
-                        wrapper.api_client.abandon_work(current_work_id, reason="execution_error")
+                        wrapper.abandon_work(current_work_id, reason="execution_error")
                         current_work_id = None
 
         except KeyboardInterrupt:
             print("\nShutdown requested...")
             if current_work_id:
                 print(f"Abandoning current work assignment {current_work_id}...")
-                wrapper.api_client.abandon_work(current_work_id, reason="client_interrupted")
+                wrapper.abandon_work(current_work_id, reason="client_interrupted")
 
         print(f"Auto-work mode stopped - completed {completed_count} assignment(s)")
         sys.exit(0)
@@ -2162,7 +2184,7 @@ def main():
             composite=args.composite,
             b1=args.b1,
             curves=args.curves,
-            residue_file=str(residue_file),
+            residue_file=residue_file,
             sigma=sigma,
             param=param,
             use_gpu=use_gpu,

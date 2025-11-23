@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 class Stage2Executor:
     """Manages Stage 2 execution with configurable worker pools."""
 
-    def __init__(self, wrapper: 'ECMWrapper', residue_file: Path, b1: int, b2: int,
+    def __init__(self, wrapper: 'ECMWrapper', residue_file: Path, b1: int, b2: Optional[int],
                  workers: int, verbose: bool = False):
         """
         Initialize Stage 2 executor.
@@ -171,6 +171,9 @@ class Stage2Executor:
             except:
                 total_lines = 0
 
+        # Initialize process to None in case exception occurs before Popen
+        process = None
+
         try:
             self.logger.info(f"Worker {worker_id} starting Stage 2" +
                            (f" ({total_lines} curves)" if self.verbose and total_lines > 0 else ""))
@@ -252,10 +255,11 @@ class Stage2Executor:
             self.logger.error(f"Worker {worker_id} failed: {e}")
             return None
         finally:
-            # Remove process from tracking
-            with self.process_lock:
-                if process in self.running_processes:
-                    self.running_processes.remove(process)
+            # Remove process from tracking (only if it was created)
+            if process is not None:
+                with self.process_lock:
+                    if process in self.running_processes:
+                        self.running_processes.remove(process)
 
     def _stream_worker_output(self, process: subprocess.Popen, worker_id: int,
                               total_lines: int, progress_interval: int,

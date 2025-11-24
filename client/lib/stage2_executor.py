@@ -160,7 +160,13 @@ class Stage2Executor:
         if self.verbose:
             cmd.append('-v')
         cmd.append('-one')  # Stop after finding first factor (even if cofactor is composite)
-        cmd.extend([str(b1), str(self.b2)])
+
+        # Add B1 parameter
+        cmd.append(str(b1))
+
+        # Add B2 parameter: -1 means use GMP-ECM default (omit B2), otherwise pass the value
+        if self.b2 != -1:
+            cmd.append(str(self.b2))
 
         # Count total lines in this worker's chunk for progress reporting
         total_lines = 0

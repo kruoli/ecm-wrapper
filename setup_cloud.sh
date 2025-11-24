@@ -232,19 +232,19 @@ echo ""
 echo "  # Test with a small number"
 echo "  python3 ecm-wrapper.py --composite \"123456789012345\" --curves 10 --b1 11000 --no-submit"
 echo ""
-echo "  # Auto-work mode (progressive strategy, configured B1/priority)"
-echo "  python3 ecm-wrapper.py --auto-work --work-type progressive --b1 $B1_VALUE --b2 0 --priority $PRIORITY_VALUE -v"
+echo "  # Auto-work mode (progressive strategy, stage 1 only)"
+echo "  python3 ecm-wrapper.py --auto-work --work-type progressive --stage1-only --b1 $B1_VALUE --priority $PRIORITY_VALUE -v"
 echo ""
 echo "  # Auto-work with specific count"
-echo "  python3 ecm-wrapper.py --auto-work --work-type progressive --work-count 10 --b1 $B1_VALUE --b2 0 --priority $PRIORITY_VALUE -v"
+echo "  python3 ecm-wrapper.py --auto-work --work-type progressive --work-count 10 --stage1-only --b1 $B1_VALUE --priority $PRIORITY_VALUE -v"
 echo ""
 if [ "$GPU_ENABLED" = "true" ]; then
-echo "  # Auto-work with GPU two-stage mode"
-echo "  python3 ecm-wrapper.py --auto-work --work-type progressive --two-stage --b1 $B1_VALUE --b2 0 --priority $PRIORITY_VALUE -v"
+echo "  # Auto-work with GPU (stage 1 only)"
+echo "  python3 ecm-wrapper.py --auto-work --work-type progressive --stage1-only --b1 $B1_VALUE --priority $PRIORITY_VALUE -v"
 echo ""
 fi
-echo "  # Auto-work with multiprocess"
-echo "  python3 ecm-wrapper.py --auto-work --work-type progressive --multiprocess --workers 8 --b1 $B1_VALUE --b2 0 --priority $PRIORITY_VALUE -v"
+echo "  # Auto-work with multiprocess (CPU only)"
+echo "  python3 ecm-wrapper.py --auto-work --work-type progressive --multiprocess --workers 8 --stage1-only --b1 $B1_VALUE --priority $PRIORITY_VALUE -v"
 echo ""
 echo "============================================================"
 echo ""
@@ -258,8 +258,8 @@ if [[ "$START_NOW" =~ ^[Yy]$ ]]; then
     echo ""
     cd "$INSTALL_DIR/client"
     if [ "$GPU_ENABLED" = "true" ]; then
-        python3 ecm-wrapper.py --auto-work --work-type progressive --two-stage --b1 $B1_VALUE --b2 0 --priority $PRIORITY_VALUE -v
+        python3 ecm-wrapper.py --auto-work --work-type progressive --stage1-only --b1 $B1_VALUE --priority $PRIORITY_VALUE -v
     else
-        python3 ecm-wrapper.py --auto-work --work-type progressive --multiprocess --b1 $B1_VALUE --b2 0 --priority $PRIORITY_VALUE -v
+        python3 ecm-wrapper.py --auto-work --work-type progressive --multiprocess --stage1-only --b1 $B1_VALUE --priority $PRIORITY_VALUE -v
     fi
 fi

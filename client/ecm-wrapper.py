@@ -1660,13 +1660,18 @@ def main():
                             continue
 
                         # Build results for stage 1 (B2=0)
+                        # all_factors is List[Tuple[str, Optional[str]]] - convert to proper format
+                        factor_strings = [f[0] for f in all_factors] if all_factors else []
+                        factor_sigmas_dict = {f[0]: f[1] for f in all_factors if f[1]} if all_factors else {}
+
                         results = {
                             'composite': composite,
                             'b1': args.b1,
                             'b2': 0,  # Stage 1 only
                             'curves_requested': args.curves,
                             'curves_completed': actual_curves,
-                            'factors_found': all_factors if all_factors else [],
+                            'factors_found': factor_strings,
+                            'factor_sigmas': factor_sigmas_dict,
                             'factor_found': factor,
                             'raw_output': raw_output[-10000:] if len(raw_output) > 10000 else raw_output,
                             'method': 'ecm',
@@ -1694,23 +1699,27 @@ def main():
                         if stage1_attempt_id:
                             print(f"Stage 1 attempt ID: {stage1_attempt_id}")
 
-                        # Upload residue file
-                        print(f"Uploading residue file ({residue_file.stat().st_size} bytes)...")
-                        upload_result = wrapper.api_client.upload_residue(
-                            client_id=client_id,
-                            residue_file_path=str(residue_file),
-                            stage1_attempt_id=stage1_attempt_id,
-                            expiry_days=7
-                        )
+                        # Only upload residue file if no factor was found
+                        if not factor:
+                            # Upload residue file
+                            print(f"Uploading residue file ({residue_file.stat().st_size} bytes)...")
+                            upload_result = wrapper.api_client.upload_residue(
+                                client_id=client_id,
+                                residue_file_path=str(residue_file),
+                                stage1_attempt_id=stage1_attempt_id,
+                                expiry_days=7
+                            )
 
-                        if not upload_result:
-                            wrapper.logger.error("Failed to upload residue file")
-                            # Still mark work as complete since stage 1 was submitted
+                            if not upload_result:
+                                wrapper.logger.error("Failed to upload residue file")
+                                # Still mark work as complete since stage 1 was submitted
+                            else:
+                                print(f"Residue uploaded: ID {upload_result['residue_id']}, "
+                                      f"{upload_result['curve_count']} curves")
                         else:
-                            print(f"Residue uploaded: ID {upload_result['residue_id']}, "
-                                  f"{upload_result['curve_count']} curves")
+                            print("Factor found - skipping residue upload")
 
-                        # Clean up local residue file after upload
+                        # Clean up local residue file
                         if residue_file.exists():
                             residue_file.unlink()
                             wrapper.logger.info(f"Deleted local residue file: {residue_file}")
@@ -1788,14 +1797,24 @@ def main():
                     stage1_attempt_id = residue_work.get('stage1_attempt_id')
                     suggested_b2 = residue_work.get('suggested_b2', b1 * 100)
 
-                    # Use client-specified B2 or server suggestion
-                    b2 = args.b2 if args.b2 is not None else suggested_b2
+                    # Determine B2 (priority: explicit --b2 > --b2-multiplier > server suggestion)
+                    if args.b2 is not None:
+                        # Explicit B2 specified (0 means GMP-ECM default)
+                        b2 = args.b2
+                    elif hasattr(args, 'b2_multiplier') and args.b2_multiplier is not None:
+                        # Dynamic calculation based on B1
+                        b2 = int(b1 * args.b2_multiplier)
+                        print(f"Using dynamic B2 = B1 * {args.b2_multiplier} = {b2}")
+                    else:
+                        # Use server suggestion (default)
+                        b2 = suggested_b2
 
                     print()
                     print("=" * 60)
                     print(f"Stage 2 residue work {current_residue_id}")
                     print(f"Composite: {composite[:50]}... ({digit_length} digits)")
-                    print(f"Parameters: B1={b1}, B2={b2}, curves={curve_count}")
+                    b2_display = "GMP-ECM default" if b2 == -1 else str(b2)
+                    print(f"Parameters: B1={b1}, B2={b2_display}, curves={curve_count}")
                     print(f"Stage 1 attempt ID: {stage1_attempt_id}")
                     print("=" * 60)
                     print()

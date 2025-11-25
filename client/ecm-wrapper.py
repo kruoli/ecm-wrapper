@@ -2217,13 +2217,18 @@ def main():
             sys.exit(1)
 
         # Build results for stage 1 (B2=0)
+        # all_factors is List[Tuple[str, Optional[str]]] - convert to proper format
+        factor_strings = [f[0] for f in all_factors] if all_factors else []
+        factor_sigmas_dict = {f[0]: f[1] for f in all_factors if f[1]} if all_factors else {}
+
         results = {
             'composite': args.composite,
             'b1': args.b1,
             'b2': 0,  # Stage 1 only
             'curves_requested': args.curves,
             'curves_completed': actual_curves,
-            'factors_found': all_factors if all_factors else [],
+            'factors_found': factor_strings,
+            'factor_sigmas': factor_sigmas_dict,
             'factor_found': factor,
             'raw_output': raw_output[-10000:] if len(raw_output) > 10000 else raw_output,
             'method': 'ecm',
@@ -2246,21 +2251,25 @@ def main():
             if stage1_attempt_id:
                 print(f"Stage 1 attempt ID: {stage1_attempt_id}")
 
-            # Upload residue file
-            print(f"Uploading residue file ({residue_file.stat().st_size} bytes)...")
-            client_id = wrapper.config['client']['username'] + '-' + wrapper.config['client']['cpu_name']
-            upload_result = wrapper.api_client.upload_residue(
-                client_id=client_id,
-                residue_file_path=str(residue_file),
-                stage1_attempt_id=stage1_attempt_id,
-                expiry_days=7
-            )
+            # Only upload residue file if no factor was found
+            if not factor:
+                # Upload residue file
+                print(f"Uploading residue file ({residue_file.stat().st_size} bytes)...")
+                client_id = wrapper.config['client']['username'] + '-' + wrapper.config['client']['cpu_name']
+                upload_result = wrapper.api_client.upload_residue(
+                    client_id=client_id,
+                    residue_file_path=str(residue_file),
+                    stage1_attempt_id=stage1_attempt_id,
+                    expiry_days=7
+                )
 
-            if upload_result:
-                print(f"Residue uploaded: ID {upload_result['residue_id']}, "
-                      f"{upload_result['curve_count']} curves")
+                if upload_result:
+                    print(f"Residue uploaded: ID {upload_result['residue_id']}, "
+                          f"{upload_result['curve_count']} curves")
+                else:
+                    wrapper.logger.error("Failed to upload residue file")
             else:
-                wrapper.logger.error("Failed to upload residue file")
+                print("Factor found - skipping residue upload")
 
         # Clean up local residue file
         if residue_file.exists():

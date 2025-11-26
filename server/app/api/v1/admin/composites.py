@@ -311,6 +311,50 @@ async def mark_composite_complete(
     }
 
 
+@router.put("/composites/{composite_id}/activate")
+async def activate_composite(
+    composite_id: int,
+    db: Session = Depends(get_db),
+    composite_service: CompositeService = Depends(get_composite_service),
+    _admin: bool = Depends(verify_admin_key)
+):
+    """Activate a composite to make it available for work assignment."""
+    composite = composite_service.get_composite_by_id(db, composite_id)
+    if not composite:
+        raise not_found_error("Composite")
+
+    composite.is_active = True
+    db.commit()
+
+    return {
+        "composite_id": composite_id,
+        "is_active": True,
+        "status": "activated"
+    }
+
+
+@router.put("/composites/{composite_id}/deactivate")
+async def deactivate_composite(
+    composite_id: int,
+    db: Session = Depends(get_db),
+    composite_service: CompositeService = Depends(get_composite_service),
+    _admin: bool = Depends(verify_admin_key)
+):
+    """Deactivate a composite to prevent it from being assigned as work."""
+    composite = composite_service.get_composite_by_id(db, composite_id)
+    if not composite:
+        raise not_found_error("Composite")
+
+    composite.is_active = False
+    db.commit()
+
+    return {
+        "composite_id": composite_id,
+        "is_active": False,
+        "status": "deactivated"
+    }
+
+
 @router.delete("/composites/{composite_id}")
 async def remove_composite(
     composite_id: int,

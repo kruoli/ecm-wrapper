@@ -86,6 +86,7 @@ async def get_ecm_work(
         # Build query for suitable composites
         query = db.query(Composite).filter(
             and_(
+                Composite.is_active == True,  # Only assign active composites
                 Composite.is_fully_factored == False,
                 or_(Composite.is_prime.is_(None), Composite.is_prime == False),
                 Composite.target_t_level.isnot(None),

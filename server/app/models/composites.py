@@ -16,6 +16,7 @@ class Composite(Base, TimestampMixin):
     # Status fields
     is_prime = Column(Boolean, default=None, nullable=True)  # NULL until determined
     is_fully_factored = Column(Boolean, default=False, nullable=False)
+    is_active = Column(Boolean, default=False, nullable=False, index=True)  # Whether composite is available for work assignment
 
     # T-level ECM progress tracking
     target_t_level = Column(Float, nullable=True, index=True)  # Target t-level to achieve
@@ -29,4 +30,5 @@ class Composite(Base, TimestampMixin):
         Index('ix_composites_factored_status', 'is_fully_factored', 'is_prime'),
         Index('ix_composites_t_level_progress', 'target_t_level', 'current_t_level'),
         Index('ix_composites_priority_work', 'priority', 'is_fully_factored'),
+        Index('ix_composites_active_status', 'is_active', 'is_fully_factored'),  # For work assignment queries
     )

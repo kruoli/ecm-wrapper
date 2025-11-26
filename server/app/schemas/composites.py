@@ -30,6 +30,7 @@ class CompositeStats(BaseModel):
         ..., description="Current t-level achieved"
     )
     priority: int = Field(..., description="Priority level")
+    is_active: bool = Field(..., description="Whether composite is available for work assignment")
     status: Literal["composite", "prime", "fully_factored"] = Field(
         ..., description="Current status"
     )
@@ -53,6 +54,7 @@ class CompositeResponse(BaseModel):
     priority: int
     is_prime: Optional[bool]
     is_fully_factored: bool
+    is_active: bool
     created_at: datetime
     updated_at: datetime
 
@@ -77,6 +79,9 @@ class CompositeInput(BaseModel):
     )
     is_fully_factored: Optional[bool] = Field(
         None, description="Whether the composite is fully factored"
+    )
+    is_active: bool = Field(
+        False, description="Whether composite is available for work assignment (defaults to False for manual review)"
     )
 
 class BulkCompositeRequest(BaseModel):
@@ -148,6 +153,7 @@ class CompositeProgressItem(BaseModel):
     )
     priority: int = Field(..., description="Priority level")
     is_fully_factored: bool = Field(..., description="Whether fully factored")
+    is_active: bool = Field(..., description="Whether composite is available for work assignment")
     projects: List[str] = Field(
         default_factory=list, description="Associated projects"
     )

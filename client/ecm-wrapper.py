@@ -5,13 +5,18 @@ import sys
 import signal
 import threading
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple, cast
+from typing import Optional, Dict, Any, List, Tuple, Union, cast
 from lib.base_wrapper import BaseWrapper
 from lib.parsing_utils import parse_ecm_output_multiple, count_ecm_steps_completed, ECMPatterns
 from lib.residue_manager import ResidueFileManager
 from lib.result_processor import ResultProcessor
 from lib.stage2_executor import Stage2Executor
 from lib.ecm_worker_process import run_worker_ecm_process
+from lib.ecm_arg_helpers import parse_sigma_arg, resolve_param, resolve_stage2_workers
+from lib.work_helpers import print_work_header, print_work_status, request_ecm_work
+from lib.stage1_helpers import submit_stage1_complete_workflow, handle_stage1_failure
+from lib.error_helpers import handle_work_failure, check_work_limit_reached
+from lib.cleanup_helpers import handle_shutdown
 
 # New modularized utilities
 from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
@@ -176,7 +181,7 @@ class ECMWrapper(BaseWrapper):
         return processor.log_and_store_factors(all_factors, results, quiet=False)
 
     def run_ecm(self, composite: str, b1: int, b2: Optional[int] = None,
-                curves: int = 100, sigma: Optional[int] = None,
+                curves: int = 100, sigma: Optional[Union[str, int]] = None,
                 param: Optional[int] = None,
                 use_gpu: bool = False, gpu_device: Optional[int] = None,
                 gpu_curves: Optional[int] = None, verbose: bool = False,
@@ -334,7 +339,7 @@ class ECMWrapper(BaseWrapper):
         return results
 
     def run_ecm_two_stage(self, composite: str, b1: int, b2: Optional[int] = None,
-                         curves: int = 100, sigma: Optional[int] = None,
+                         curves: int = 100, sigma: Optional[Union[str, int]] = None,
                          param: Optional[int] = None,
                          use_gpu: bool = True,
                          stage2_workers: int = 4, verbose: bool = False,
@@ -371,6 +376,7 @@ class ECMWrapper(BaseWrapper):
         stage1_output = ""
         stage1_factor = None
         actual_curves = curves
+        all_stage1_factors: List[Tuple[str, Optional[str]]] = []
 
         # Handle residue file location
         if resume_residues:
@@ -539,18 +545,22 @@ class ECMWrapper(BaseWrapper):
             stage1_only_curves = actual_curves - stage2_curves_completed
             if stage1_only_curves > 0 and not no_submit:
                 self.logger.info(f"Submitting {stage1_only_curves} curves that completed Stage 1 only (B1={b1}, B2=0)")
-                stage1_only_results = {
-                    'composite': composite,  # Use original composite (main result not submitted yet)
-                    'b1': b1,
-                    'b2': 0,  # Stage 1 only
-                    'curves_requested': stage1_only_curves,
-                    'curves_completed': stage1_only_curves,
-                    'factor_found': None,
-                    'raw_output': '',
-                    'method': 'ecm',
-                    'execution_time': results.get('execution_time', 0),
-                    'parametrization': parametrization
-                }
+                # Use helper to build results with proper factor handling
+                # Get execution time with proper type handling
+                exec_time = results.get('execution_time', 0)
+                exec_time_float = exec_time if isinstance(exec_time, float) else 0.0
+
+                stage1_only_results = self._build_stage1_results(
+                    composite=composite,  # Use original composite (main result not submitted yet)
+                    b1=b1,
+                    curves_requested=stage1_only_curves,
+                    curves_completed=stage1_only_curves,
+                    all_factors=all_stage1_factors,
+                    factor_found=stage1_factor if stage1_factor else None,
+                    raw_output=stage1_output if stage1_output else '',
+                    param=parametrization,
+                    execution_time=exec_time_float
+                )
                 self.submit_result(stage1_only_results, project, 'gmp-ecm-ecm')
         else:
             # Stage 2 didn't run or completed all curves - use Stage 1 count
@@ -560,10 +570,116 @@ class ECMWrapper(BaseWrapper):
 
         return results
 
+    def _build_stage1_results(
+        self,
+        composite: str,
+        b1: int,
+        curves_requested: int,
+        curves_completed: int,
+        all_factors: List[Tuple[str, Optional[str]]],
+        factor_found: Optional[str],
+        raw_output: str,
+        param: int,
+        execution_time: float = 0,
+        work_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Build standardized stage1 results dictionary.
+
+        This consolidates the logic for building stage1 results across all code paths
+        (two-stage, auto-work stage1-only, manual stage1-only).
+
+        Args:
+            composite: The composite number being factored
+            b1: B1 parameter used
+            curves_requested: Number of curves requested
+            curves_completed: Number of curves actually completed
+            all_factors: List of (factor, sigma) tuples found
+            factor_found: Primary factor found (or None)
+            raw_output: Raw ECM output (will be truncated to 10k chars)
+            param: Parametrization used (0-3)
+            execution_time: Execution time in seconds
+            work_id: Optional work assignment ID (for auto-work mode)
+
+        Returns:
+            Dictionary ready for submission via submit_result()
+        """
+        # Convert all_factors tuples to proper API format
+        factor_strings = [f[0] for f in all_factors] if all_factors else []
+        factor_sigmas_dict = {f[0]: f[1] for f in all_factors if f[1]} if all_factors else {}
+
+        results = {
+            'composite': composite,
+            'b1': b1,
+            'b2': 0,  # Stage 1 only (no stage 2)
+            'curves_requested': curves_requested,
+            'curves_completed': curves_completed,
+            'factors_found': factor_strings,
+            'factor_sigmas': factor_sigmas_dict,
+            'factor_found': factor_found,
+            'raw_output': raw_output[-10000:] if len(raw_output) > 10000 else raw_output,
+            'method': 'ecm',
+            'parametrization': param,
+            'execution_time': execution_time,
+        }
+
+        # Add work_id if provided (for auto-work mode failure recovery)
+        if work_id:
+            results['work_id'] = work_id
+
+        return results
+
+    def _upload_residue_if_needed(
+        self,
+        residue_file: Path,
+        stage1_attempt_id: Optional[str],
+        factor_found: Optional[str],
+        client_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Upload residue file to server only if no factor was found.
+
+        When a factor is found in stage 1, there's no point in running stage 2,
+        so we skip the residue upload.
+
+        Args:
+            residue_file: Path to the residue file
+            stage1_attempt_id: Attempt ID from stage1 submission (None if submission failed)
+            factor_found: Factor found in stage 1 (None if no factor)
+            client_id: Client identifier for upload
+
+        Returns:
+            Upload result dict if uploaded, None if skipped or failed
+        """
+        if not factor_found and stage1_attempt_id:
+            # No factor found and we have attempt ID - upload residue for potential stage 2
+            print(f"Uploading residue file ({residue_file.stat().st_size} bytes)...")
+            upload_result = self.api_client.upload_residue(
+                client_id=client_id,
+                residue_file_path=str(residue_file),
+                stage1_attempt_id=stage1_attempt_id,
+                expiry_days=7
+            )
+
+            if upload_result:
+                print(f"Residue uploaded: ID {upload_result['residue_id']}, "
+                      f"{upload_result['curve_count']} curves")
+                return upload_result
+            else:
+                self.logger.error("Failed to upload residue file")
+                return None
+        elif factor_found:
+            # Factor found - no need for stage 2
+            print("Factor found - skipping residue upload")
+            return None
+        else:
+            # No stage1_attempt_id - can't upload
+            return None
+
     def _run_stage1(self, composite: str, b1: int, curves: int,
                    residue_file: Path, use_gpu: bool, verbose: bool,
                    gpu_device: Optional[int] = None, gpu_curves: Optional[int] = None,
-                   sigma: Optional[int] = None, param: Optional[int] = None) -> tuple[bool, Optional[str], int, str, List[tuple[str, Optional[str]]]]:
+                   sigma: Optional[Union[str, int]] = None, param: Optional[int] = None) -> tuple[bool, Optional[str], int, str, List[tuple[str, Optional[str]]]]:
         """Run Stage 1 with GPU or CPU and save residues - returns (success, factor, actual_curves)"""
         ecm_path = self.config['programs']['gmp_ecm']['path']
 
@@ -1596,30 +1712,21 @@ def main():
             try:
                 while not wrapper.interrupted:
                     # Request regular ECM work
-                    work = wrapper.api_client.get_ecm_work(
-                        client_id=client_id,
-                        min_digits=args.min_digits if hasattr(args, 'min_digits') else None,
-                        max_digits=args.max_digits if hasattr(args, 'max_digits') else None,
-                        priority=args.priority if hasattr(args, 'priority') else None,
-                        work_type=args.work_type if hasattr(args, 'work_type') else 'standard'
-                    )
+                    work = request_ecm_work(wrapper.api_client, client_id, args, wrapper.logger)
 
                     if not work:
-                        wrapper.logger.info("No work available, waiting 30 seconds before retry...")
-                        time.sleep(30)
                         continue
 
                     current_work_id = work['work_id']
                     composite = work['composite']
                     digit_length = work['digit_length']
 
-                    print()
-                    print("=" * 60)
-                    print(f"Stage 1 work assignment {current_work_id}")
-                    print(f"Composite: {composite[:50]}... ({digit_length} digits)")
-                    print(f"Parameters: B1={args.b1}, curves={args.curves}")
-                    print("=" * 60)
-                    print()
+                    print_work_header(
+                        work_id=current_work_id,
+                        composite=composite,
+                        digit_length=digit_length,
+                        params={'B1': args.b1, 'curves': args.curves}
+                    )
 
                     try:
                         # Resolve GPU settings
@@ -1632,10 +1739,8 @@ def main():
                         residue_file = residue_dir / f"stage1_{timestamp}_{composite[:20]}.txt"
 
                         # Run stage 1 only (B2=0)
-                        sigma = None
-                        if hasattr(args, 'sigma') and args.sigma:
-                            sigma = args.sigma if ':' in args.sigma else int(args.sigma)
-                        param = args.param if hasattr(args, 'param') and args.param is not None else (3 if use_gpu else None)
+                        sigma = parse_sigma_arg(args)
+                        param = resolve_param(args, use_gpu)
 
                         print(f"Running ECM stage 1 (B1={args.b1}, curves={args.curves})...")
                         print(f"Saving residues to: {residue_file}")
@@ -1659,70 +1764,36 @@ def main():
                             current_work_id = None
                             continue
 
-                        # Build results for stage 1 (B2=0)
-                        # all_factors is List[Tuple[str, Optional[str]]] - convert to proper format
-                        factor_strings = [f[0] for f in all_factors] if all_factors else []
-                        factor_sigmas_dict = {f[0]: f[1] for f in all_factors if f[1]} if all_factors else {}
+                        # Build results using helper method
+                        results = wrapper._build_stage1_results(
+                            composite=composite,
+                            b1=args.b1,
+                            curves_requested=args.curves,
+                            curves_completed=actual_curves,
+                            all_factors=all_factors,
+                            factor_found=factor,
+                            raw_output=raw_output,
+                            param=param if param is not None else 3,
+                            execution_time=0,  # Will be filled by subprocess
+                            work_id=current_work_id  # For failed submission recovery
+                        )
 
-                        results = {
-                            'composite': composite,
-                            'b1': args.b1,
-                            'b2': 0,  # Stage 1 only
-                            'curves_requested': args.curves,
-                            'curves_completed': actual_curves,
-                            'factors_found': factor_strings,
-                            'factor_sigmas': factor_sigmas_dict,
-                            'factor_found': factor,
-                            'raw_output': raw_output[-10000:] if len(raw_output) > 10000 else raw_output,
-                            'method': 'ecm',
-                            'parametrization': param if param is not None else 3,
-                            'execution_time': 0,  # Will be filled by subprocess
-                            'work_id': current_work_id  # For failed submission recovery
-                        }
+                        # Submit stage 1 results and handle workflow
+                        stage1_attempt_id = submit_stage1_complete_workflow(
+                            wrapper=wrapper,
+                            results=results,
+                            residue_file=residue_file,
+                            work_id=current_work_id,
+                            project=args.project,
+                            client_id=client_id,
+                            factor_found=factor,
+                            cleanup_residue=True
+                        )
 
-                        # Submit stage 1 results
-                        print("Submitting stage 1 results...")
-                        program_name = 'gmp-ecm-ecm'
-                        submit_response = wrapper.submit_result(results, args.project, program_name)
-
-                        if not submit_response:
-                            wrapper.logger.error("Failed to submit stage 1 results")
-                            wrapper.abandon_work(current_work_id, reason="submission_failed")
+                        # Check if submission failed
+                        if not stage1_attempt_id:
                             current_work_id = None
-                            # Clean up residue file
-                            if residue_file.exists():
-                                residue_file.unlink()
                             continue
-
-                        # Extract attempt_id from response
-                        stage1_attempt_id = submit_response.get('attempt_id')
-                        if stage1_attempt_id:
-                            print(f"Stage 1 attempt ID: {stage1_attempt_id}")
-
-                        # Only upload residue file if no factor was found
-                        if not factor:
-                            # Upload residue file
-                            print(f"Uploading residue file ({residue_file.stat().st_size} bytes)...")
-                            upload_result = wrapper.api_client.upload_residue(
-                                client_id=client_id,
-                                residue_file_path=str(residue_file),
-                                stage1_attempt_id=stage1_attempt_id,
-                                expiry_days=7
-                            )
-
-                            if not upload_result:
-                                wrapper.logger.error("Failed to upload residue file")
-                                # Still mark work as complete since stage 1 was submitted
-                            else:
-                                print(f"Residue uploaded: ID {upload_result['residue_id']}, "
-                                      f"{upload_result['curve_count']} curves")
-                        else:
-                            print("Factor found - skipping residue upload")
-
-                        # Clean up local residue file
-                        if residue_file.exists():
-                            residue_file.unlink()
-                            wrapper.logger.info(f"Deleted local residue file: {residue_file}")
 
                         # Mark work as complete
                         wrapper.api_client.complete_work(current_work_id, client_id)
@@ -1730,49 +1801,42 @@ def main():
                         completed_count += 1
                         consecutive_failures = 0  # Reset on success
 
-                        print()
-                        if work_count_limit:
-                            print(f"Stage 1 complete ({completed_count}/{work_count_limit})")
-                        else:
-                            print(f"Stage 1 complete (total: {completed_count})")
-                        print("=" * 60)
-                        print()
-
-                        if work_count_limit and completed_count >= work_count_limit:
-                            print(f"Reached work count limit ({work_count_limit}), exiting...")
+                        if print_work_status("Stage 1", completed_count, work_count_limit):
                             break
 
                     except Exception as e:
-                        wrapper.logger.exception(f"Error in stage 1 processing: {e}")
                         consecutive_failures += 1
 
-                        if current_work_id:
-                            wrapper.abandon_work(current_work_id, reason="execution_error")
-                            current_work_id = None
-
-                        # Check for too many consecutive failures (circuit breaker)
-                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                            wrapper.logger.error(
-                                f"Too many consecutive failures ({consecutive_failures}), exiting..."
-                            )
+                        # Handle work failure with circuit breaker
+                        if handle_work_failure(
+                            wrapper=wrapper,
+                            current_work_id=current_work_id,
+                            consecutive_failures=consecutive_failures,
+                            max_failures=MAX_CONSECUTIVE_FAILURES,
+                            error_msg=f"Error in stage 1 processing: {e}"
+                        ):
                             break
 
-                        # Check if we've reached work count limit
-                        if work_count_limit and completed_count >= work_count_limit:
-                            print(f"Reached work count limit ({work_count_limit}), exiting...")
+                        current_work_id = None
+
+                        # Check if work limit reached
+                        if check_work_limit_reached(completed_count, work_count_limit):
                             break
 
             except KeyboardInterrupt:
-                print("\nShutdown requested...")
-                if current_work_id:
-                    print(f"Abandoning work assignment {current_work_id}...")
-                    wrapper.abandon_work(current_work_id, reason="client_interrupted")
-
-            print(f"Stage 1 Producer mode stopped - completed {completed_count} assignment(s)")
-            sys.exit(0)
+                handle_shutdown(
+                    wrapper=wrapper,
+                    current_work_id=current_work_id,
+                    current_residue_id=None,
+                    mode_name="Stage 1 Producer mode",
+                    completed_count=completed_count
+                )
 
         # Stage 2 Work Mode
         elif is_stage2_work:
+            # Initialize variables for KeyboardInterrupt handler
+            local_residue_file = None
+
             try:
                 while not wrapper.interrupted:
                     # Request residue work from server
@@ -1809,18 +1873,18 @@ def main():
                         # Use server suggestion (default)
                         b2 = suggested_b2
 
-                    print()
-                    print("=" * 60)
-                    print(f"Stage 2 residue work {current_residue_id}")
-                    print(f"Composite: {composite[:50]}... ({digit_length} digits)")
                     b2_display = "GMP-ECM default" if b2 == -1 else str(b2)
-                    print(f"Parameters: B1={b1}, B2={b2_display}, curves={curve_count}")
-                    print(f"Stage 1 attempt ID: {stage1_attempt_id}")
-                    print("=" * 60)
-                    print()
-
-                    # Initialize local_residue_file to None in case exception occurs before download
-                    local_residue_file = None
+                    print_work_header(
+                        work_id=current_residue_id,
+                        composite=composite,
+                        digit_length=digit_length,
+                        params={
+                            'B1': b1,
+                            'B2': b2_display,
+                            'curves': curve_count,
+                            'Stage 1 attempt ID': stage1_attempt_id
+                        }
+                    )
 
                     try:
                         # Download residue file
@@ -1920,65 +1984,49 @@ def main():
                         completed_count += 1
                         consecutive_failures = 0  # Reset on success
 
-                        print()
-                        if work_count_limit:
-                            print(f"Stage 2 complete ({completed_count}/{work_count_limit})")
-                        else:
-                            print(f"Stage 2 complete (total: {completed_count})")
-                        print("=" * 60)
-                        print()
-
-                        if work_count_limit and completed_count >= work_count_limit:
-                            print(f"Reached work count limit ({work_count_limit}), exiting...")
+                        if print_work_status("Stage 2", completed_count, work_count_limit):
                             break
 
                     except Exception as e:
-                        wrapper.logger.exception(f"Error in stage 2 processing: {e}")
                         consecutive_failures += 1
 
+                        # Abandon residue work
                         if current_residue_id:
                             wrapper.api_client.abandon_residue(client_id, current_residue_id)
                             current_residue_id = None
+
+                        # Clean up local residue file
                         if local_residue_file and local_residue_file.exists():
                             local_residue_file.unlink()
 
-                        # Check for too many consecutive failures (circuit breaker)
+                        # Check circuit breaker
                         if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                             wrapper.logger.error(
                                 f"Too many consecutive failures ({consecutive_failures}), exiting..."
                             )
                             break
 
-                        # Check if we've reached work count limit
-                        if work_count_limit and completed_count >= work_count_limit:
-                            print(f"Reached work count limit ({work_count_limit}), exiting...")
+                        # Check if work limit reached
+                        if check_work_limit_reached(completed_count, work_count_limit):
                             break
 
             except KeyboardInterrupt:
-                print("\nShutdown requested...")
-                if current_residue_id:
-                    print(f"Releasing residue claim {current_residue_id}...")
-                    wrapper.api_client.abandon_residue(client_id, current_residue_id)
-
-            print(f"Stage 2 Consumer mode stopped - completed {completed_count} assignment(s)")
-            sys.exit(0)
+                handle_shutdown(
+                    wrapper=wrapper,
+                    current_work_id=None,
+                    current_residue_id=current_residue_id,
+                    mode_name="Stage 2 Consumer mode",
+                    completed_count=completed_count,
+                    local_residue_file=local_residue_file
+                )
 
         # Standard auto-work mode
         try:
             while not wrapper.interrupted:
                 # Request work from server
-                work = wrapper.api_client.get_ecm_work(
-                    client_id=client_id,
-                    min_digits=args.min_digits if hasattr(args, 'min_digits') else None,
-                    max_digits=args.max_digits if hasattr(args, 'max_digits') else None,
-                    priority=args.priority if hasattr(args, 'priority') else None,
-                    work_type=args.work_type if hasattr(args, 'work_type') else 'standard'
-                )
+                work = request_ecm_work(wrapper.api_client, client_id, args, wrapper.logger)
 
                 if not work:
-                    # No work available, wait and retry
-                    wrapper.logger.info("No work available, waiting 30 seconds before retry...")
-                    time.sleep(30)
                     continue
 
                 # Store current work ID for cleanup on interrupt
@@ -1986,13 +2034,14 @@ def main():
                 composite = work['composite']
                 digit_length = work['digit_length']
 
-                print()
-                print("=" * 60)
-                print(f"Processing work assignment {current_work_id}")
-                print(f"Composite: {composite[:50]}... ({digit_length} digits)")
-                print(f"T-level: {work.get('current_t_level', 0):.1f} → {work.get('target_t_level', 0):.1f}")
-                print("=" * 60)
-                print()
+                print_work_header(
+                    work_id=current_work_id,
+                    composite=composite,
+                    digit_length=digit_length,
+                    params={
+                        'T-level': f"{work.get('current_t_level', 0):.1f} → {work.get('target_t_level', 0):.1f}"
+                    }
+                )
 
                 # Execute ECM - determine mode from parameters
                 try:
@@ -2038,16 +2087,14 @@ def main():
 
                         # Common parameters
                         use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(args, wrapper.config)
-                        sigma = None
-                        if hasattr(args, 'sigma') and args.sigma:
-                            sigma = args.sigma if ':' in args.sigma else int(args.sigma)
-                        param = args.param if hasattr(args, 'param') and args.param is not None else (3 if use_gpu else None)
+                        sigma = parse_sigma_arg(args)
+                        param = resolve_param(args, use_gpu)
                         continue_after_factor = args.continue_after_factor if hasattr(args, 'continue_after_factor') else False
 
                         if args.two_stage and args.method == 'ecm':
                             # Two-stage mode
                             print(f"Mode: two-stage GPU+CPU (B1={b1}, B2={b2}, curves={curves})")
-                            stage2_workers = args.stage2_workers if hasattr(args, 'stage2_workers') and args.stage2_workers != 4 else get_stage2_workers_default(wrapper.config)
+                            stage2_workers = resolve_stage2_workers(args, wrapper.config)
 
                             results = wrapper.run_ecm_two_stage(
                                 composite=composite,
@@ -2122,17 +2169,8 @@ def main():
                     current_work_id = None
                     completed_count += 1
 
-                    print()
-                    if work_count_limit:
-                        print(f"Work assignment completed successfully ({completed_count}/{work_count_limit})")
-                    else:
-                        print(f"Work assignment completed successfully (total: {completed_count})")
-                    print("=" * 60)
-                    print()
-
                     # Check if we've reached the work count limit
-                    if work_count_limit and completed_count >= work_count_limit:
-                        print(f"Reached work count limit ({work_count_limit}), exiting...")
+                    if print_work_status("Work assignment completed successfully", completed_count, work_count_limit):
                         break
 
                 except Exception as e:
@@ -2142,13 +2180,13 @@ def main():
                         current_work_id = None
 
         except KeyboardInterrupt:
-            print("\nShutdown requested...")
-            if current_work_id:
-                print(f"Abandoning current work assignment {current_work_id}...")
-                wrapper.abandon_work(current_work_id, reason="client_interrupted")
-
-        print(f"Auto-work mode stopped - completed {completed_count} assignment(s)")
-        sys.exit(0)
+            handle_shutdown(
+                wrapper=wrapper,
+                current_work_id=current_work_id,
+                current_residue_id=None,
+                mode_name="Auto-work mode",
+                completed_count=completed_count
+            )
 
     # Use shared argument processing utilities
     b1_default, b2_default = get_method_defaults(wrapper.config, args.method)
@@ -2163,7 +2201,7 @@ def main():
     args.workers = resolve_worker_count(args)
 
     # Resolve stage2 workers from config if not explicitly set
-    stage2_workers = args.stage2_workers if hasattr(args, 'stage2_workers') and args.stage2_workers != 4 else get_stage2_workers_default(wrapper.config)
+    stage2_workers = resolve_stage2_workers(args, wrapper.config)
 
     # Manual stage1-only mode (without auto-work)
     if hasattr(args, 'stage1_only') and args.stage1_only and not (hasattr(args, 'auto_work') and args.auto_work):
@@ -2182,12 +2220,10 @@ def main():
         residue_file = residue_dir / f"stage1_manual_{timestamp}.txt"
 
         # Parse sigma if provided
-        sigma = None
-        if hasattr(args, 'sigma') and args.sigma:
-            sigma = args.sigma if ':' in args.sigma else int(args.sigma)
+        sigma = parse_sigma_arg(args)
 
         # Get param if provided, default to 3 for GPU
-        param = args.param if hasattr(args, 'param') and args.param is not None else (3 if use_gpu else None)
+        param = resolve_param(args, use_gpu)
 
         print()
         print("=" * 60)
@@ -2216,65 +2252,39 @@ def main():
             wrapper.logger.error("Stage 1 execution failed")
             sys.exit(1)
 
-        # Build results for stage 1 (B2=0)
-        # all_factors is List[Tuple[str, Optional[str]]] - convert to proper format
-        factor_strings = [f[0] for f in all_factors] if all_factors else []
-        factor_sigmas_dict = {f[0]: f[1] for f in all_factors if f[1]} if all_factors else {}
-
-        results = {
-            'composite': args.composite,
-            'b1': args.b1,
-            'b2': 0,  # Stage 1 only
-            'curves_requested': args.curves,
-            'curves_completed': actual_curves,
-            'factors_found': factor_strings,
-            'factor_sigmas': factor_sigmas_dict,
-            'factor_found': factor,
-            'raw_output': raw_output[-10000:] if len(raw_output) > 10000 else raw_output,
-            'method': 'ecm',
-            'parametrization': param if param is not None else 3,
-            'execution_time': 0,
-        }
+        # Build results using helper method
+        results = wrapper._build_stage1_results(
+            composite=args.composite,
+            b1=args.b1,
+            curves_requested=args.curves,
+            curves_completed=actual_curves,
+            all_factors=all_factors,
+            factor_found=factor,
+            raw_output=raw_output,
+            param=param if param is not None else 3,
+            execution_time=0
+        )
 
         # Submit stage 1 results
         if not args.no_submit:
-            print("Submitting stage 1 results...")
-            program_name = 'gmp-ecm-ecm'
-            submit_response = wrapper.submit_result(results, args.project, program_name)
+            client_id = wrapper.config['client']['username'] + '-' + wrapper.config['client']['cpu_name']
+            stage1_attempt_id = submit_stage1_complete_workflow(
+                wrapper=wrapper,
+                results=results,
+                residue_file=residue_file,
+                work_id=None,  # Not auto-work mode
+                project=args.project,
+                client_id=client_id,
+                factor_found=factor,
+                cleanup_residue=True
+            )
 
-            if not submit_response:
-                wrapper.logger.error("Failed to submit stage 1 results")
+            if not stage1_attempt_id:
                 sys.exit(1)
-
-            # Extract attempt_id from response
-            stage1_attempt_id = submit_response.get('attempt_id')
-            if stage1_attempt_id:
-                print(f"Stage 1 attempt ID: {stage1_attempt_id}")
-
-            # Only upload residue file if no factor was found
-            if not factor:
-                # Upload residue file
-                print(f"Uploading residue file ({residue_file.stat().st_size} bytes)...")
-                client_id = wrapper.config['client']['username'] + '-' + wrapper.config['client']['cpu_name']
-                upload_result = wrapper.api_client.upload_residue(
-                    client_id=client_id,
-                    residue_file_path=str(residue_file),
-                    stage1_attempt_id=stage1_attempt_id,
-                    expiry_days=7
-                )
-
-                if upload_result:
-                    print(f"Residue uploaded: ID {upload_result['residue_id']}, "
-                          f"{upload_result['curve_count']} curves")
-                else:
-                    wrapper.logger.error("Failed to upload residue file")
-            else:
-                print("Factor found - skipping residue upload")
-
-        # Clean up local residue file
-        if residue_file.exists():
-            residue_file.unlink()
-            wrapper.logger.info(f"Deleted local residue file: {residue_file}")
+        else:
+            # Clean up local residue file if not submitting
+            if residue_file.exists():
+                residue_file.unlink()
 
         print()
         print("=" * 60)
@@ -2334,12 +2344,10 @@ def main():
         )
     elif args.two_stage and args.method == 'ecm':
         # Parse sigma if provided (convert "N" to integer, keep "3:N" as string)
-        sigma = None
-        if hasattr(args, 'sigma') and args.sigma:
-            sigma = args.sigma if ':' in args.sigma else int(args.sigma)
+        sigma = parse_sigma_arg(args)
 
         # Get param if provided, default to 3 for GPU
-        param = args.param if hasattr(args, 'param') and args.param is not None else (3 if use_gpu else None)
+        param = resolve_param(args, use_gpu)
 
         results = wrapper.run_ecm_two_stage(
             composite=args.composite,
@@ -2366,12 +2374,10 @@ def main():
             print("Warning: Two-stage mode only available for ECM method, falling back to standard mode")
 
         # Parse sigma if provided (convert "N" to integer, keep "3:N" as string)
-        sigma = None
-        if hasattr(args, 'sigma') and args.sigma:
-            sigma = args.sigma if ':' in args.sigma else int(args.sigma)
+        sigma = parse_sigma_arg(args)
 
         # Get param if provided, default to 3 for GPU
-        param = args.param if hasattr(args, 'param') and args.param is not None else (3 if use_gpu else None)
+        param = resolve_param(args, use_gpu)
 
         results = wrapper.run_ecm(
             composite=args.composite,

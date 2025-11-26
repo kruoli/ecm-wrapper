@@ -50,7 +50,8 @@ class CompositeService:
         snfs_difficulty: Optional[int] = None,
         is_prime: Optional[bool] = None,
         is_fully_factored: Optional[bool] = None,
-        priority: Optional[int] = None
+        priority: Optional[int] = None,
+        is_active: Optional[bool] = None
     ) -> Tuple[Composite, bool, bool]:
         """
         Get existing composite or create new one with full metadata support.
@@ -67,6 +68,7 @@ class CompositeService:
             is_prime: Whether number is prime
             is_fully_factored: Whether number is fully factored
             priority: Priority level
+            is_active: Whether composite is available for work assignment (defaults to False for new composites)
 
         Returns:
             Tuple of (Composite, created, updated)
@@ -116,6 +118,10 @@ class CompositeService:
                 existing.priority = priority
                 updated = True
 
+            if is_active is not None and existing.is_active != is_active:
+                existing.is_active = is_active
+                updated = True
+
             if updated:
                 db.flush()  # Make changes visible within transaction
                 db.refresh(existing)
@@ -162,7 +168,8 @@ class CompositeService:
             snfs_difficulty=snfs_difficulty,
             is_prime=is_prime if is_prime is not None else False,
             is_fully_factored=is_fully_factored if is_fully_factored is not None else False,
-            priority=priority if priority is not None else 0
+            priority=priority if priority is not None else 0,
+            is_active=is_active if is_active is not None else False  # Default to inactive for manual review
         )
 
         db.add(composite)

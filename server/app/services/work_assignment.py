@@ -252,6 +252,7 @@ class WorkAssignmentService:
         """Find a composite suitable for the client's capabilities."""
         query = db.query(Composite).filter(
             and_(
+                Composite.is_active == True,  # Only assign active composites
                 Composite.is_fully_factored == False,
                 or_(Composite.is_prime.is_(None), Composite.is_prime == False)
             )

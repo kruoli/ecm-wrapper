@@ -503,11 +503,10 @@ class ECMWrapper(BaseWrapper):
                 residue_file, b1, b2, stage2_workers, verbose, early_termination, progress_interval
             )
 
-            # Extract factor and curves completed from stage 2 result (Stage2Executor returns 4 values)
+            # Extract factor and curves completed from stage 2 result (Stage2Executor returns 5 values)
             stage2_curves_completed = 0
             if stage2_result:
-                stage2_factor, all_factors, stage2_curves_completed, stage2_time = stage2_result
-                stage2_sigma = None  # Stage2Executor doesn't currently return sigma values
+                stage2_factor, all_factors, stage2_curves_completed, stage2_time, stage2_sigma = stage2_result
         else:
             self.logger.info("Skipping Stage 2 (B2=0 - Stage 1 only mode)")
             stage2_factor = None
@@ -732,14 +731,14 @@ class ECMWrapper(BaseWrapper):
 
     def _run_stage2_multithread(self, residue_file: Path, b1: int, b2: Optional[int],
                                workers: int, verbose: bool, early_termination: bool = True,
-                               progress_interval: int = 0) -> Tuple[Optional[str], List[str], int, float]:
+                               progress_interval: int = 0) -> Tuple[Optional[str], List[str], int, float, Optional[str]]:
         """
         Run Stage 2 with multiple CPU workers.
 
         This is now a thin wrapper around Stage2Executor.
 
         Returns:
-            Tuple of (factor, all_factors, curves_completed, execution_time)
+            Tuple of (factor, all_factors, curves_completed, execution_time, sigma)
         """
         executor = Stage2Executor(self, residue_file, b1, b2, workers, verbose)
         return executor.execute(early_termination, progress_interval)
@@ -1022,13 +1021,11 @@ class ECMWrapper(BaseWrapper):
             residue_path, actual_b1, b2, stage2_workers, verbose, early_termination, progress_interval
         )
 
-        # Extract factor from result (Stage2Executor returns 4 values)
+        # Extract factor from result (Stage2Executor returns 5 values)
         factor_found = None
         sigma_found = None
         if stage2_result:
-            factor_found, all_factors, stage2_curves, stage2_time = stage2_result
-            # Note: Stage2Executor doesn't currently return sigma values
-            # sigma_found would need to be tracked separately if needed
+            factor_found, all_factors, stage2_curves, stage2_time, sigma_found = stage2_result
 
         execution_time = time.time() - start_time
 
@@ -1041,6 +1038,7 @@ class ECMWrapper(BaseWrapper):
             'curves_completed': stage1_curves,  # All Stage 1 curves were completed
             'stage2_workers': stage2_workers,
             'factor_found': factor_found,
+            'sigma': sigma_found,
             'execution_time': execution_time,
             'method': 'ecm',
             'raw_output': ''  # Stage 2 only doesn't have single raw output
@@ -1915,7 +1913,7 @@ def main():
                         stage2_executor = Stage2Executor(
                             wrapper, local_residue_file, b1, b2, stage2_workers, args.verbose
                         )
-                        stage2_factor, stage2_all_factors, stage2_curves, stage2_time = stage2_executor.execute(
+                        stage2_factor, stage2_all_factors, stage2_curves, stage2_time, stage2_sigma = stage2_executor.execute(
                             early_termination=not (hasattr(args, 'continue_after_factor') and args.continue_after_factor),
                             progress_interval=args.progress_interval if hasattr(args, 'progress_interval') else 0
                         )
@@ -1929,6 +1927,7 @@ def main():
                             'curves_completed': stage2_curves,
                             'factors_found': stage2_all_factors if stage2_all_factors else [],
                             'factor_found': stage2_factor,
+                            'sigma': stage2_sigma,
                             'raw_output': f"Stage 2 from residue {current_residue_id}",
                             'method': 'ecm',
                             'parametrization': residue_work.get('parametrization', 3),

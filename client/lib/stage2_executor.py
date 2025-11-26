@@ -61,7 +61,7 @@ class Stage2Executor:
         self.curves_lock = threading.Lock()
 
     def execute(self, early_termination: bool = True,
-                progress_interval: int = 0) -> Tuple[Optional[str], List[str], int, float]:
+                progress_interval: int = 0) -> Tuple[Optional[str], List[str], int, float, Optional[str]]:
         """
         Execute Stage 2 with worker pool.
 
@@ -70,11 +70,12 @@ class Stage2Executor:
             progress_interval: Report progress every N curves (0 = no progress reporting)
 
         Returns:
-            Tuple of (factor, all_factors, curves_completed, execution_time)
+            Tuple of (factor, all_factors, curves_completed, execution_time, sigma)
             - factor: First factor found (or None)
             - all_factors: List of all factors found (empty list if none)
             - curves_completed: Total curves processed
             - execution_time: Total execution time in seconds
+            - sigma: Sigma value that found the factor (or None)
         """
         start_time = time.time()
 
@@ -91,7 +92,7 @@ class Stage2Executor:
         if not residue_chunks:
             self.logger.error("Failed to split residue file")
             execution_time = time.time() - start_time
-            return (None, [], 0, execution_time)
+            return (None, [], 0, execution_time, None)
 
         # Run workers in parallel
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
@@ -132,12 +133,13 @@ class Stage2Executor:
 
         # Return factor info along with curves completed
         if self.factor_found:
-            # Build all_factors list (currently only tracking one factor)
+            # Extract factor and sigma from tuple (factor, sigma)
             factor = self.factor_found[0]
+            sigma = self.factor_found[1]
             all_factors = [factor] if factor else []
-            return (factor, all_factors, self.curves_completed_total, execution_time)
+            return (factor, all_factors, self.curves_completed_total, execution_time, sigma)
 
-        return (None, [], self.curves_completed_total, execution_time)
+        return (None, [], self.curves_completed_total, execution_time, None)
 
     def _split_residue_file(self) -> List[Path]:
         """Split residue file into chunks for parallel processing."""

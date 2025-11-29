@@ -687,8 +687,13 @@ class ECMWrapper(BaseWrapper):
             cmd.insert(1, '-gpu')
             if gpu_device is not None:
                 cmd.extend(['-gpudevice', str(gpu_device)])
+            # If gpu_curves not specified but curves is small, pass it explicitly to respect user's request
+            # (GMP-ECM defaults to ~3072 curves for GPU batching, which can be unexpected for small requests)
             if gpu_curves is not None:
                 cmd.extend(['-gpucurves', str(gpu_curves)])
+            elif curves <= 100:  # For small curve counts, respect the user's request
+                cmd.extend(['-gpucurves', str(curves)])
+                self.logger.info(f"GPU mode: Explicitly setting -gpucurves {curves} to match requested curve count")
         if verbose:
             cmd.append('-v')
         if param is not None:
@@ -1756,6 +1761,17 @@ def main():
                             verbose=args.verbose
                         )
 
+                        # Check if we're interrupted (don't treat user cancellation as failure)
+                        if wrapper.interrupted:
+                            wrapper.logger.info("Stage 1 interrupted by user, cleaning up...")
+                            # Try to abandon work (might fail if already expired)
+                            try:
+                                wrapper.abandon_work(current_work_id, reason="user_cancelled")
+                            except Exception:
+                                pass  # Ignore errors when abandoning (work might have expired)
+                            current_work_id = None
+                            break  # Exit the work loop
+
                         if not success:
                             wrapper.logger.error("Stage 1 execution failed")
                             wrapper.abandon_work(current_work_id, reason="stage1_failed")
@@ -1829,6 +1845,9 @@ def main():
                     mode_name="Stage 1 Producer mode",
                     completed_count=completed_count
                 )
+
+            # Exit after stage1-only mode completes to avoid falling through to standard mode
+            return
 
         # Stage 2 Work Mode
         elif is_stage2_work:
@@ -2019,6 +2038,9 @@ def main():
                     local_residue_file=local_residue_file
                 )
 
+            # Exit after stage2-work mode completes to avoid falling through to standard mode
+            return
+
         # Standard auto-work mode
         try:
             while not wrapper.interrupted:
@@ -2186,6 +2208,9 @@ def main():
                 mode_name="Auto-work mode",
                 completed_count=completed_count
             )
+
+        # Exit after auto-work mode completes to avoid falling through to standard mode
+        return
 
     # Use shared argument processing utilities
     b1_default, b2_default = get_method_defaults(wrapper.config, args.method)

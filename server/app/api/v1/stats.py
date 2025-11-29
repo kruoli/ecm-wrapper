@@ -251,6 +251,7 @@ async def get_top_composites_by_progress(
             completion_pct=CompositeCalculations.get_completion_percentage(comp),
             priority=comp.priority,
             is_fully_factored=comp.is_fully_factored,
+            is_active=comp.is_active,
             projects=project_names
         ))
 

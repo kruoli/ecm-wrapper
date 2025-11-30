@@ -1724,17 +1724,20 @@ def main():
                     composite = work['composite']
                     digit_length = work['digit_length']
 
+                    # Resolve GPU settings
+                    use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(args, wrapper.config)
+
+                    # Determine curves (use config default if not specified)
+                    curves = args.curves if args.curves is not None else wrapper.config['programs']['gmp_ecm']['default_curves']
+
                     print_work_header(
                         work_id=current_work_id,
                         composite=composite,
                         digit_length=digit_length,
-                        params={'B1': args.b1, 'curves': args.curves}
+                        params={'B1': args.b1, 'curves': curves}
                     )
 
                     try:
-                        # Resolve GPU settings
-                        use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(args, wrapper.config)
-
                         # Generate residue file path
                         residue_dir = Path(wrapper.config['execution'].get('residue_dir', 'data/residues'))
                         residue_dir.mkdir(parents=True, exist_ok=True)
@@ -1745,13 +1748,13 @@ def main():
                         sigma = parse_sigma_arg(args)
                         param = resolve_param(args, use_gpu)
 
-                        print(f"Running ECM stage 1 (B1={args.b1}, curves={args.curves})...")
+                        print(f"Running ECM stage 1 (B1={args.b1}, curves={curves})...")
                         print(f"Saving residues to: {residue_file}")
 
                         success, factor, actual_curves, raw_output, all_factors = wrapper._run_stage1(
                             composite=composite,
                             b1=args.b1,
-                            curves=args.curves,
+                            curves=curves,
                             residue_file=residue_file,
                             sigma=sigma,
                             param=param,
@@ -1782,7 +1785,7 @@ def main():
                         results = wrapper._build_stage1_results(
                             composite=composite,
                             b1=args.b1,
-                            curves_requested=args.curves,
+                            curves_requested=curves,
                             curves_completed=actual_curves,
                             all_factors=all_factors,
                             factor_found=factor,

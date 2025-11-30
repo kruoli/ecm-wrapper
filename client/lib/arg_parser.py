@@ -161,12 +161,10 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
         if args.b2 is not None and args.b2 != 0:
             errors['b2'] = "--stage1-only runs stage 1 only. B2 should be 0 or omitted."
 
-        # Auto-work mode: B1 and curves must be specified
+        # Auto-work mode: Only B1 is required (curves will default to config)
         if hasattr(args, 'auto_work') and args.auto_work:
             if args.b1 is None:
                 errors['b1'] = "--stage1-only with --auto-work requires --b1 to be specified"
-            if args.curves is None:
-                errors['curves'] = "--stage1-only with --auto-work requires --curves to be specified"
         # Manual mode: composite required, B1/curves use config defaults if not specified
         else:
             if not args.composite:

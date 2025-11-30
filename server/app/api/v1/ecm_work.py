@@ -46,7 +46,7 @@ async def get_ecm_work(
         min_digits: Minimum number of digits
         max_digits: Maximum number of digits
         timeout_days: Work assignment expiration in days (default: 1)
-        work_type: Work assignment strategy - "standard" (smallest first) or "progressive" (least ECM done first)
+        work_type: Work assignment strategy - "standard" (easiest/lowest target t-level first) or "progressive" (least ECM done first)
         db: Database session
 
     Returns:
@@ -121,9 +121,9 @@ async def get_ecm_work(
                 Composite.digit_length.asc()
             ).first()
         else:  # "standard"
-            # Standard: prioritize smallest composites first
+            # Standard: prioritize easiest composites first (by target t-level, which accounts for SNFS)
             composite = query.order_by(
-                Composite.digit_length.asc(),
+                Composite.target_t_level.asc(),
                 Composite.created_at.asc()
             ).first()
 
@@ -193,7 +193,7 @@ async def get_ecm_work(
         if work_type == "progressive":
             message = f"Assigned composite with least ECM work (t{composite.current_t_level:.1f})"
         else:
-            message = "Assigned smallest incomplete composite"
+            message = f"Assigned easiest incomplete composite (target: t{composite.target_t_level:.1f})"
 
         response_data = {
             "work_id": work_id,

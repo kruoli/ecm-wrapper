@@ -722,13 +722,9 @@ class ECMWrapper(BaseWrapper):
             cmd.insert(1, '-gpu')
             if gpu_device is not None:
                 cmd.extend(['-gpudevice', str(gpu_device)])
-            # If gpu_curves not specified but curves is small, pass it explicitly to respect user's request
-            # (GMP-ECM defaults to ~3072 curves for GPU batching, which can be unexpected for small requests)
+            # Only set -gpucurves if explicitly specified
             if gpu_curves is not None:
                 cmd.extend(['-gpucurves', str(gpu_curves)])
-            elif curves <= 100:  # For small curve counts, respect the user's request
-                cmd.extend(['-gpucurves', str(curves)])
-                self.logger.info(f"GPU mode: Explicitly setting -gpucurves {curves} to match requested curve count")
         if verbose:
             cmd.append('-v')
         if param is not None:

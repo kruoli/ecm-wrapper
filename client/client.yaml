@@ -21,6 +21,8 @@ client:
 execution:
   output_dir: data/outputs
   residue_dir: data/residues
+  failed_uploads_dir: data/failed_uploads  # Directory to preserve residues that failed to upload
+  preserve_failed_uploads: true  # Save copies of residue files when upload fails
   save_raw_output: true
 
 logging:

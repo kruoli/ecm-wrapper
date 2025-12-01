@@ -12,6 +12,7 @@ from ...database import get_db
 from ...models.composites import Composite
 from ...models.attempts import ECMAttempt
 from ...models.work_assignments import WorkAssignment
+from ...models.residues import ECMResidue
 from ...services.t_level_calculator import TLevelCalculator
 from ...utils.transactions import transaction_scope
 from ...config import get_settings
@@ -39,6 +40,11 @@ async def get_ecm_work(
 
     This endpoint returns an incomplete composite (current_t < target_t)
     that matches the filter criteria, sorted by work_type strategy.
+
+    Exclusions:
+    - Composites with active work assignments
+    - Composites with pending residues (status='available' or 'claimed')
+      to prevent duplicate stage 1 work while waiting for stage 2 processing
 
     Args:
         client_id: Unique identifier for the requesting client
@@ -111,6 +117,14 @@ async def get_ecm_work(
         ).subquery()
 
         query = query.filter(~Composite.id.in_(active_work_composites))
+
+        # Exclude composites with pending residues (stage 1 done, stage 2 not yet completed)
+        # This prevents duplicate stage 1 work when residues are waiting to be processed
+        pending_residue_composites = db.query(ECMResidue.composite_id).filter(
+            ECMResidue.status.in_(['available', 'claimed'])
+        ).subquery()
+
+        query = query.filter(~Composite.id.in_(pending_residue_composites))
 
         # Apply sorting strategy based on work_type
         if work_type == "progressive":

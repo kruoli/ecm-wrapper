@@ -628,6 +628,36 @@ class ECMWrapper(BaseWrapper):
 
         return results
 
+    def _preserve_failed_upload(self, residue_file: Path) -> None:
+        """
+        Preserve a copy of a residue file that failed to upload.
+
+        Saves the file to failed_uploads_dir with timestamp for manual retry later.
+
+        Args:
+            residue_file: Path to the residue file to preserve
+        """
+        import shutil
+        import time
+
+        try:
+            failed_dir = Path(self.config['execution'].get('failed_uploads_dir', 'data/failed_uploads'))
+            failed_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create filename with timestamp
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            preserved_name = f"{residue_file.stem}_failed_{timestamp}{residue_file.suffix}"
+            preserved_path = failed_dir / preserved_name
+
+            # Copy the file
+            shutil.copy2(residue_file, preserved_path)
+
+            self.logger.info(f"Preserved failed upload: {preserved_path}")
+            print(f"Residue file preserved for manual retry: {preserved_path}")
+
+        except Exception as e:
+            self.logger.error(f"Failed to preserve residue file: {e}")
+
     def _upload_residue_if_needed(
         self,
         residue_file: Path,
@@ -666,6 +696,11 @@ class ECMWrapper(BaseWrapper):
                 return upload_result
             else:
                 self.logger.error("Failed to upload residue file")
+
+                # Preserve failed upload if configured
+                if self.config['execution'].get('preserve_failed_uploads', False):
+                    self._preserve_failed_upload(residue_file)
+
                 return None
         elif factor_found:
             # Factor found - no need for stage 2

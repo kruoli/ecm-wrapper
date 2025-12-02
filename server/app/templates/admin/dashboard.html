@@ -78,6 +78,38 @@
             jumpToComposite();
         }
     }
+
+    // Navigate with auth header
+    function navigateWithAuth(url) {
+        const apiKey = sessionStorage.getItem('admin_api_key');
+        if (!apiKey) {
+            window.location.href = '/api/v1/admin/login';
+            return;
+        }
+
+        fetch(url, {
+            headers: {
+                'X-Admin-Key': apiKey
+            }
+        })
+        .then(response => {
+            if (response.status === 401) {
+                sessionStorage.removeItem('admin_api_key');
+                window.location.href = '/api/v1/admin/login';
+                throw new Error('Unauthorized');
+            }
+            return response.text();
+        })
+        .then(html => {
+            document.open();
+            document.write(html);
+            document.close();
+            history.pushState(null, '', url);
+        })
+        .catch(error => {
+            console.error('Navigation error:', error);
+        });
+    }
 </script>
 {% endblock %}
 
@@ -111,10 +143,10 @@
         <div style="border-top: 1px solid #ddd; padding-top: 15px; margin-top: 15px;">
             <h4 style="margin-bottom: 10px;">Specialized Dashboards:</h4>
             <nav style="display: flex; gap: 10px; flex-wrap: wrap;">
-                <a href="/api/v1/admin/inactive-composites" class="btn">💤 Inactive Composites</a>
-                <a href="/api/v1/admin/outstanding-work" class="btn">⏳ Outstanding Work</a>
-                <a href="/api/v1/admin/recent-composites" class="btn">📅 Recent Composites</a>
-                <a href="/api/v1/admin/residue-status" class="btn">🔄 Residue Status</a>
+                <a href="#" onclick="navigateWithAuth('/api/v1/admin/inactive-composites'); return false;" class="btn">💤 Inactive Composites</a>
+                <a href="#" onclick="navigateWithAuth('/api/v1/admin/outstanding-work'); return false;" class="btn">⏳ Outstanding Work</a>
+                <a href="#" onclick="navigateWithAuth('/api/v1/admin/recent-composites'); return false;" class="btn">📅 Recent Composites</a>
+                <a href="#" onclick="navigateWithAuth('/api/v1/admin/residue-status'); return false;" class="btn">🔄 Residue Status</a>
             </nav>
         </div>
     </div>

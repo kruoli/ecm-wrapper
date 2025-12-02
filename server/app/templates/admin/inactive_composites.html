@@ -43,6 +43,11 @@
                 console.error('Navigation error:', error);
             });
     }
+
+    // Reload current page with auth
+    function reloadWithAuth() {
+        navigateWithAuth(window.location.pathname + window.location.search);
+    }
 </script>
 {% endblock %}
 
@@ -189,7 +194,7 @@ function activateComposite(compositeId) {
     .then(response => response.json())
     .then(data => {
         alert(`Composite ${compositeId} activated successfully`);
-        location.reload();
+        reloadWithAuth();
     })
     .catch(error => {
         console.error('Error:', error);
@@ -216,7 +221,7 @@ function activateSelected() {
     .then(response => response.json())
     .then(data => {
         alert(`Activated ${data.total_activated} of ${data.total_requested} composites`);
-        location.reload();
+        reloadWithAuth();
     })
     .catch(error => {
         console.error('Error:', error);
@@ -237,7 +242,7 @@ function deleteComposite(compositeId) {
     .then(response => response.json())
     .then(data => {
         alert(`Composite ${compositeId} deleted`);
-        location.reload();
+        reloadWithAuth();
     })
     .catch(error => {
         console.error('Error:', error);

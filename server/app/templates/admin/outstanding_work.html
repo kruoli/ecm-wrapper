@@ -43,6 +43,11 @@
                 console.error('Navigation error:', error);
             });
     }
+
+    // Reload current page with auth
+    function reloadWithAuth() {
+        navigateWithAuth(window.location.pathname + window.location.search);
+    }
 </script>
 {% endblock %}
 
@@ -235,7 +240,7 @@ function expireWork(workId) {
     .then(response => response.json())
     .then(data => {
         alert('Work assignment expired');
-        location.reload();
+        reloadWithAuth();
     })
     .catch(error => {
         console.error('Error:', error);
@@ -254,7 +259,7 @@ function cancelWork(workId) {
     .then(response => response.json())
     .then(data => {
         alert('Work assignment cancelled');
-        location.reload();
+        reloadWithAuth();
     })
     .catch(error => {
         console.error('Error:', error);

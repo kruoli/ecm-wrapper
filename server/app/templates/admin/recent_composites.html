@@ -43,6 +43,11 @@
                 console.error('Navigation error:', error);
             });
     }
+
+    // Reload current page with auth
+    function reloadWithAuth() {
+        navigateWithAuth(window.location.pathname + window.location.search);
+    }
 </script>
 {% endblock %}
 
@@ -276,7 +281,7 @@ function deleteComposite(compositeId) {
     .then(response => response.json())
     .then(data => {
         alert(`Composite ${compositeId} deleted`);
-        location.reload();
+        reloadWithAuth();
     })
     .catch(error => {
         console.error('Error:', error);

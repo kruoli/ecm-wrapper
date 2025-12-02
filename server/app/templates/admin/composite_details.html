@@ -9,29 +9,42 @@
         window.location.href = '/api/v1/admin/login';
     }
 
-    window.backToDashboard = function backToDashboard() {
-        const apiKey = sessionStorage.getItem('admin_api_key');
-        if (!apiKey) {
-            window.location.href = '/api/v1/admin/login';
-            return;
-        }
-
-        fetch('/api/v1/admin/dashboard', {
-            headers: {
-                'X-Admin-Key': apiKey
+    // Add API key to all fetch requests
+    function fetchWithAuth(url, options = {}) {
+        options.headers = options.headers || {};
+        options.headers['X-Admin-Key'] = sessionStorage.getItem('admin_api_key');
+        return fetch(url, options).then(response => {
+            if (response.status === 401) {
+                sessionStorage.removeItem('admin_api_key');
+                window.location.href = '/api/v1/admin/login';
+                throw new Error('Unauthorized');
             }
-        })
-        .then(response => response.text())
-        .then(html => {
-            document.open();
-            document.write(html);
-            document.close();
-            history.pushState(null, '', '/api/v1/admin/dashboard');
-        })
-        .catch(() => {
-            sessionStorage.removeItem('admin_api_key');
-            window.location.href = '/api/v1/admin/login';
+            return response;
         });
+    }
+
+    // Navigate with auth header
+    function navigateWithAuth(url) {
+        fetchWithAuth(url)
+            .then(response => response.text())
+            .then(html => {
+                document.open();
+                document.write(html);
+                document.close();
+                history.pushState(null, '', url);
+            })
+            .catch(error => {
+                console.error('Navigation error:', error);
+            });
+    }
+
+    // Reload current page with auth
+    function reloadWithAuth() {
+        navigateWithAuth(window.location.pathname + window.location.search);
+    }
+
+    window.backToDashboard = function backToDashboard() {
+        navigateWithAuth('/api/v1/admin/dashboard');
     }
 
     window.deleteComposite = function deleteComposite() {
@@ -113,7 +126,7 @@
             alert(`T-level recalculated for composite ${compositeId}\n\nCurrent: ${oldCurrent} → ${newCurrent}\nTarget: ${oldTarget} → ${newTarget}`);
 
             // Reload page to show updated values
-            window.location.reload();
+            reloadWithAuth();
         })
         .catch(error => {
             alert(`Failed to recalculate t-level: ${error.message}`);

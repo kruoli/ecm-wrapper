@@ -43,6 +43,11 @@
                 console.error('Navigation error:', error);
             });
     }
+
+    // Reload current page with auth
+    function reloadWithAuth() {
+        navigateWithAuth(window.location.pathname + window.location.search);
+    }
 </script>
 {% endblock %}
 
@@ -282,7 +287,7 @@ function releaseClaim(residueId) {
     .then(response => response.json())
     .then(data => {
         alert(`Claim on residue ${residueId} released`);
-        location.reload();
+        reloadWithAuth();
     })
     .catch(error => {
         console.error('Error:', error);
@@ -303,7 +308,7 @@ function deleteResidue(residueId) {
     .then(response => response.json())
     .then(data => {
         alert(`Residue ${residueId} deleted`);
-        location.reload();
+        reloadWithAuth();
     })
     .catch(error => {
         console.error('Error:', error);
@@ -320,7 +325,7 @@ function cleanupExpired() {
     .then(response => response.json())
     .then(data => {
         alert(`Cleaned up ${data.cleaned_count} expired residue(s)`);
-        location.reload();
+        reloadWithAuth();
     })
     .catch(error => {
         console.error('Error:', error);

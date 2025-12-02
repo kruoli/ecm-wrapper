@@ -10,6 +10,8 @@ from .projects import router as projects_router
 from .maintenance import router as maintenance_router
 from .attempts import router as attempts_router
 from .factors import router as factors_router
+from .dashboards import router as dashboards_router
+from .residues import router as residues_router
 
 # Main admin router that aggregates all admin sub-routers
 router = APIRouter()
@@ -20,6 +22,8 @@ router.include_router(projects_router, prefix="/admin", tags=["admin-projects"])
 router.include_router(maintenance_router, prefix="/admin", tags=["admin-maintenance"])
 router.include_router(attempts_router, prefix="/admin", tags=["admin-attempts"])
 router.include_router(factors_router, prefix="/admin", tags=["admin-factors"])
+router.include_router(dashboards_router, prefix="/admin", tags=["admin-dashboards"])
+router.include_router(residues_router, prefix="/admin", tags=["admin-residues"])
 
 __all__ = [
     'router',
@@ -29,5 +33,7 @@ __all__ = [
     'projects_router',
     'maintenance_router',
     'attempts_router',
-    'factors_router'
+    'factors_router',
+    'dashboards_router',
+    'residues_router'
 ]

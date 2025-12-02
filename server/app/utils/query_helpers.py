@@ -363,3 +363,168 @@ def get_summary_statistics(db: Session) -> dict:
         ).count(),
         "active_clients": count_active_clients(db, days=7)
     }
+
+
+def get_inactive_composites(db: Session, limit: int = 100, offset: int = 0):
+    """
+    Get inactive composites that are not fully factored.
+
+    Args:
+        db: Database session
+        limit: Maximum number to return
+        offset: Pagination offset
+
+    Returns:
+        Tuple of (composites list, total count)
+    """
+    from ..models.composites import Composite
+
+    query = db.query(Composite).filter(
+        and_(
+            Composite.is_active == False,
+            Composite.is_fully_factored == False
+        )
+    )
+
+    total = query.count()
+    composites = query.order_by(
+        desc(Composite.priority),
+        desc(Composite.created_at)
+    ).offset(offset).limit(limit).all()
+
+    return composites, total
+
+
+def get_outstanding_work_assignments(
+    db: Session,
+    limit: int = 100,
+    offset: int = 0,
+    client_id: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    method_filter: Optional[str] = None
+):
+    """
+    Get work assignments with status in ['assigned', 'claimed', 'running'].
+
+    Args:
+        db: Database session
+        limit: Maximum number to return
+        offset: Pagination offset
+        client_id: Optional filter by client ID
+        status_filter: Optional filter by status
+        method_filter: Optional filter by method
+
+    Returns:
+        Tuple of (assignments list, total count)
+    """
+    from ..models.work_assignments import WorkAssignment
+
+    query = db.query(WorkAssignment).filter(
+        WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+    )
+
+    # Apply optional filters
+    filters = []
+    if client_id:
+        filters.append(WorkAssignment.client_id == client_id)
+    if status_filter:
+        filters.append(WorkAssignment.status == status_filter)
+    if method_filter:
+        filters.append(WorkAssignment.method == method_filter)
+
+    if filters:
+        query = query.filter(and_(*filters))
+
+    total = query.count()
+    assignments = query.order_by(
+        desc(WorkAssignment.created_at)
+    ).offset(offset).limit(limit).all()
+
+    return assignments, total
+
+
+def get_recently_added_composites(
+    db: Session,
+    days: int = 30,
+    limit: int = 100,
+    offset: int = 0
+):
+    """
+    Get composites created in the last N days.
+
+    Args:
+        db: Database session
+        days: Number of days to look back
+        limit: Maximum number to return
+        offset: Pagination offset
+
+    Returns:
+        Tuple of (composites list, total count)
+    """
+    from ..models.composites import Composite
+
+    since = datetime.utcnow() - timedelta(days=days)
+
+    query = db.query(Composite).filter(
+        Composite.created_at >= since
+    )
+
+    total = query.count()
+    composites = query.order_by(
+        desc(Composite.created_at)
+    ).offset(offset).limit(limit).all()
+
+    return composites, total
+
+
+def get_residues_filtered(
+    db: Session,
+    limit: int = 100,
+    offset: int = 0,
+    status_filter: Optional[str] = None,
+    client_id: Optional[str] = None,
+    composite_id: Optional[int] = None,
+    expiring_soon: bool = False
+):
+    """
+    Get residues with comprehensive filtering.
+
+    Args:
+        db: Database session
+        limit: Maximum number to return
+        offset: Pagination offset
+        status_filter: Filter by status (available/claimed/completed/expired)
+        client_id: Filter by client that uploaded
+        composite_id: Filter by specific composite
+        expiring_soon: If True, show only residues expiring in < 24 hours
+
+    Returns:
+        Tuple of (residues list, total count)
+    """
+    from ..models.residues import ECMResidue
+
+    query = db.query(ECMResidue)
+
+    # Apply filters
+    filters = []
+    if status_filter:
+        filters.append(ECMResidue.status == status_filter)
+    if client_id:
+        filters.append(ECMResidue.client_id == client_id)
+    if composite_id:
+        filters.append(ECMResidue.composite_id == composite_id)
+    if expiring_soon:
+        # Expires in less than 24 hours
+        expiry_threshold = datetime.utcnow() + timedelta(hours=24)
+        filters.append(ECMResidue.expires_at < expiry_threshold)
+        filters.append(ECMResidue.status.in_(['available', 'claimed']))
+
+    if filters:
+        query = query.filter(and_(*filters))
+
+    total = query.count()
+    residues = query.order_by(
+        desc(ECMResidue.created_at)
+    ).offset(offset).limit(limit).all()
+
+    return residues, total

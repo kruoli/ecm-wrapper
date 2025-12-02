@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% block title %}Inactive Composites - ECM Admin{% endblock %}
+
+{% block extra_head %}
+<script>
+    // Check if API key exists, redirect to login if not
+    if (!sessionStorage.getItem('admin_api_key')) {
+        window.location.href = '/api/v1/admin/login';
+    }
+
+    // Add API key to all fetch requests
+    function fetchWithAuth(url, options = {}) {
+        options.headers = options.headers || {};
+        options.headers['X-Admin-Key'] = sessionStorage.getItem('admin_api_key');
+        return fetch(url, options).then(response => {
+            if (response.status === 401) {
+                sessionStorage.removeItem('admin_api_key');
+                window.location.href = '/api/v1/admin/login';
+                throw new Error('Unauthorized');
+            }
+            return response;
+        });
+    }
+
+    // Logout function
+    function logout() {
+        sessionStorage.removeItem('admin_api_key');
+        window.location.href = '/api/v1/admin/login';
+    }
+</script>
+{% endblock %}
+
+{% block body %}
+<div class="header">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <h1>💤 Inactive Composites</h1>
+            <p>Manage composites that are marked inactive and will not be assigned for ECM work</p>
+        </div>
+        <button onclick="logout()" class="btn" style="background: #dc3545;">Logout</button>
+    </div>
+</div>
+
+<!-- Navigation Menu -->
+<div class="section">
+    <div class="section-content" style="padding: 10px 20px;">
+        <nav style="display: flex; gap: 15px; flex-wrap: wrap;">
+            <a href="/api/v1/admin/dashboard" class="btn">🏠 Main Dashboard</a>
+            <a href="/api/v1/admin/inactive-composites" class="btn" style="background: #6c757d; color: white;">💤 Inactive Composites</a>
+            <a href="/api/v1/admin/outstanding-work" class="btn">⏳ Outstanding Work</a>
+            <a href="/api/v1/admin/recent-composites" class="btn">📅 Recent Composites</a>
+        </nav>
+    </div>
+</div>
+
+<!-- Summary Stats -->
+<div class="section">
+    <div class="section-header">📊 Summary</div>
+    <div class="section-content">
+        <p><strong>Total Inactive Composites:</strong> {{ total }}</p>
+        <p style="color: #666; font-style: italic;">
+            These composites are marked inactive and will not be assigned for ECM work. Use this page to review and activate composites when ready.
+        </p>
+    </div>
+</div>
+
+<!-- Inactive Composites Table -->
+<div class="section">
+    <div class="section-header">💤 Inactive Composites (Not Fully Factored)</div>
+    <div class="section-content">
+        {% if composites %}
+        <div style="margin-bottom: 15px;">
+            <button onclick="activateSelected()" class="btn" style="background: #28a745;">
+                Activate Selected
+            </button>
+            <button onclick="selectAll()" class="btn">Select All</button>
+            <button onclick="deselectAll()" class="btn">Deselect All</button>
+        </div>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th><input type="checkbox" id="select-all-checkbox" onchange="toggleSelectAll(this)"></th>
+                        <th>ID</th>
+                        <th>Number</th>
+                        <th>Digits</th>
+                        <th>Target T-Level</th>
+                        <th>Priority</th>
+                        <th>Created At</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for composite in composites %}
+                    <tr>
+                        <td><input type="checkbox" class="composite-checkbox" value="{{ composite.id }}"></td>
+                        <td>{{ composite.id }}</td>
+                        <td><span class="number">{{ esc(format_composite(composite.number, 40)) }}</span></td>
+                        <td>{{ composite.digit_length }}</td>
+                        <td>{{ composite.target_t_level|round(1) if composite.target_t_level else 'N/A' }}</td>
+                        <td>
+                            <span style="font-weight: bold; color: {{ '#198754' if composite.priority > 0 else '#666' }};">
+                                {{ composite.priority }}
+                            </span>
+                        </td>
+                        <td>{{ composite.created_at.strftime('%Y-%m-%d %H:%M') if composite.created_at else 'N/A' }}</td>
+                        <td>
+                            <button onclick="activateComposite({{ composite.id }})" class="btn" style="background: #28a745;">
+                                Activate
+                            </button>
+                            <button onclick="viewDetails({{ composite.id }})" class="btn">Details</button>
+                            <button onclick="deleteComposite({{ composite.id }})" class="btn" style="background: #dc3545;">
+                                Delete
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                Showing {{ showing_from }}-{{ showing_to }} of {{ total }}
+            </div>
+            <div style="display: flex; gap: 10px;">
+                {% if has_prev %}
+                <button onclick="navigatePage({{ offset - limit }})" class="btn">Previous</button>
+                {% endif %}
+                <span style="padding: 8px 16px;">Page {{ page }} of {{ total_pages }}</span>
+                {% if has_next %}
+                <button onclick="navigatePage({{ offset + limit }})" class="btn">Next</button>
+                {% endif %}
+            </div>
+        </div>
+
+        {% else %}
+        <p>No inactive composites found.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleSelectAll(checkbox) {
+    const checkboxes = document.querySelectorAll('.composite-checkbox');
+    checkboxes.forEach(cb => cb.checked = checkbox.checked);
+}
+
+function selectAll() {
+    const checkboxes = document.querySelectorAll('.composite-checkbox');
+    checkboxes.forEach(cb => cb.checked = true);
+    document.getElementById('select-all-checkbox').checked = true;
+}
+
+function deselectAll() {
+    const checkboxes = document.querySelectorAll('.composite-checkbox');
+    checkboxes.forEach(cb => cb.checked = false);
+    document.getElementById('select-all-checkbox').checked = false;
+}
+
+function activateComposite(compositeId) {
+    if (!confirm(`Activate composite ${compositeId}?`)) return;
+
+    fetchWithAuth(`/api/v1/admin/composites/${compositeId}/activate`, {
+        method: 'PUT'
+    })
+    .then(response => response.json())
+    .then(data => {
+        alert(`Composite ${compositeId} activated successfully`);
+        location.reload();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to activate composite');
+    });
+}
+
+function activateSelected() {
+    const checkboxes = document.querySelectorAll('.composite-checkbox:checked');
+    const compositeIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+
+    if (compositeIds.length === 0) {
+        alert('Please select at least one composite');
+        return;
+    }
+
+    if (!confirm(`Activate ${compositeIds.length} composites?`)) return;
+
+    fetchWithAuth('/api/v1/admin/composites/bulk-activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(compositeIds)
+    })
+    .then(response => response.json())
+    .then(data => {
+        alert(`Activated ${data.total_activated} of ${data.total_requested} composites`);
+        location.reload();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to activate composites');
+    });
+}
+
+function viewDetails(compositeId) {
+    location.href = `/api/v1/admin/composites/${compositeId}/details`;
+}
+
+function deleteComposite(compositeId) {
+    if (!confirm(`Delete composite ${compositeId}? This cannot be undone.`)) return;
+
+    fetchWithAuth(`/api/v1/admin/composites/${compositeId}`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        alert(`Composite ${compositeId} deleted`);
+        location.reload();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to delete composite');
+    });
+}
+
+function navigatePage(newOffset) {
+    location.href = `/api/v1/admin/inactive-composites?offset=${newOffset}&limit={{ limit }}`;
+}
+</script>
+{% endblock %}

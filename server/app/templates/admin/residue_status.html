@@ -1,0 +1,323 @@
+{% extends "base.html" %}
+
+{% block title %}Residue Status - ECM Admin{% endblock %}
+
+{% block extra_head %}
+<script>
+    // Check if API key exists, redirect to login if not
+    if (!sessionStorage.getItem('admin_api_key')) {
+        window.location.href = '/api/v1/admin/login';
+    }
+
+    // Add API key to all fetch requests
+    function fetchWithAuth(url, options = {}) {
+        options.headers = options.headers || {};
+        options.headers['X-Admin-Key'] = sessionStorage.getItem('admin_api_key');
+        return fetch(url, options).then(response => {
+            if (response.status === 401) {
+                sessionStorage.removeItem('admin_api_key');
+                window.location.href = '/api/v1/admin/login';
+                throw new Error('Unauthorized');
+            }
+            return response;
+        });
+    }
+
+    // Logout function
+    function logout() {
+        sessionStorage.removeItem('admin_api_key');
+        window.location.href = '/api/v1/admin/login';
+    }
+</script>
+{% endblock %}
+
+{% block body %}
+<div class="header">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <h1>🔄 Residue Status</h1>
+            <p>View and manage ECM residue files from decoupled two-stage processing</p>
+        </div>
+        <button onclick="logout()" class="btn" style="background: #dc3545;">Logout</button>
+    </div>
+</div>
+
+<!-- Navigation Menu -->
+<div class="section">
+    <div class="section-content" style="padding: 10px 20px;">
+        <nav style="display: flex; gap: 15px; flex-wrap: wrap;">
+            <a href="/api/v1/admin/dashboard" class="btn">🏠 Main Dashboard</a>
+            <a href="/api/v1/admin/inactive-composites" class="btn">💤 Inactive Composites</a>
+            <a href="/api/v1/admin/outstanding-work" class="btn">⏳ Outstanding Work</a>
+            <a href="/api/v1/admin/recent-composites" class="btn">📅 Recent Composites</a>
+            <a href="/api/v1/admin/residue-status" class="btn" style="background: #6c757d; color: white;">🔄 Residue Status</a>
+        </nav>
+    </div>
+</div>
+
+<!-- Summary Stats -->
+<div class="section">
+    <div class="section-header">📊 Summary Statistics</div>
+    <div class="section-content">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+            <div>
+                <strong>Available:</strong> {{ stats.get('available', 0) }} residues
+            </div>
+            <div>
+                <strong>Claimed:</strong> {{ stats.get('claimed', 0) }} residues
+            </div>
+            <div>
+                <strong>Completed:</strong> {{ stats.get('completed', 0) }} residues
+            </div>
+            <div>
+                <strong>Expired:</strong> {{ stats.get('expired', 0) }} residues
+            </div>
+            <div>
+                <strong>Pending Curves:</strong> {{ "{:,}".format(stats.get('total_curves', 0)) }} curves
+            </div>
+        </div>
+        <div style="margin-top: 15px;">
+            <button onclick="cleanupExpired()" class="btn" style="background: #ffc107;">
+                🧹 Clean Up Expired Residues
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="section">
+    <div class="section-header">🔍 Filters</div>
+    <div class="section-content">
+        <form id="filter-form" onsubmit="applyFilters(event)" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+            <div>
+                <label>Status:</label>
+                <select id="status-filter" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <option value="">All Statuses</option>
+                    <option value="available" {{ 'selected' if filter_status == 'available' else '' }}>Available</option>
+                    <option value="claimed" {{ 'selected' if filter_status == 'claimed' else '' }}>Claimed</option>
+                    <option value="completed" {{ 'selected' if filter_status == 'completed' else '' }}>Completed</option>
+                    <option value="expired" {{ 'selected' if filter_status == 'expired' else '' }}>Expired</option>
+                </select>
+            </div>
+            <div>
+                <label>Client ID:</label>
+                <input type="text" id="client-id-filter" value="{{ filter_client_id or '' }}" placeholder="All clients" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+            <div>
+                <label>Composite ID:</label>
+                <input type="number" id="composite-id-filter" value="{{ filter_composite_id or '' }}" placeholder="All composites" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+            <div style="display: flex; flex-direction: column; justify-content: space-between;">
+                <label>
+                    <input type="checkbox" id="expiring-soon-filter" {{ 'checked' if filter_expiring_soon else '' }}>
+                    Expiring Soon (< 24h)
+                </label>
+                <div style="display: flex; gap: 10px; margin-top: auto;">
+                    <button type="submit" class="btn" style="background: #007bff;">Apply Filters</button>
+                    <button type="button" onclick="clearFilters()" class="btn">Clear</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Residues Table -->
+<div class="section">
+    <div class="section-header">🔄 ECM Residues</div>
+    <div class="section-content">
+        {% if residues %}
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Composite</th>
+                        <th>Status</th>
+                        <th>B1</th>
+                        <th>Param</th>
+                        <th>Curves</th>
+                        <th>File Size</th>
+                        <th>Uploaded By</th>
+                        <th>Claimed By</th>
+                        <th>Created</th>
+                        <th>Expires</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for residue in residues %}
+                    {% set composite = residue.composite %}
+                    {% set time_remaining = format_time(residue.expires_at, now) %}
+                    {% set is_expiring_soon = (residue.expires_at - now).total_seconds() < 86400 if residue.expires_at else False %}
+                    <tr>
+                        <td>{{ residue.id }}</td>
+                        <td>
+                            {% if composite %}
+                            <a href="/api/v1/admin/composites/{{ composite.id }}/details" class="number">
+                                {{ esc(format_composite(composite.number, 30)) }}
+                            </a>
+                            {% else %}
+                            <span class="small-text">Unknown</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="status-badge" style="padding: 4px 8px; border-radius: 4px; font-weight: bold;
+                                {% if residue.status == 'available' %}
+                                    background: #28a745; color: white;
+                                {% elif residue.status == 'claimed' %}
+                                    background: #ffc107; color: black;
+                                {% elif residue.status == 'completed' %}
+                                    background: #6c757d; color: white;
+                                {% elif residue.status == 'expired' %}
+                                    background: #dc3545; color: white;
+                                {% endif %}
+                            ">
+                                {{ residue.status }}
+                            </span>
+                        </td>
+                        <td>{{ "{:,}".format(residue.b1) if residue.b1 else 'N/A' }}</td>
+                        <td>{{ residue.parametrization if residue.parametrization is not none else 'N/A' }}</td>
+                        <td>{{ residue.curve_count if residue.curve_count else 'N/A' }}</td>
+                        <td>
+                            {% if residue.file_size_bytes %}
+                                {{ "%.1f" % (residue.file_size_bytes / 1024 / 1024) }} MB
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
+                        <td>{{ esc(residue.client_id) if residue.client_id else 'N/A' }}</td>
+                        <td>{{ esc(residue.claimed_by) if residue.claimed_by else '-' }}</td>
+                        <td>{{ residue.created_at.strftime('%Y-%m-%d %H:%M') if residue.created_at else 'N/A' }}</td>
+                        <td {% if is_expiring_soon %}style="color: #dc3545; font-weight: bold;"{% endif %}>
+                            {{ time_remaining }}
+                        </td>
+                        <td>
+                            {% if residue.status == 'claimed' %}
+                            <button onclick="releaseClaim({{ residue.id }})" class="btn" style="background: #ffc107; font-size: 0.85em;">
+                                Release
+                            </button>
+                            {% endif %}
+                            <button onclick="downloadResidue({{ residue.id }})" class="btn" style="font-size: 0.85em;">
+                                Download
+                            </button>
+                            <button onclick="deleteResidue({{ residue.id }})" class="btn" style="background: #dc3545; font-size: 0.85em;">
+                                Delete
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
+            <div>Showing {{ showing_from }}-{{ showing_to }} of {{ total }}</div>
+            <div style="display: flex; gap: 10px;">
+                {% if has_prev %}
+                <button onclick="navigatePage({{ offset - limit }})" class="btn">Previous</button>
+                {% endif %}
+                <span style="padding: 8px 16px;">Page {{ page }} of {{ total_pages }}</span>
+                {% if has_next %}
+                <button onclick="navigatePage({{ offset + limit }})" class="btn">Next</button>
+                {% endif %}
+            </div>
+        </div>
+
+        {% else %}
+        <p>No residues found matching the current filters.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function applyFilters(event) {
+    event.preventDefault();
+
+    const status = document.getElementById('status-filter').value;
+    const clientId = document.getElementById('client-id-filter').value;
+    const compositeId = document.getElementById('composite-id-filter').value;
+    const expiringSoon = document.getElementById('expiring-soon-filter').checked;
+
+    const params = new URLSearchParams();
+    params.set('limit', '{{ limit }}');
+    params.set('offset', '0'); // Reset to first page
+
+    if (status) params.set('status', status);
+    if (clientId) params.set('client_id', clientId);
+    if (compositeId) params.set('composite_id', compositeId);
+    if (expiringSoon) params.set('expiring_soon', 'true');
+
+    location.href = `/api/v1/admin/residue-status?${params.toString()}`;
+}
+
+function clearFilters() {
+    location.href = '/api/v1/admin/residue-status';
+}
+
+function releaseClaim(residueId) {
+    if (!confirm(`Release claim on residue ${residueId}? It will return to the available pool.`)) return;
+
+    fetchWithAuth(`/api/v1/residues/${residueId}/claim`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        alert(`Claim on residue ${residueId} released`);
+        location.reload();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to release claim');
+    });
+}
+
+function downloadResidue(residueId) {
+    window.location.href = `/api/v1/residues/${residueId}/download`;
+}
+
+function deleteResidue(residueId) {
+    if (!confirm(`Delete residue ${residueId}? This will remove the file and database record. This cannot be undone.`)) return;
+
+    fetchWithAuth(`/api/v1/admin/residues/${residueId}`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        alert(`Residue ${residueId} deleted`);
+        location.reload();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to delete residue');
+    });
+}
+
+function cleanupExpired() {
+    if (!confirm('Clean up all expired residues? This will delete expired residue files and database records.')) return;
+
+    fetchWithAuth('/api/v1/admin/residues/cleanup', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        alert(`Cleaned up ${data.cleaned_count} expired residue(s)`);
+        location.reload();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to clean up expired residues');
+    });
+}
+
+function navigatePage(newOffset) {
+    const params = new URLSearchParams(location.search);
+    params.set('offset', newOffset);
+    params.set('limit', '{{ limit }}');
+    location.href = `/api/v1/admin/residue-status?${params.toString()}`;
+}
+</script>
+{% endblock %}

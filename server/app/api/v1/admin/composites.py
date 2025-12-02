@@ -355,6 +355,42 @@ async def deactivate_composite(
     }
 
 
+@router.post("/composites/bulk-activate")
+async def bulk_activate_composites(
+    composite_ids: List[int],
+    db: Session = Depends(get_db),
+    composite_service: CompositeService = Depends(get_composite_service),
+    _admin: bool = Depends(verify_admin_key)
+):
+    """
+    Activate multiple composites at once.
+
+    Args:
+        composite_ids: List of composite IDs to activate
+
+    Returns:
+        Summary of activation results
+    """
+    activated = []
+    failed = []
+
+    with transaction_scope(db, "bulk_activate"):
+        for composite_id in composite_ids:
+            composite = composite_service.get_composite_by_id(db, composite_id)
+            if composite:
+                composite.is_active = True
+                activated.append(composite_id)
+            else:
+                failed.append(composite_id)
+
+    return {
+        "activated": activated,
+        "failed": failed,
+        "total_requested": len(composite_ids),
+        "total_activated": len(activated)
+    }
+
+
 @router.delete("/composites/{composite_id}")
 async def remove_composite(
     composite_id: int,

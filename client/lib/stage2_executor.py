@@ -170,14 +170,13 @@ class Stage2Executor:
         if self.b2 != -1:
             cmd.append(str(self.b2))
 
-        # Count total lines in this worker's chunk for progress reporting
+        # Count total lines in this worker's chunk for progress reporting and diagnostics
         total_lines = 0
-        if self.verbose:
-            try:
-                with open(chunk_file, 'r') as f:
-                    total_lines = sum(1 for _ in f)
-            except:
-                total_lines = 0
+        try:
+            with open(chunk_file, 'r') as f:
+                total_lines = sum(1 for _ in f)
+        except:
+            total_lines = 0
 
         # Initialize process to None in case exception occurs before Popen
         process = None
@@ -253,7 +252,7 @@ class Stage2Executor:
                 if total_lines > 0:
                     self.logger.warning(f"Worker {worker_id} stopped early at {curves_completed}/{total_lines} curves")
                 else:
-                    self.logger.warning(f"Worker {worker_id} stopped early at {curves_completed} curves (expected ~384)")
+                    self.logger.warning(f"Worker {worker_id} stopped early at {curves_completed} curves (expected count unknown)")
                 self.logger.debug(f"Worker {worker_id} output preview (first 500 chars):\n{full_output[:500]}")
                 self.logger.debug(f"Worker {worker_id} output preview (last 500 chars):\n{full_output[-500:]}")
 

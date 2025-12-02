@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+
+{% block title %}Outstanding Work - ECM Admin{% endblock %}
+
+{% block extra_head %}
+<script>
+    // Check if API key exists, redirect to login if not
+    if (!sessionStorage.getItem('admin_api_key')) {
+        window.location.href = '/api/v1/admin/login';
+    }
+
+    // Add API key to all fetch requests
+    function fetchWithAuth(url, options = {}) {
+        options.headers = options.headers || {};
+        options.headers['X-Admin-Key'] = sessionStorage.getItem('admin_api_key');
+        return fetch(url, options).then(response => {
+            if (response.status === 401) {
+                sessionStorage.removeItem('admin_api_key');
+                window.location.href = '/api/v1/admin/login';
+                throw new Error('Unauthorized');
+            }
+            return response;
+        });
+    }
+
+    // Logout function
+    function logout() {
+        sessionStorage.removeItem('admin_api_key');
+        window.location.href = '/api/v1/admin/login';
+    }
+</script>
+{% endblock %}
+
+{% block body %}
+<div class="header">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <h1>⏳ Outstanding Work Assignments</h1>
+            <p>Monitor and manage active work assignments across all clients</p>
+        </div>
+        <button onclick="logout()" class="btn" style="background: #dc3545;">Logout</button>
+    </div>
+</div>
+
+<!-- Navigation Menu -->
+<div class="section">
+    <div class="section-content" style="padding: 10px 20px;">
+        <nav style="display: flex; gap: 15px; flex-wrap: wrap;">
+            <a href="/api/v1/admin/dashboard" class="btn">🏠 Main Dashboard</a>
+            <a href="/api/v1/admin/inactive-composites" class="btn">💤 Inactive Composites</a>
+            <a href="/api/v1/admin/outstanding-work" class="btn" style="background: #6c757d; color: white;">⏳ Outstanding Work</a>
+            <a href="/api/v1/admin/recent-composites" class="btn">📅 Recent Composites</a>
+        </nav>
+    </div>
+</div>
+
+<!-- Summary Stats -->
+<div class="section">
+    <div class="section-header">📊 Summary</div>
+    <div class="section-content">
+        <p><strong>Total Outstanding Assignments:</strong> {{ total }}</p>
+        <p style="color: #666; font-style: italic;">
+            Work assignments with status: assigned, claimed, or running.
+        </p>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="section">
+    <div class="section-header">🔍 Filters</div>
+    <div class="section-content">
+        <form id="filter-form" onsubmit="applyFilters(event)" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+            <div>
+                <label>Client ID:</label>
+                <input type="text" id="client-id-filter" value="{{ filter_client_id or '' }}" placeholder="All clients" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+            <div>
+                <label>Status:</label>
+                <select id="status-filter" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <option value="">All Statuses</option>
+                    <option value="assigned" {{ 'selected' if filter_status == 'assigned' else '' }}>Assigned</option>
+                    <option value="claimed" {{ 'selected' if filter_status == 'claimed' else '' }}>Claimed</option>
+                    <option value="running" {{ 'selected' if filter_status == 'running' else '' }}>Running</option>
+                </select>
+            </div>
+            <div>
+                <label>Method:</label>
+                <select id="method-filter" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <option value="">All Methods</option>
+                    <option value="ecm" {{ 'selected' if filter_method == 'ecm' else '' }}>ECM</option>
+                    <option value="pm1" {{ 'selected' if filter_method == 'pm1' else '' }}>P-1</option>
+                    <option value="pp1" {{ 'selected' if filter_method == 'pp1' else '' }}>P+1</option>
+                </select>
+            </div>
+            <div style="display: flex; align-items: flex-end; gap: 10px;">
+                <button type="submit" class="btn" style="background: #007bff;">Apply Filters</button>
+                <button type="button" onclick="clearFilters()" class="btn">Clear</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Outstanding Work Table -->
+<div class="section">
+    <div class="section-header">⏳ Outstanding Work Assignments</div>
+    <div class="section-content">
+        {% if assignments %}
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Work ID</th>
+                        <th>Client</th>
+                        <th>Composite</th>
+                        <th>Digit Length</th>
+                        <th>T-Level Target</th>
+                        <th>Method</th>
+                        <th>B1/B2</th>
+                        <th>Status</th>
+                        <th>Expires</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for work in assignments %}
+                    {% set composite = work.composite %}
+                    {% set time_remaining = format_time(work.expires_at, now) %}
+                    <tr>
+                        <td><span class="small-text">{{ work.id[:8] }}...</span></td>
+                        <td>{{ esc(work.client_id) }}</td>
+                        <td>
+                            <a href="/api/v1/admin/composites/{{ composite.id }}/details" class="number">
+                                {{ esc(format_composite(composite.number, 30)) }}
+                            </a>
+                        </td>
+                        <td>{{ composite.digit_length }}</td>
+                        <td>
+                            {% if composite.target_t_level %}
+                            t{{ composite.current_t_level|round(1) }} → t{{ composite.target_t_level|round(1) }}
+                            {% else %}
+                            N/A
+                            {% endif %}
+                        </td>
+                        <td>{{ work.method.upper() }}</td>
+                        <td>
+                            B1={{ "{:,}".format(work.b1) }}
+                            {% if work.b2 %}, B2={{ "{:,}".format(work.b2) }}{% endif %}
+                        </td>
+                        <td><span class="{{ format_work_status(work.status) }}">{{ work.status }}</span></td>
+                        <td>{{ time_remaining }}</td>
+                        <td>
+                            <button onclick="expireWork('{{ work.id }}')" class="btn" style="background: #ffc107; font-size: 0.85em;">
+                                Expire
+                            </button>
+                            <button onclick="cancelWork('{{ work.id }}')" class="btn" style="background: #dc3545; font-size: 0.85em;">
+                                Cancel
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
+            <div>Showing {{ showing_from }}-{{ showing_to }} of {{ total }}</div>
+            <div style="display: flex; gap: 10px;">
+                {% if has_prev %}
+                <button onclick="navigatePage({{ offset - limit }})" class="btn">Previous</button>
+                {% endif %}
+                <span style="padding: 8px 16px;">Page {{ page }} of {{ total_pages }}</span>
+                {% if has_next %}
+                <button onclick="navigatePage({{ offset + limit }})" class="btn">Next</button>
+                {% endif %}
+            </div>
+        </div>
+
+        {% else %}
+        <p>No outstanding work assignments found.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function applyFilters(event) {
+    event.preventDefault();
+
+    const clientId = document.getElementById('client-id-filter').value;
+    const status = document.getElementById('status-filter').value;
+    const method = document.getElementById('method-filter').value;
+
+    const params = new URLSearchParams();
+    params.set('limit', '{{ limit }}');
+    params.set('offset', '0'); // Reset to first page
+
+    if (clientId) params.set('client_id', clientId);
+    if (status) params.set('status', status);
+    if (method) params.set('method', method);
+
+    location.href = `/api/v1/admin/outstanding-work?${params.toString()}`;
+}
+
+function clearFilters() {
+    location.href = '/api/v1/admin/outstanding-work';
+}
+
+function expireWork(workId) {
+    if (!confirm(`Mark work assignment ${workId.substring(0, 8)}... as expired?`)) return;
+
+    fetchWithAuth(`/api/v1/admin/work/assignments/${workId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'admin_expire_timeout' })
+    })
+    .then(response => response.json())
+    .then(data => {
+        alert('Work assignment expired');
+        location.reload();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to expire work assignment');
+    });
+}
+
+function cancelWork(workId) {
+    if (!confirm(`Cancel work assignment ${workId.substring(0, 8)}...?`)) return;
+
+    fetchWithAuth(`/api/v1/admin/work/assignments/${workId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'admin_cancel' })
+    })
+    .then(response => response.json())
+    .then(data => {
+        alert('Work assignment cancelled');
+        location.reload();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to cancel work assignment');
+    });
+}
+
+function navigatePage(newOffset) {
+    const params = new URLSearchParams(location.search);
+    params.set('offset', newOffset);
+    params.set('limit', '{{ limit }}');
+    location.href = `/api/v1/admin/outstanding-work?${params.toString()}`;
+}
+</script>
+{% endblock %}

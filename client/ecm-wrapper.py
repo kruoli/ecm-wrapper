@@ -22,7 +22,7 @@ from lib.cleanup_helpers import handle_shutdown
 from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
 from lib.ecm_math import (
     trial_division, is_probably_prime, calculate_tlevel,
-    get_b1_for_digit_length, get_optimal_b1_for_tlevel
+    calculate_curves_for_target, get_b1_for_digit_length, get_optimal_b1_for_tlevel
 )
 
 class ECMWrapper(BaseWrapper):
@@ -1149,45 +1149,6 @@ class ECMWrapper(BaseWrapper):
             pass
         return "unknown"
 
-    def _trial_division(self, n: int, limit: int = 10**7) -> Tuple[List[int], int]:
-        """
-        Fast trial division to find small prime factors.
-
-        Args:
-            n: Number to factor
-            limit: Trial division limit (default: 10^7)
-
-        Returns:
-            Tuple of (factors_found, cofactor)
-        """
-        factors = []
-        cofactor = n
-
-        # Trial division by 2
-        while cofactor % 2 == 0:
-            factors.append(2)
-            cofactor //= 2
-
-        # Trial division by 3
-        while cofactor % 3 == 0:
-            factors.append(3)
-            cofactor //= 3
-
-        # Trial division by 5
-        while cofactor % 5 == 0:
-            factors.append(5)
-            cofactor //= 5
-
-        # Trial division by odd numbers
-        i = 7
-        while i * i <= cofactor and i <= limit:
-            while cofactor % i == 0:
-                factors.append(i)
-                cofactor //= i
-            i += 2
-
-        return factors, cofactor
-
     def _fully_factor_found_result(self, factor: str, max_ecm_attempts: int = 5, quiet: bool = False) -> List[str]:
         """
         Recursively factor a result from ECM until all prime factors found.
@@ -1281,162 +1242,6 @@ class ECMWrapper(BaseWrapper):
             all_primes.append(str(current_cofactor))
 
         return all_primes
-
-    def _is_probably_prime(self, n: int, trials: int = 10) -> bool:
-        """
-        Miller-Rabin primality test.
-
-        Args:
-            n: Number to test
-            trials: Number of trials (default: 10)
-
-        Returns:
-            True if probably prime, False if definitely composite
-        """
-        if n < 2:
-            return False
-        if n == 2 or n == 3:
-            return True
-        if n % 2 == 0:
-            return False
-
-        # Write n-1 as 2^r * d
-        r, d = 0, n - 1
-        while d % 2 == 0:
-            r += 1
-            d //= 2
-
-        # Witness loop
-        import random
-        for _ in range(trials):
-            a = random.randrange(2, n - 1)
-            x = pow(a, d, n)
-
-            if x == 1 or x == n - 1:
-                continue
-
-            for _ in range(r - 1):
-                x = pow(x, 2, n)
-                if x == n - 1:
-                    break
-            else:
-                return False
-
-        return True
-
-    def _calculate_tlevel(self, curve_history: List[str]) -> float:
-        """
-        Call t-level binary to calculate current t-level.
-
-        Args:
-            curve_history: List of curve strings like "100@1000000,p=1"
-
-        Returns:
-            Current t-level as float
-        """
-        import re
-
-        if not curve_history:
-            return 0.0
-
-        tlevel_path = self.config.get('programs', {}).get('t_level', {}).get('path', 'bin/t-level')
-
-        # Join curve strings with semicolons
-        curve_input = ";".join(curve_history)
-
-        try:
-            # Call t-level binary
-            result = subprocess.run(
-                [tlevel_path, '-q', curve_input],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-
-            # Parse output: "t40.234"
-            match = re.search(r't([\d.]+)', result.stdout)
-            if match:
-                return float(match.group(1))
-
-            self.logger.warning(f"Failed to parse t-level from: {result.stdout}")
-            return 0.0
-
-        except Exception as e:
-            self.logger.error(f"Error calculating t-level: {e}")
-            return 0.0
-
-    def _calculate_curves_for_target(self, current_tlevel: float, target_tlevel: float, b1: int) -> Optional[int]:
-        """
-        Calculate exact number of curves needed to reach target t-level from current t-level.
-
-        Args:
-            current_tlevel: Current t-level (e.g., 25.084)
-            target_tlevel: Target t-level (e.g., 28.7)
-            b1: B1 value to use
-
-        Returns:
-            Number of curves needed, or None if calculation failed
-        """
-        import re
-        from lib.subprocess_utils import execute_subprocess_simple
-
-        tlevel_path = self.config.get('programs', {}).get('t_level', {}).get('path', 'bin/t-level')
-
-        try:
-            # Call t-level binary: t-level -w <current> -t <target> -b <b1>
-            stdout, _ = execute_subprocess_simple(
-                [tlevel_path, '-w', str(current_tlevel), '-t', str(target_tlevel), '-b', str(b1)],
-                timeout=10
-            )
-
-            # Parse output like:
-            # "Running the following will get you to t28.700:"
-            # "262@25e4"
-            lines = stdout.strip().split('\n')
-            for i, line in enumerate(lines):
-                if 'will get you to' in line:
-                    # Check next line for the recommendation
-                    if i + 1 < len(lines):
-                        next_line = lines[i + 1]
-                        match = re.search(r'(\d+)@', next_line)
-                        if match:
-                            return int(match.group(1))
-                # Also check if format is on same line
-                elif '@' in line and re.match(r'^\d+@', line.strip()):
-                    match = re.search(r'(\d+)@', line)
-                    if match:
-                        return int(match.group(1))
-
-            self.logger.warning(f"Failed to parse curve recommendation from t-level output: {stdout}")
-            return None
-
-        except Exception as e:
-            self.logger.error(f"Error calculating curves for target: {e}")
-            return None
-
-    def _get_b1_for_digit_length(self, digits: int) -> int:
-        """
-        Select appropriate B1 value based on digit length.
-        Uses GMP-ECM recommended parameters.
-
-        Args:
-            digits: Digit length of composite
-
-        Returns:
-            Recommended B1 value
-        """
-        # Based on GMP-ECM recommendations
-        if digits < 30: return 11000
-        elif digits < 40: return 50000
-        elif digits < 50: return 250000
-        elif digits < 60: return 1000000
-        elif digits < 70: return 3000000
-        elif digits < 80: return 11000000
-        elif digits < 90: return 43000000
-        elif digits < 100: return 110000000
-        elif digits < 110: return 260000000
-        elif digits < 120: return 850000000
-        else: return 2900000000
 
     def run_ecm_with_tlevel(self, composite: str, target_tlevel: float,
                            start_tlevel: float = 0.0,
@@ -1540,7 +1345,7 @@ class ECMWrapper(BaseWrapper):
             optimal_b1, _ = get_optimal_b1_for_tlevel(step_target)
 
             # Calculate exact curves needed to reach this step from current position
-            curves_needed = self._calculate_curves_for_target(current_t_level, step_target, optimal_b1)
+            curves_needed = calculate_curves_for_target(current_t_level, step_target, optimal_b1)
 
             if curves_needed is None or curves_needed <= 0:
                 self.logger.warning(f"Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, using Zimmermann estimate")

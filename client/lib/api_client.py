@@ -11,9 +11,10 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 
 import requests
+from .file_utils import save_json
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,42 @@ class APIClient:
         self.timeout = timeout
         self.retry_attempts = retry_attempts
         self.logger = logging.getLogger(f"{__name__}.APIClient")
+
+    def _retry_with_exponential_backoff(
+        self,
+        operation_name: str,
+        api_call_func: Callable[[], requests.Response]
+    ) -> Optional[requests.Response]:
+        """
+        Execute an API call with exponential backoff retry logic.
+
+        Args:
+            operation_name: Name of operation for logging
+            api_call_func: Function that makes the API call and returns response
+
+        Returns:
+            Response object if successful, None if all retries failed
+        """
+        for attempt in range(1, self.retry_attempts + 1):
+            try:
+                response = api_call_func()
+                response.raise_for_status()
+                self.logger.info(f"{operation_name} succeeded")
+                return response
+            except requests.RequestException as e:
+                if attempt < self.retry_attempts:
+                    delay = 2 ** attempt
+                    self.logger.warning(
+                        f"{operation_name} failed (attempt {attempt}/{self.retry_attempts}): {e}. "
+                        f"Retrying in {delay}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    self.logger.error(
+                        f"{operation_name} failed after {self.retry_attempts} attempts: {e}"
+                    )
+                    return None
+        return None
 
     def submit_result(
         self, payload: Dict[str, Any], save_on_failure: bool = True,
@@ -124,10 +161,6 @@ class APIClient:
             Path to saved file, or None if save failed
         """
         try:
-            # Create data directory if it doesn't exist
-            data_dir = Path(output_dir)
-            data_dir.mkdir(parents=True, exist_ok=True)
-
             # Create filename with timestamp and composite hash
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             composite = results.get('composite', 'unknown')
@@ -143,12 +176,11 @@ class APIClient:
                 'retry_count': self.retry_attempts
             }
 
-            filepath = data_dir / filename
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(save_data, f, indent=2)
-
-            self.logger.info(f"Saved failed submission to: {filepath}")
-            return str(filepath)
+            filepath = Path(output_dir) / filename
+            if save_json(filepath, save_data):
+                self.logger.info(f"Saved failed submission to: {filepath}")
+                return str(filepath)
+            return None
 
         except (OSError, IOError) as e:
             self.logger.error(f"Failed to save submission data - I/O error: {e}")
@@ -341,31 +373,11 @@ class APIClient:
         """
         url = f"{self.api_endpoint}/work/{work_id}/complete"
 
-        # Retry logic with exponential backoff (critical for releasing work claims)
-        for attempt in range(1, self.retry_attempts + 1):
-            try:
-                response = requests.post(
-                    url,
-                    params={'client_id': client_id},
-                    timeout=self.timeout
-                )
-                response.raise_for_status()
-                self.logger.info(f"Marked work {work_id} as complete")
-                return True
+        def api_call():
+            return requests.post(url, params={'client_id': client_id}, timeout=self.timeout)
 
-            except requests.exceptions.RequestException as e:
-                if attempt < self.retry_attempts:
-                    delay = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
-                    self.logger.warning(
-                        f"Failed to mark work {work_id} as complete (attempt {attempt}/{self.retry_attempts}): {e}. "
-                        f"Retrying in {delay}s..."
-                    )
-                    time.sleep(delay)
-                else:
-                    self.logger.error(f"Failed to mark work {work_id} as complete after {self.retry_attempts} attempts: {e}")
-                    return False
-
-        return False
+        response = self._retry_with_exponential_backoff(f"Mark work {work_id} as complete", api_call)
+        return response is not None
 
     def abandon_work(self, work_id: str, reason: str = "client_terminated", client_id: Optional[str] = None) -> bool:
         """
@@ -386,27 +398,11 @@ class APIClient:
         if client_id:
             params['client_id'] = client_id
 
-        # Retry logic with exponential backoff (critical for releasing work claims)
-        for attempt in range(1, self.retry_attempts + 1):
-            try:
-                response = requests.delete(url, params=params, timeout=self.timeout)
-                response.raise_for_status()
-                self.logger.info(f"Abandoned work {work_id} (reason: {reason})")
-                return True
+        def api_call():
+            return requests.delete(url, params=params, timeout=self.timeout)
 
-            except requests.exceptions.RequestException as e:
-                if attempt < self.retry_attempts:
-                    delay = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
-                    self.logger.warning(
-                        f"Failed to abandon work {work_id} (attempt {attempt}/{self.retry_attempts}): {e}. "
-                        f"Retrying in {delay}s..."
-                    )
-                    time.sleep(delay)
-                else:
-                    self.logger.error(f"Failed to abandon work {work_id} after {self.retry_attempts} attempts: {e}")
-                    return False
-
-        return False
+        response = self._retry_with_exponential_backoff(f"Abandon work {work_id}", api_call)
+        return response is not None
 
     # ==================== Residue Management Methods ====================
 
@@ -603,36 +599,11 @@ class APIClient:
         headers = {'X-Client-ID': client_id}
         payload = {'stage2_attempt_id': stage2_attempt_id}
 
-        # Retry logic with exponential backoff (critical for releasing residue claims)
-        for attempt in range(1, self.retry_attempts + 1):
-            try:
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=self.timeout
-                )
-                response.raise_for_status()
+        def api_call():
+            return requests.post(url, json=payload, headers=headers, timeout=self.timeout)
 
-                data = response.json()
-                self.logger.info(
-                    f"Completed residue {residue_id}: {data.get('message', 'Success')}"
-                )
-                return data
-
-            except requests.exceptions.RequestException as e:
-                if attempt < self.retry_attempts:
-                    delay = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
-                    self.logger.warning(
-                        f"Failed to complete residue {residue_id} (attempt {attempt}/{self.retry_attempts}): {e}. "
-                        f"Retrying in {delay}s..."
-                    )
-                    time.sleep(delay)
-                else:
-                    self.logger.error(f"Failed to complete residue {residue_id} after {self.retry_attempts} attempts: {e}")
-                    return None
-
-        return None
+        response = self._retry_with_exponential_backoff(f"Complete residue {residue_id}", api_call)
+        return response.json() if response else None
 
     def abandon_residue(self, client_id: str, residue_id: int) -> bool:
         """
@@ -649,24 +620,8 @@ class APIClient:
 
         headers = {'X-Client-ID': client_id}
 
-        # Retry logic with exponential backoff (critical for releasing residue claims)
-        for attempt in range(1, self.retry_attempts + 1):
-            try:
-                response = requests.delete(url, headers=headers, timeout=self.timeout)
-                response.raise_for_status()
-                self.logger.info(f"Released claim on residue {residue_id}")
-                return True
+        def api_call():
+            return requests.delete(url, headers=headers, timeout=self.timeout)
 
-            except requests.exceptions.RequestException as e:
-                if attempt < self.retry_attempts:
-                    delay = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
-                    self.logger.warning(
-                        f"Failed to release residue {residue_id} (attempt {attempt}/{self.retry_attempts}): {e}. "
-                        f"Retrying in {delay}s..."
-                    )
-                    time.sleep(delay)
-                else:
-                    self.logger.error(f"Failed to release residue {residue_id} after {self.retry_attempts} attempts: {e}")
-                    return False
-
-        return False
+        response = self._retry_with_exponential_backoff(f"Release residue {residue_id}", api_call)
+        return response is not None

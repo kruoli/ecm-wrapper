@@ -58,7 +58,10 @@
             <h1>🔄 Residue Status</h1>
             <p>View and manage ECM residue files from decoupled two-stage processing</p>
         </div>
-        <button onclick="logout()" class="btn" style="background: #dc3545;">Logout</button>
+        <div style="display: flex; gap: 10px;">
+            <button onclick="reloadWithAuth()" class="btn" style="background: #28a745;">🔄 Refresh</button>
+            <button onclick="logout()" class="btn" style="background: #dc3545;">Logout</button>
+        </div>
     </div>
 </div>
 
@@ -81,19 +84,19 @@
     <div class="section-content">
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
             <div>
-                <strong>Available:</strong> {{ stats.get('available', 0) }} residues
+                <strong>Available:</strong> {{ stats.get('total_available', 0) }} residues
             </div>
             <div>
-                <strong>Claimed:</strong> {{ stats.get('claimed', 0) }} residues
+                <strong>Claimed:</strong> {{ stats.get('total_claimed', 0) }} residues
             </div>
             <div>
-                <strong>Completed:</strong> {{ stats.get('completed', 0) }} residues
+                <strong>Completed:</strong> {{ stats.get('total_completed', 0) }} residues
             </div>
             <div>
-                <strong>Expired:</strong> {{ stats.get('expired', 0) }} residues
+                <strong>Expired:</strong> {{ stats.get('total_expired', 0) }} residues
             </div>
             <div>
-                <strong>Pending Curves:</strong> {{ "{:,}".format(stats.get('total_curves', 0)) }} curves
+                <strong>Pending Curves:</strong> {{ "{:,}".format(stats.get('total_curves_pending', 0)) }} curves
             </div>
         </div>
         <div style="margin-top: 15px;">
@@ -217,9 +220,6 @@
                                 Release
                             </button>
                             {% endif %}
-                            <button onclick="downloadResidue({{ residue.id }})" class="btn" style="font-size: 0.85em;">
-                                Download
-                            </button>
                             <button onclick="deleteResidue({{ residue.id }})" class="btn" style="background: #dc3545; font-size: 0.85em;">
                                 Delete
                             </button>
@@ -293,10 +293,6 @@ function releaseClaim(residueId) {
         console.error('Error:', error);
         alert('Failed to release claim');
     });
-}
-
-function downloadResidue(residueId) {
-    window.location.href = `/api/v1/residues/${residueId}/download`;
 }
 
 function deleteResidue(residueId) {

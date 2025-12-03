@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Tuple
 from collections import Counter
 
 from lib.base_wrapper import BaseWrapper
+from lib.ecm_math import trial_division
 import importlib.util
 
 # Import cado-wrapper.py
@@ -114,16 +115,37 @@ class AliquotWrapper(BaseWrapper):
         self.threads = threads
         self.verbose = verbose
 
-        # Initialize factorizers
-        self.cado = CADOWrapper(config_path)
-        self.ecm = ECMWrapper(config_path)
-        self.yafu = YAFUWrapper(config_path)
+        # Lazy initialization of factorizers (created on first access)
+        self._cado = None
+        self._ecm = None
+        self._yafu = None
 
         # Set primary factorizer
         if factorizer == 'hybrid':
             self.factorizer = None  # Will be selected dynamically
         else:
             self.factorizer = self.cado
+
+    @property
+    def cado(self):
+        """Lazy initialization of CADOWrapper."""
+        if self._cado is None:
+            self._cado = CADOWrapper(self.config_path)
+        return self._cado
+
+    @property
+    def ecm(self):
+        """Lazy initialization of ECMWrapper."""
+        if self._ecm is None:
+            self._ecm = ECMWrapper(self.config_path)
+        return self._ecm
+
+    @property
+    def yafu(self):
+        """Lazy initialization of YAFUWrapper."""
+        if self._yafu is None:
+            self._yafu = YAFUWrapper(self.config_path)
+        return self._yafu
 
     def parse_factorization(self, factors_found: List[str]) -> Dict[int, int]:
         """
@@ -206,49 +228,6 @@ class AliquotWrapper(BaseWrapper):
         # Always use hybrid strategy (trial division + progressive ECM + CADO if needed)
         return self._factor_hybrid(n, digit_length)
 
-    def _trial_division(self, n: int, limit: int = 10**7) -> Tuple[List[int], int]:
-        """
-        Fast trial division to find small prime factors.
-
-        Args:
-            n: Number to factor
-            limit: Trial division limit (default: 10^7)
-
-        Returns:
-            Tuple of (factors_found, cofactor)
-        """
-        factors = []
-        cofactor = n
-
-        # Trial division by 2
-        while cofactor % 2 == 0:
-            factors.append(2)
-            cofactor //= 2
-
-        # Trial division by 3
-        while cofactor % 3 == 0:
-            factors.append(3)
-            cofactor //= 3
-
-        # Trial division by 5
-        while cofactor % 5 == 0:
-            factors.append(5)
-            cofactor //= 5
-
-        # Trial division by odd numbers (wheel factorization: skip multiples of 2,3,5)
-        # This is faster than checking every number
-        i = 7
-        while i * i <= cofactor and i <= limit:
-            while cofactor % i == 0:
-                factors.append(i)
-                cofactor //= i
-            i += 2
-            # Skip multiples of 3 and 5
-            if i % 3 == 0 or i % 5 == 0:
-                continue
-
-        return factors, cofactor
-
     def _factor_hybrid(self, n: int, digit_length: int) -> Tuple[bool, Dict[int, int], Dict]:
         """
         Hybrid factorization: Trial division + ECM + SIQS/CADO-NFS.
@@ -276,7 +255,7 @@ class AliquotWrapper(BaseWrapper):
 
         # Step 0: Trial division with small primes (very fast)
         self.logger.info(f"Running trial division up to 10^7...")
-        trial_factors, current_composite = self._trial_division(current_composite)
+        trial_factors, current_composite = trial_division(current_composite)
         if trial_factors:
             self.logger.info(f"Trial division found {len(trial_factors)} small factor(s)")
             all_factors.extend([str(f) for f in trial_factors])

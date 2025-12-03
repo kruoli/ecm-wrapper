@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional, List, Callable
 
 from .config_manager import ConfigManager
 from .api_client import APIClient
+from .file_utils import save_json, load_json
 
 
 class BaseWrapper:
@@ -141,18 +142,10 @@ class BaseWrapper:
             f.write(f"{'='*80}\n\n")
 
         # Also write to JSON file
-        import json
         factors_json_file = Path("data/factors.json")
 
         # Load existing entries
-        if factors_json_file.exists():
-            with open(factors_json_file, 'r', encoding='utf-8') as f:
-                try:
-                    factors_data = json.load(f)
-                except json.JSONDecodeError:
-                    factors_data = []
-        else:
-            factors_data = []
+        factors_data = load_json(factors_json_file, default=[])
 
         # Create new entry
         entry = {
@@ -176,8 +169,7 @@ class BaseWrapper:
         factors_data.append(entry)
 
         # Write back to JSON file
-        with open(factors_json_file, 'w', encoding='utf-8') as f:
-            json.dump(factors_data, f, indent=2, ensure_ascii=False)
+        save_json(factors_json_file, factors_data)
 
         # Also log to console with highlight (unless quiet mode)
         if not quiet:
@@ -301,6 +293,17 @@ class BaseWrapper:
         """
         Unified subprocess execution with parsing for factorization programs.
 
+        This method provides comprehensive error handling for subprocess execution,
+        including timeout, I/O errors, and parsing errors. Subclasses should use
+        this method instead of reimplementing subprocess execution and error handling.
+
+        The method handles:
+        - Subprocess timeouts (subprocess.TimeoutExpired)
+        - Subprocess execution errors (subprocess.SubprocessError)
+        - I/O errors (OSError, IOError)
+        - Invalid parameters (ValueError)
+        - Unexpected errors (general Exception with traceback logging)
+
         Args:
             cmd: Command list to execute
             timeout: Timeout in seconds (None for no timeout)
@@ -308,6 +311,14 @@ class BaseWrapper:
             method: Method name (ecm, pm1, pp1, etc.)
             parse_function: Function to parse output (factor, sigma)
             **kwargs: Additional parameters for results
+
+        Returns:
+            Dictionary with standardized results including success status, factors,
+            execution time, and error details if applicable
+
+        Note:
+            Subclasses should NOT add redundant try/except blocks around calls to
+            this method, as all error cases are already handled internally.
         """
         from lib.subprocess_utils import execute_subprocess
 

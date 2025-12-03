@@ -38,6 +38,7 @@ ECMWrapper = ecm_wrapper_module.ECMWrapper
 
 # Import ResultProcessor for factor handling
 from lib.result_processor import ResultProcessor
+from lib.results_builder import ResultsBuilder
 
 
 class PipelineStats:
@@ -243,19 +244,16 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
                     # Stage 2 didn't run - report all Stage 1 curves
                     curves_to_report = curves
 
-                # Build results dict using wrapper's pattern
-                results = {
-                    'composite': number,
-                    'b1': b1_actual,
-                    'b2': actual_b2,  # Use actual_b2 (0 when factor found in stage 1)
-                    'curves_requested': curves_to_report,
-                    'curves_completed': curves_to_report,
-                    'method': 'ecm',
-                    'two_stage': True,
-                    'stage2_workers': stage2_workers,
-                    'execution_time': total_time,
-                    'raw_output': stage1_output  # Include actual stage 1 output
-                }
+                # Build results using ResultsBuilder
+                builder = (ResultsBuilder(number, method='ecm')
+                           .with_b1(b1_actual)
+                           .with_b2(actual_b2)  # Use actual_b2 (0 when factor found in stage 1)
+                           .with_curves(curves_to_report, curves_to_report)
+                           .as_two_stage()
+                           .as_stage2_workers(stage2_workers)
+                           .with_execution_time(total_time)
+                           .add_raw_output(stage1_output if stage1_output else ''))
+                results = builder._data.copy()  # Get mutable dict for ResultProcessor
 
                 # Handle factors found using ResultProcessor for consistency
                 if all_factors:
@@ -299,18 +297,14 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
                             cofactor = str(int(number) // int(stage2_factor))
 
                         logger.info(f"[CPU Thread] [{idx}/{total}] Submitting {stage1_only_curves} curves that completed Stage 1 only (B1={b1_actual}, B2=0) against cofactor")
-                        stage1_only_results = {
-                            'composite': cofactor,  # Use cofactor, not original number
-                            'b1': b1_actual,
-                            'b2': 0,  # Stage 1 only
-                            'curves_requested': stage1_only_curves,
-                            'curves_completed': stage1_only_curves,
-                            'factor_found': None,
-                            'raw_output': '',
-                            'method': 'ecm',
-                            'execution_time': total_time,
-                            'parametrization': parametrization
-                        }
+                        # Build stage1-only results using ResultsBuilder
+                        stage1_only_results = (ResultsBuilder(cofactor, method='ecm')  # Use cofactor, not original number
+                            .with_b1(b1_actual)
+                            .as_stage1_only()  # Sets b2=0
+                            .with_curves(stage1_only_curves, stage1_only_curves)
+                            .with_execution_time(total_time)
+                            .with_parametrization(parametrization)
+                            .build_no_truncate())
                         wrapper.submit_result(stage1_only_results, project, 'gmp-ecm-ecm')
 
             stats.increment_stage2()

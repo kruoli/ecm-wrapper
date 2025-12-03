@@ -61,11 +61,11 @@ class TestParseIntWithScientific(unittest.TestCase):
         """Test that negative numbers raise ArgumentTypeError."""
         with self.assertRaises(argparse.ArgumentTypeError) as cm:
             parse_int_with_scientific("-100")
-        self.assertIn("must be positive", str(cm.exception))
+        self.assertIn("must be -1 or positive", str(cm.exception))
 
         with self.assertRaises(argparse.ArgumentTypeError) as cm:
             parse_int_with_scientific("-1e6")
-        self.assertIn("must be positive", str(cm.exception))
+        self.assertIn("must be -1 or positive", str(cm.exception))
 
     def test_invalid_formats_raise_error(self):
         """Test that invalid formats raise ArgumentTypeError."""

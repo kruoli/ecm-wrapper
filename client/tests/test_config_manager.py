@@ -235,15 +235,14 @@ def test_file_not_found():
 def test_integration_with_base_wrapper():
     """Test that ConfigManager integrates correctly with BaseWrapper"""
     # This test verifies that the refactored BaseWrapper can load config
-    try:
-        # Import here to avoid issues if base_wrapper has problems
-        from base_wrapper import BaseWrapper
+    # Import here to avoid issues if base_wrapper has problems
+    from lib.base_wrapper import BaseWrapper
 
-        # Create a minimal valid config
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_file = Path(tmpdir) / 'client.yaml'
-            with open(config_file, 'w', encoding='utf-8') as f:
-                f.write("""
+    # Create a minimal valid config
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_file = Path(tmpdir) / 'client.yaml'
+        with open(config_file, 'w', encoding='utf-8') as f:
+            f.write("""
 client:
   username: testuser
   cpu_name: testcpu
@@ -265,19 +264,15 @@ logging:
   file: data/logs/test.log
 """)
 
-            # Try to initialize BaseWrapper with this config
-            # This will fail if ConfigManager integration is broken
-            wrapper = BaseWrapper(str(config_file))
+        # Try to initialize BaseWrapper with this config
+        # This will fail if ConfigManager integration is broken
+        wrapper = BaseWrapper(str(config_file))
 
-            assert wrapper.config is not None, "Config should be loaded"
-            assert wrapper.client_id == "testuser-testcpu", "Client ID should be constructed"
-            assert wrapper.api_endpoint == "http://localhost:8000", "API endpoint should be set"
+        assert wrapper.config is not None, "Config should be loaded"
+        assert wrapper.client_id == "testuser-testcpu", "Client ID should be constructed"
+        assert wrapper.api_endpoint == "http://localhost:8000", "API endpoint should be set"
 
-            print("✓ test_integration_with_base_wrapper passed")
-
-    except Exception as e:
-        print(f"✗ test_integration_with_base_wrapper failed: {e}")
-        pytest.fail("Test failed")
+        print("✓ test_integration_with_base_wrapper passed")
 
 
 def main():

@@ -388,6 +388,69 @@ Essential tables for ECM coordination:
   - Single execution path for all wrappers
   - Consistent error handling and timeout management
 
+### Results Dictionary Construction
+- **ResultsBuilder** (`client/lib/results_builder.py`): Unified builder for constructing ECM results dictionaries
+  - **Purpose**: Eliminates code duplication across 7+ construction sites
+  - **Pattern**: OOP builder with fluent API for method chaining
+  - **Benefits**: Single source of truth, standardized raw_output handling, improved maintainability
+
+**Usage examples:**
+```python
+from lib.results_builder import ResultsBuilder, results_for_ecm, results_for_stage1
+
+# Basic usage with method chaining
+results = (ResultsBuilder('123456789', 'ecm')
+           .with_b1(50000)
+           .with_b2(5000000)
+           .with_curves(100, 75)
+           .with_parametrization(3)
+           .with_execution_time(123.45)
+           .build())
+
+# Add factors with sigmas
+builder = ResultsBuilder('999', 'ecm')
+builder.with_factors([('123', '12345'), ('456', '67890')])
+results = builder.build()
+
+# Stage1-only mode
+results = results_for_stage1('123', b1=50000, curves=100, param=1).build()
+
+# Add raw output incrementally
+builder = ResultsBuilder('123', 'ecm')
+builder.add_raw_output('Line 1')
+builder.add_raw_output('Line 2')
+builder.add_raw_outputs(['Line 3', 'Line 4'])
+results = builder.build()  # Joins with '\n\n', truncates at 10k chars
+
+# Mutation-heavy code pattern (for gradual migration)
+builder = ResultsBuilder('123', 'ecm').with_b1(50000)
+results = builder._data.copy()  # Get mutable dict for legacy code
+# ... mutate results ...
+```
+
+**Key methods:**
+- `with_b1(b1)`, `with_b2(b2)` - Set bounds
+- `with_curves(requested, completed=0)` - Set curve counts
+- `with_factors(all_factors)` - Add list of `(factor, sigma)` tuples
+- `with_single_factor(factor, sigma=None)` - Add single factor
+- `add_raw_output(line)`, `add_raw_outputs(lines)` - Accumulate output lines
+- `with_parametrization(param)` - Set parametrization (0-3)
+- `with_execution_time(seconds)` - Set execution time
+- `as_stage1_only()` - Set b2=0 for stage1-only mode
+- `as_two_stage()` - Mark as two-stage execution
+- `as_multiprocess(workers)` - Mark as multiprocess execution
+- `build(truncate_output=10000)` - Build final dict with optional truncation
+- `build_no_truncate()` - Build with full raw output
+
+**Factory functions:**
+- `results_for_ecm(composite, b1, curves, param=None)` - Quick ECM results
+- `results_for_stage1(composite, b1, curves, param=None)` - Stage1-only results (b2=0)
+
+**Migration notes:**
+- **DEPRECATED**: `BaseWrapper.create_base_results()` - Use ResultsBuilder for new code
+- The deprecated method is maintained for backward compatibility with existing code
+- For mutation-heavy code, use `builder._data.copy()` pattern during migration
+
 ### Error Handling and Timeouts
 - **Subprocess timeouts**: 1 hour for ECM, 2-4 hours for YAFU operations
 - **API submission retries**: Exponential backoff with configurable attempts

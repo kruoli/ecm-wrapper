@@ -270,21 +270,32 @@ class BaseWrapper:
         return self.api_client.abandon_work(work_id, reason=reason, client_id=self.client_id)
 
     def create_base_results(self, composite: str, method: str = "ecm", **kwargs) -> Dict[str, Any]:
-        """Create standardized results dictionary."""
-        return {
-            'composite': composite,
-            'method': method,
-            'factor_found': None,
-            'factors_found': [],
-            'curves_completed': 0,
-            'curves_requested': kwargs.get('curves', 0),
-            'execution_time': 0,
-            'raw_output': '',
-            'b1': kwargs.get('b1'),
-            'b2': kwargs.get('b2'),
-            'sigma': kwargs.get('sigma'),
-            **kwargs
-        }
+        """
+        DEPRECATED: Use ResultsBuilder for new code.
+
+        Create standardized results dictionary.
+        Kept for backward compatibility with run_subprocess_with_parsing().
+        """
+        from lib.results_builder import ResultsBuilder
+
+        builder = ResultsBuilder(composite, method)
+
+        if 'b1' in kwargs:
+            builder.with_b1(kwargs['b1'])
+        if 'b2' in kwargs:
+            builder.with_b2(kwargs['b2'])
+        if 'curves' in kwargs:
+            builder.with_curves(kwargs['curves'])
+        if 'sigma' in kwargs:
+            builder.with_sigma(kwargs['sigma'])
+
+        # Add any extra kwargs to the data
+        results = builder.build_no_truncate()
+        for key, value in kwargs.items():
+            if key not in ['b1', 'b2', 'curves', 'sigma']:
+                results[key] = value
+
+        return results
 
     def run_subprocess_with_parsing(self, cmd: List[str], timeout: Optional[int],
                                   composite: str, method: str,

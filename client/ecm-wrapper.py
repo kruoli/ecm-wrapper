@@ -10,6 +10,7 @@ from lib.base_wrapper import BaseWrapper
 from lib.parsing_utils import parse_ecm_output_multiple, count_ecm_steps_completed, ECMPatterns
 from lib.residue_manager import ResidueFileManager
 from lib.result_processor import ResultProcessor
+from lib.results_builder import ResultsBuilder, results_for_stage1
 from lib.stage2_executor import Stage2Executor
 from lib.ecm_worker_process import run_worker_ecm_process
 from lib.ecm_arg_helpers import parse_sigma_arg, resolve_param, resolve_stage2_workers
@@ -220,22 +221,17 @@ class ECMWrapper(BaseWrapper):
 
         # Run ECM using optimized batch execution
         start_time = time.time()
-        results = {
-            'composite': composite,
-            'b1': b1,
-            'b2': b2,
-            'curves_requested': curves,
-            'curves_completed': 0,
-            'factor_found': None,
-            'raw_outputs': [],
-            'method': method
-        }
+        builder = (ResultsBuilder(composite, method=method)
+                   .with_b1(b1)
+                   .with_b2(b2)
+                   .with_curves(curves))
 
         # Use batch execution: run multiple curves in single subprocess call
         batch_size = min(curves, 50)  # Process in batches to reduce overhead
         curves_completed = 0
+        factor_found = False
 
-        while curves_completed < curves and not results['factor_found'] and not self.stop_event.is_set():
+        while curves_completed < curves and not factor_found and not self.stop_event.is_set():
             curves_this_batch = min(batch_size, curves - curves_completed)
 
             # Build proper command: ecm [options] -c curves B1 [B2]
@@ -266,39 +262,37 @@ class ECMWrapper(BaseWrapper):
                 )
 
                 stdout = '\n'.join(output_lines)
-                raw_outputs = cast(List[str], results['raw_outputs'])
-                raw_outputs.append(stdout)
+                builder.add_raw_output(stdout)
 
                 # Parse output for factors using multiple factor parsing
                 all_factors = parse_ecm_output_multiple(stdout)
                 if all_factors:
                     # Use precise curve count from output parsing
                     actual_curves = count_ecm_steps_completed(stdout)
-                    results['curves_completed'] = curves_completed + actual_curves
+                    curves_completed += actual_curves
+                    builder.with_curves(curves, curves_completed)
+
+                    # Add factors to builder
+                    builder.with_factors(all_factors)
+                    factor_found = True
 
                     # Handle all factors found (skip logging if quiet mode)
                     if not quiet:
+                        # Create temp results dict for logging
+                        temp_results = builder._data.copy()
                         program_name = f"GMP-ECM ({method.upper()})" + (" with GPU" if use_gpu else "")
-                        self._log_and_store_factors(all_factors, results, composite, b1, b2, curves, method, program_name)
-                    else:
-                        # Store factors without logging
-                        if 'factors_found' not in results:
-                            results['factors_found'] = []
-                        factors_list = cast(List[str], results['factors_found'])
-                        factors_list.extend([f[0] for f in all_factors])
-                        if not results.get('factor_found'):
-                            results['factor_found'] = all_factors[0][0]
+                        self._log_and_store_factors(all_factors, temp_results, composite, b1, b2, curves, method, program_name)
 
-                    self.logger.info(f"Factors found after {results['curves_completed']} curves")
+                    self.logger.info(f"Factors found after {curves_completed} curves")
 
                     if not continue_after_factor:
                         break
                     else:
                         self.logger.info("Continuing to process remaining curves due to --continue-after-factor flag")
-
-                # Update curves completed for this batch
-                curves_completed += curves_this_batch
-                results['curves_completed'] = curves_completed
+                else:
+                    # Update curves completed for this batch
+                    curves_completed += curves_this_batch
+                    builder.with_curves(curves, curves_completed)
 
             except subprocess.SubprocessError as e:
                 self.logger.error(f"Subprocess error in batch starting at curve {curves_completed + 1}: {e}")
@@ -310,27 +304,28 @@ class ECMWrapper(BaseWrapper):
                 self.logger.exception(f"Unexpected error in batch starting at curve {curves_completed + 1}: {e}")
                 break
 
-        results['execution_time'] = time.time() - start_time
-        raw_outputs_for_join = cast(List[str], results['raw_outputs'])
-        results['raw_output'] = '\n'.join(raw_outputs_for_join)
+        # Set execution time and build results
+        builder.with_execution_time(time.time() - start_time)
+
+        # Extract parametrization from raw output before building
+        parametrization = 3  # Default to param 3
+        # Get the raw output so far to extract parametrization
+        temp_raw_output = '\n\n'.join(builder._data.get('raw_output_lines', []))
+        sigma_match = ECMPatterns.SIGMA_COLON_FORMAT.search(temp_raw_output)
+        if sigma_match:
+            sigma_str = sigma_match.group(1)
+            if ':' in sigma_str:
+                parametrization = int(sigma_str.split(':')[0])
+        builder.with_parametrization(parametrization)
+
+        # Build the results dictionary
+        results = builder.build_no_truncate()
 
         # Final deduplication of factors found across all batches and full factorization
         if 'factors_found' in results and results['factors_found'] and not quiet:
             processor = ResultProcessor(self, composite, method, b1, b2, curves, f"GMP-ECM ({method.upper()})")
             factors_for_processing = cast(List[str], results['factors_found'])
             processor.fully_factor_and_store(factors_for_processing, results, quiet=False)
-
-        # Extract parametrization from raw output (look for "sigma=1:xxx" or "sigma=3:xxx")
-        if 'parametrization' not in results:
-            parametrization = 3  # Default to param 3
-            raw_output = cast(str, results.get('raw_output', ''))
-            # Look for sigma pattern in output
-            sigma_match = ECMPatterns.SIGMA_COLON_FORMAT.search(raw_output)
-            if sigma_match:
-                sigma_str = sigma_match.group(1)
-                if ':' in sigma_str:
-                    parametrization = int(sigma_str.split(':')[0])
-            results['parametrization'] = parametrization
 
         # Save raw output if configured
         if self.config['execution']['save_raw_output']:
@@ -359,18 +354,16 @@ class ECMWrapper(BaseWrapper):
         self.logger.info(f"Running two-stage ECM: {stage1_desc} stage 1 ({curves} curves) + {stage2_workers} CPU workers for stage 2")
 
         start_time = time.time()
-        results = {
-            'composite': composite,
-            'b1': b1,
-            'b2': b2,
-            'curves_requested': curves,
-            'curves_completed': 0,
-            'factor_found': None,
-            'raw_outputs': [],
-            'method': 'ecm',
-            'two_stage': True,
-            'stage2_workers': stage2_workers
-        }
+        # Use ResultsBuilder for initial results structure
+        builder = (ResultsBuilder(composite, method='ecm')
+                   .with_b1(b1)
+                   .with_b2(b2)
+                   .with_curves(curves)
+                   .as_two_stage()
+                   .as_stage2_workers(stage2_workers))
+        # Build initial results dict (will be updated throughout execution)
+        results = builder._data.copy()  # Use internal dict for mutation-heavy code
+        results['raw_outputs'] = []  # Temporary accumulator (for backward compat)
 
         # Initialize variables that may not be set in all code paths
         stage1_output = ""
@@ -549,82 +542,18 @@ class ECMWrapper(BaseWrapper):
                 exec_time = results.get('execution_time', 0)
                 exec_time_float = exec_time if isinstance(exec_time, float) else 0.0
 
-                stage1_only_results = self._build_stage1_results(
-                    composite=composite,  # Use original composite (main result not submitted yet)
-                    b1=b1,
-                    curves_requested=stage1_only_curves,
-                    curves_completed=stage1_only_curves,
-                    all_factors=all_stage1_factors,
-                    factor_found=stage1_factor if stage1_factor else None,
-                    raw_output=stage1_output if stage1_output else '',
-                    param=parametrization,
-                    execution_time=exec_time_float
-                )
+                stage1_only_results = (results_for_stage1(composite, b1, stage1_only_curves, parametrization)
+                    .with_curves(stage1_only_curves, stage1_only_curves)
+                    .with_factors(all_stage1_factors)
+                    .with_execution_time(exec_time_float)
+                    .add_raw_output(stage1_output if stage1_output else '')
+                    .build())
                 self.submit_result(stage1_only_results, project, 'gmp-ecm-ecm')
         else:
             # Stage 2 didn't run or completed all curves - use Stage 1 count
             results['curves_completed'] = actual_curves
 
         results['execution_time'] = time.time() - start_time
-
-        return results
-
-    def _build_stage1_results(
-        self,
-        composite: str,
-        b1: int,
-        curves_requested: int,
-        curves_completed: int,
-        all_factors: List[Tuple[str, Optional[str]]],
-        factor_found: Optional[str],
-        raw_output: str,
-        param: int,
-        execution_time: float = 0,
-        work_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Build standardized stage1 results dictionary.
-
-        This consolidates the logic for building stage1 results across all code paths
-        (two-stage, auto-work stage1-only, manual stage1-only).
-
-        Args:
-            composite: The composite number being factored
-            b1: B1 parameter used
-            curves_requested: Number of curves requested
-            curves_completed: Number of curves actually completed
-            all_factors: List of (factor, sigma) tuples found
-            factor_found: Primary factor found (or None)
-            raw_output: Raw ECM output (will be truncated to 10k chars)
-            param: Parametrization used (0-3)
-            execution_time: Execution time in seconds
-            work_id: Optional work assignment ID (for auto-work mode)
-
-        Returns:
-            Dictionary ready for submission via submit_result()
-        """
-        # Convert all_factors tuples to proper API format
-        factor_strings = [f[0] for f in all_factors] if all_factors else []
-        factor_sigmas_dict = {f[0]: f[1] for f in all_factors if f[1]} if all_factors else {}
-
-        results = {
-            'composite': composite,
-            'b1': b1,
-            'b2': 0,  # Stage 1 only (no stage 2)
-            'curves_requested': curves_requested,
-            'curves_completed': curves_completed,
-            'factors_found': factor_strings,
-            'factor_sigmas': factor_sigmas_dict,
-            'factor_found': factor_found,
-            'raw_output': raw_output[-10000:] if len(raw_output) > 10000 else raw_output,
-            'method': 'ecm',
-            'parametrization': param,
-            'execution_time': execution_time,
-        }
-
-        # Add work_id if provided (for auto-work mode failure recovery)
-        if work_id:
-            results['work_id'] = work_id
 
         return results
 
@@ -803,18 +732,15 @@ class ECMWrapper(BaseWrapper):
         self.logger.info(f"Running multi-process ECM: {workers} workers, {curves} total curves")
 
         start_time = time.time()
-        results = {
-            'composite': composite,
-            'b1': b1,
-            'b2': b2,
-            'curves_requested': curves,
-            'curves_completed': 0,
-            'factor_found': None,
-            'raw_outputs': [],
-            'method': method,
-            'multiprocess': True,
-            'workers': workers
-        }
+        # Use ResultsBuilder for initial results structure
+        builder = (ResultsBuilder(composite, method=method)
+                   .with_b1(b1)
+                   .with_b2(b2)
+                   .with_curves(curves)
+                   .as_multiprocess(workers))
+        # Build initial results dict (will be updated throughout execution)
+        results = builder._data.copy()  # Use internal dict for mutation-heavy code
+        results['raw_outputs'] = []  # Temporary accumulator (for backward compat)
 
         # Distribute curves across workers
         curves_per_worker = curves // workers
@@ -1065,20 +991,22 @@ class ECMWrapper(BaseWrapper):
 
         execution_time = time.time() - start_time
 
-        results = {
-            'residue_file': residue_file,
-            'composite': composite,
-            'b1': actual_b1,
-            'b2': b2,
-            'curves_requested': stage1_curves,  # Curves that were run in Stage 1
-            'curves_completed': stage1_curves,  # All Stage 1 curves were completed
-            'stage2_workers': stage2_workers,
-            'factor_found': factor_found,
-            'sigma': sigma_found,
-            'execution_time': execution_time,
-            'method': 'ecm',
-            'raw_output': ''  # Stage 2 only doesn't have single raw output
-        }
+        # Use ResultsBuilder for results construction
+        builder = (ResultsBuilder(composite, method='ecm')
+                   .with_b1(actual_b1)
+                   .with_b2(b2)
+                   .with_curves(stage1_curves, stage1_curves)
+                   .with_residue_file(residue_file)
+                   .as_stage2_workers(stage2_workers)
+                   .with_execution_time(execution_time))
+
+        if factor_found:
+            builder.with_single_factor(factor_found, sigma_found)
+
+        if sigma_found:
+            builder.with_sigma(sigma_found)
+
+        results = builder.build_no_truncate()
 
         if factor_found:
             self.logger.info(f"Factor found in Stage 2: {factor_found}")
@@ -1617,19 +1545,15 @@ def main():
                             current_work_id = None
                             continue
 
-                        # Build results using helper method
-                        results = wrapper._build_stage1_results(
-                            composite=composite,
-                            b1=args.b1,
-                            curves_requested=curves,
-                            curves_completed=actual_curves,
-                            all_factors=all_factors,
-                            factor_found=factor,
-                            raw_output=raw_output,
-                            param=param if param is not None else 3,
-                            execution_time=0,  # Will be filled by subprocess
-                            work_id=current_work_id  # For failed submission recovery
-                        )
+                        # Build results using ResultsBuilder
+                        builder = (results_for_stage1(composite, args.b1, curves, param if param is not None else 3)
+                            .with_curves(curves, actual_curves)
+                            .with_factors(all_factors)
+                            .add_raw_output(raw_output)
+                            .with_execution_time(0))  # Will be filled by subprocess
+                        if current_work_id:
+                            builder.with_work_id(current_work_id)  # For failed submission recovery
+                        results = builder.build()
 
                         # Submit stage 1 results and handle workflow
                         stage1_attempt_id = submit_stage1_complete_workflow(
@@ -2115,18 +2039,13 @@ def main():
             wrapper.logger.error("Stage 1 execution failed")
             sys.exit(1)
 
-        # Build results using helper method
-        results = wrapper._build_stage1_results(
-            composite=args.composite,
-            b1=args.b1,
-            curves_requested=args.curves,
-            curves_completed=actual_curves,
-            all_factors=all_factors,
-            factor_found=factor,
-            raw_output=raw_output,
-            param=param if param is not None else 3,
-            execution_time=0
-        )
+        # Build results using ResultsBuilder
+        results = (results_for_stage1(args.composite, args.b1, args.curves, param if param is not None else 3)
+            .with_curves(args.curves, actual_curves)
+            .with_factors(all_factors)
+            .add_raw_output(raw_output)
+            .with_execution_time(0)
+            .build())
 
         # Submit stage 1 results
         if not args.no_submit:

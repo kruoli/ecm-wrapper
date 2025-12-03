@@ -8,6 +8,7 @@ This class eliminates ~80 lines of duplicated factor processing logic across:
 - ECMWrapper.run_ecm_multiprocess() (composite factor handling)
 """
 from typing import List, Tuple, Optional, Dict, Any, TYPE_CHECKING
+from lib.ecm_math import is_probably_prime
 
 if TYPE_CHECKING:
     from ecm_wrapper import ECMWrapper
@@ -151,7 +152,7 @@ class ResultProcessor:
             cofactor_digits = len(str(cofactor))
 
             # Test if cofactor is prime
-            if self.wrapper._is_probably_prime(cofactor):
+            if is_probably_prime(cofactor):
                 self.logger.info(f"Remaining cofactor {cofactor} is prime")
                 all_prime_factors.append(str(cofactor))
                 cofactor_primes.append(str(cofactor))

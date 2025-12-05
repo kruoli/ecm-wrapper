@@ -54,7 +54,6 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     parser.add_argument('--curves', '-c', type=int, help='Number of curves')
     parser.add_argument('--tlevel', '-t', type=float, help='Target t-level (alternative to --curves, runs ECM iteratively)')
     parser.add_argument('--start-tlevel', type=float, help='Starting t-level (for resuming, requires --tlevel)')
-    parser.add_argument('--batch-size', type=int, default=100, help='Batch size for t-level mode (default: 100)')
     parser.add_argument('--project', '-p', help='Project name')
     parser.add_argument('--no-submit', action='store_true', help='Do not submit to API')
 

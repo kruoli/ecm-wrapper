@@ -181,7 +181,7 @@ def test_default_parametrization():
 
 
 def test_integration_with_base_wrapper():
-    """Test that APIClient integrates with BaseWrapper"""
+    """Test that APIClient integrates with BaseWrapper (with lazy loading)"""
     try:
         from lib.base_wrapper import BaseWrapper
 
@@ -212,7 +212,11 @@ logging:
 
             wrapper = BaseWrapper(str(config_file))
 
+            # API clients are lazily loaded, so initialize them first
+            wrapper._ensure_api_clients()
+
             assert hasattr(wrapper, 'api_client'), "Should have api_client attribute"
+            assert wrapper.api_client is not None, "API client should be initialized"
             assert wrapper.api_client.api_endpoint == "http://localhost:8000"
             assert wrapper.api_client.timeout == 30
             assert wrapper.api_client.retry_attempts == 3
@@ -221,7 +225,7 @@ logging:
 
     except Exception as e:
         print(f"✗ test_integration_with_base_wrapper failed: {e}")
-        pytest.fail("Test failed")
+        raise  # Re-raise instead of calling pytest.fail()
 
 
 def main():

@@ -38,6 +38,7 @@ YAFUWrapper = yafu_module.YAFUWrapper
 sys.path.insert(0, str(client_dir))
 
 from lib.parsing_utils import parse_yafu_ecm_output, parse_yafu_auto_factors
+from lib.ecm_config import ECMConfig
 
 
 class TestFactorizationParsing(unittest.TestCase):
@@ -96,16 +97,17 @@ class TestFactorizationParsing(unittest.TestCase):
         print("Testing GMP-ECM factorization...")
         print("="*80)
 
-        # Run ECM with moderate B1 (should find all factors)
-        results = self.ecm.run_ecm(
+        # Run ECM with moderate B1 (should find all factors) - using v2 API
+        config = ECMConfig(
             composite=self.test_composite,
             b1=1000000,  # 1M should be enough
             curves=100,
             verbose=False
         )
+        result = self.ecm.run_ecm_v2(config)
 
-        # Get factors
-        factors_found = results.get('factors_found', [])
+        # Get factors from FactorResult
+        factors_found = result.factors
 
         self.assertGreater(len(factors_found), 0, "ECM should find at least one factor")
 
@@ -231,6 +233,51 @@ P31 = 1040100281593968479843247348533
         self.verify_factorization(factors_found, "YAFU Parser Multiplicity Test")
 
         print(f"✓ YAFU parser correctly preserved multiplicities: {len(factors_found)} total factors")
+
+    def test_pm1_method(self):
+        """Test that --method pm1 actually runs P-1 (not ECM)."""
+        print("\n" + "="*80)
+        print("Testing P-1 method selection...")
+        print("="*80)
+
+        # Small composite that P-1 can factor: 12345678901 = 3 × 857 × 14405693
+        # 857 - 1 = 856 = 2^3 × 107 (smooth, good for P-1)
+        pm1_composite = "12345678901"
+
+        # Run with method='pm1' using v2 API
+        config = ECMConfig(
+            composite=pm1_composite,
+            b1=50,
+            b2=500,
+            curves=1,
+            method='pm1',  # This is the key - should run P-1 not ECM
+            verbose=False
+        )
+        result = self.ecm.run_ecm_v2(config)
+
+        # Check that we got a result
+        self.assertIsNotNone(result, "P-1 should return a result")
+
+        # Check raw output contains [P-1] not [ECM]
+        # This verifies GMP-ECM actually ran in P-1 mode
+        self.assertIn('[P-1]', result.raw_output,
+                     "Output should contain [P-1] marker, indicating P-1 mode was used")
+        self.assertNotIn('[ECM]', result.raw_output,
+                        "Output should NOT contain [ECM] marker when running P-1")
+
+        # P-1 should find the factor 857 (or possibly all factors)
+        if result.factors:
+            print(f"✓ P-1 found factor(s): {result.factors}")
+            # Verify at least one valid factor was found
+            for factor in result.factors:
+                factor_int = int(factor)
+                self.assertEqual(int(pm1_composite) % factor_int, 0,
+                               f"Factor {factor} should divide {pm1_composite}")
+        else:
+            # P-1 might not always find factors with these small bounds
+            print("✓ P-1 ran successfully (no factors found with these bounds)")
+
+        print(f"✓ Confirmed: method='pm1' runs P-1, not ECM")
 
 
 def main():

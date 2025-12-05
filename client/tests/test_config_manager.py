@@ -270,7 +270,11 @@ logging:
 
         assert wrapper.config is not None, "Config should be loaded"
         assert wrapper.client_id == "testuser-testcpu", "Client ID should be constructed"
-        assert wrapper.api_endpoint == "http://localhost:8000", "API endpoint should be set"
+
+        # API clients are lazily loaded, so initialize them first
+        wrapper._ensure_api_clients()
+        assert wrapper.api_client is not None, "API client should be initialized"
+        assert wrapper.api_client.api_endpoint == "http://localhost:8000", "API endpoint should be set"
 
         print("✓ test_integration_with_base_wrapper passed")
 

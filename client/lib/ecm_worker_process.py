@@ -74,6 +74,12 @@ class ECMWorkerProcess:
         if self.verbose:
             cmd.append('-v')
 
+        # Stop on first factor found (ECM only)
+        # This makes each worker stop when IT finds a factor, saving compute.
+        # The stop_event mechanism handles stopping OTHER workers.
+        if self.method == "ecm":
+            cmd.append('-one')
+
         # Run specified number of curves
         cmd.extend(['-c', str(self.curves), str(self.b1)])
         if self.b2 is not None:

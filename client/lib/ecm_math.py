@@ -161,61 +161,83 @@ def calculate_tlevel(curve_history: List[str], tlevel_binary: str = 'bin/t-level
         return 0.0
 
 
-def calculate_curves_for_target(current_tlevel: float, target_tlevel: float,
-                                b1: int, tlevel_binary: str = 'bin/t-level') -> Optional[int]:
-    """
-    Calculate exact number of curves needed to reach target t-level.
+# Cached table for standard t-level transitions (5-digit increments)
+# Format: (from_t, to_t, param): (b1, curves_needed)
+# Calculated using t-level binary: t-level -w <from> -t <to> -b <optimal_b1> -p <param>
+# Parametrization matters: p=1 (CPU) vs p=3 (GPU) give different t-levels for same curves!
+TLEVEL_TRANSITION_CACHE = {
+    # Parametrization 1 (CPU - Montgomery curves)
+    (0, 20, 1): (11000, 107),      # t0 → t20: 107 curves at B1=11000, p=1
+    (20, 25, 1): (50000, 261),     # t20 → t25: 261 curves at B1=50000, p=1
+    (25, 30, 1): (250000, 513),    # t25 → t30: 513 curves at B1=250000, p=1
+    (30, 35, 1): (1000000, 1071),  # t30 → t35: 1071 curves at B1=1000000, p=1
+    (35, 40, 1): (3000000, 2753),  # t35 → t40: 2753 curves at B1=3000000, p=1
+    (40, 45, 1): (11000000, 5208), # t40 → t45: 5208 curves at B1=11000000, p=1
+    (45, 50, 1): (43000000, 8704), # t45 → t50: 8704 curves at B1=43000000, p=1
 
-    Uses binary search with the t-level calculator to find the precise
-    number of curves required.
+    # Parametrization 3 (GPU - Twisted Edwards curves)
+    (0, 20, 3): (11000, 109),      # t0 → t20: 109 curves at B1=11000, p=3
+    (20, 25, 3): (50000, 266),     # t20 → t25: 266 curves at B1=50000, p=3
+    (25, 30, 3): (250000, 523),    # t25 → t30: 523 curves at B1=250000, p=3
+    (30, 35, 3): (1000000, 1092),  # t30 → t35: 1092 curves at B1=1000000, p=3
+    (35, 40, 3): (3000000, 2807),  # t35 → t40: 2807 curves at B1=3000000, p=3
+    (40, 45, 3): (11000000, 5311), # t40 → t45: 5311 curves at B1=11000000, p=3
+    (45, 50, 3): (43000000, 8875), # t45 → t50: 8875 curves at B1=43000000, p=3
+}
+
+
+def calculate_curves_to_target_direct(current_tlevel: float, target_tlevel: float,
+                                      b1: int, parametrization: int = 1,
+                                      tlevel_binary: str = 'bin/t-level') -> Optional[int]:
+    """
+    Use t-level binary to calculate exact curves needed to reach target.
+
+    Calls t-level with -w (current work), -t (target), -b (B1), and -p (param)
+    to get the precise number of curves required.
 
     Args:
-        current_tlevel: Current t-level (e.g., 25.084)
-        target_tlevel: Target t-level (e.g., 28.7)
+        current_tlevel: Current t-level (e.g., 19.94)
+        target_tlevel: Target t-level (e.g., 20.0)
         b1: B1 parameter for curves
+        parametrization: ECM parametrization (0-4, default 1)
         tlevel_binary: Path to t-level executable
 
     Returns:
         Number of curves needed, or None if target already reached
 
     Example:
-        >>> curves = calculate_curves_for_target(25.0, 30.0, 50000)
+        >>> curves = calculate_curves_to_target_direct(19.94, 20.0, 11000, 1)
         >>> curves is not None and curves > 0
         True
     """
     if current_tlevel >= target_tlevel:
         return None
 
-    # Binary search for exact curve count
-    low, high = 1, 100000
-    best_curves = None
+    try:
+        # Call t-level binary with suggestion options
+        stdout, _ = execute_subprocess_simple(
+            [tlevel_binary, '-w', str(current_tlevel), '-t', str(target_tlevel),
+             '-b', str(b1), '-p', str(parametrization)],
+            timeout=10
+        )
 
-    while low <= high:
-        mid = (low + high) // 2
+        # Parse output: "Running the following will get you to tXX.XXX:\n250@50e3"
+        # or just "250@50e3"
+        match = re.search(r'(\d+)@', stdout)
+        if match:
+            return int(match.group(1))
 
-        # Test this curve count
-        test_history = [f"{mid}@{b1},p=1"]  # Parametrization 1 (most common)
-        test_tlevel = calculate_tlevel(test_history, tlevel_binary)
+        logger.warning("Failed to parse curve suggestion from t-level: %s", stdout)
+        return None
 
-        # Adjust combined t-level (approximation: t-levels add linearly for rough estimate)
-        combined_tlevel = current_tlevel + test_tlevel
-
-        if abs(combined_tlevel - target_tlevel) < 0.1:
-            # Close enough
-            return mid
-
-        if combined_tlevel < target_tlevel:
-            low = mid + 1
-        else:
-            best_curves = mid
-            high = mid - 1
-
-    return best_curves if best_curves else low
+    except (FileNotFoundError, ValueError) as e:
+        logger.error("Error calculating curves with t-level binary: %s", e)
+        return None
 
 
 def get_b1_for_digit_length(digits: int) -> int:
     """
-    Get recommended B1 parameter based on composite digit length.
+    Get recommended B1 value based on number of digits.
 
     Based on standard ECM parameter recommendations from GMP-ECM.
 

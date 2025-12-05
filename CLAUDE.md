@@ -376,6 +376,138 @@ Essential tables for ECM coordination:
 
 ## Client Implementation Details
 
+### V2 API (Config-Based Architecture)
+
+The ECM wrapper uses a modern config-based API (v2) with typed configuration objects and strongly-typed return values:
+
+#### Configuration Classes (`lib/ecm_config.py`)
+
+**ECMConfig** - Standard ECM execution:
+```python
+from lib.ecm_config import ECMConfig
+
+config = ECMConfig(
+    composite="123456789012345",
+    b1=50000,
+    b2=5000000,         # Optional, None = GMP-ECM default
+    curves=100,
+    sigma=None,          # Optional: int or "3:N" string format
+    parametrization=1,   # 1=CPU (Montgomery), 3=GPU (Twisted Edwards)
+    threads=1,
+    verbose=False,
+    timeout=3600,
+    use_gpu=False,       # Auto-sets parametrization=3 if True
+    method="ecm"         # 'ecm', 'pm1', 'pp1'
+)
+
+result = wrapper.run_ecm_v2(config)
+```
+
+**TwoStageConfig** - GPU stage 1 + CPU stage 2:
+```python
+from lib.ecm_config import TwoStageConfig
+
+config = TwoStageConfig(
+    composite="123456789012345",
+    b1=110000000,
+    b2=11000000000000,
+    stage1_curves=3000,
+    stage2_curves_per_residue=1000,
+    stage1_parametrization=3,  # GPU
+    stage2_parametrization=1,  # CPU
+    threads=8,                  # Stage 2 workers
+    save_residues="residues/output.txt",  # Optional path
+    no_submit=False             # For testing
+)
+
+result = wrapper.run_two_stage_v2(config)
+```
+
+**MultiprocessConfig** - Parallel CPU workers:
+```python
+from lib.ecm_config import MultiprocessConfig
+
+config = MultiprocessConfig(
+    composite="123456789012345",
+    b1=50000,
+    total_curves=1000,
+    curves_per_process=100,
+    num_processes=8,       # Auto-detects CPU count if None
+    parametrization=1,     # CPU only
+    verbose=False
+)
+
+result = wrapper.run_multiprocess_v2(config)
+```
+
+**TLevelConfig** - Progressive t-level targeting:
+```python
+from lib.ecm_config import TLevelConfig
+
+config = TLevelConfig(
+    composite="123456789012345",
+    target_t_level=35.0,
+    b1_strategy="optimal",  # 'optimal', 'conservative', 'aggressive'
+    parametrization=1,       # Auto-switches to 3 if use_two_stage=True
+    threads=1,               # workers=8 for multiprocess
+    use_two_stage=False,     # Enable GPU two-stage mode
+    project="my-project",    # For API submission
+    no_submit=False,
+    work_id=None             # For auto-work batch submissions
+)
+
+result = wrapper.run_tlevel_v2(config)
+```
+
+#### FactorResult Return Type (`lib/ecm_config.py:166`)
+
+All v2 methods return a `FactorResult` object instead of a dictionary:
+
+```python
+from lib.ecm_config import FactorResult
+
+result = wrapper.run_ecm_v2(config)
+
+# Access results
+print(f"Success: {result.success}")           # bool
+print(f"Factors: {result.factors}")           # List[str]
+print(f"Sigmas: {result.sigmas}")             # List[Optional[str]]
+print(f"Curves: {result.curves_run}")         # int
+print(f"Time: {result.execution_time:.2f}s")  # float
+print(f"Output: {result.raw_output}")         # Optional[str]
+
+# Get factor/sigma pairs
+for factor, sigma in result.factor_sigma_pairs:
+    print(f"Factor {factor} found with sigma {sigma}")
+
+# Add factors programmatically
+result.add_factor("123", "3:12345")
+```
+
+#### Key Benefits of V2 API
+
+- **Type safety**: Config validation at construction time
+- **Cleaner interfaces**: 4 parameters vs 10-15 function arguments
+- **Single source of truth**: All methods use `_execute_ecm_primitive()`
+- **Strongly typed returns**: `FactorResult` vs untyped dicts
+- **Easier testing**: Config objects are easy to construct and validate
+
+#### T-Level Calculation Details
+
+T-level mode uses a hybrid approach for optimal performance:
+
+1. **Cached transitions** (`lib/ecm_math.py:168`): Standard 5-digit increments (t20→t25, t25→t30, etc.)
+   - Separate caches for parametrization 1 (CPU) and 3 (GPU)
+   - Example: `(20, 25, 1): (50000, 261)` means 261 curves at B1=50000 for CPU
+
+2. **Direct t-level binary calls**: Non-standard targets (e.g., t35→t38.75)
+   - Uses `calculate_curves_to_target_direct()` with `-w`, `-t`, `-b`, `-p` flags
+   - Exact calculations from the t-level binary itself
+
+3. **Parametrization awareness**: p=1 (CPU) and p=3 (GPU) give different t-levels for same curves
+   - 107 curves @ B1=11000, p=1 → t20.012
+   - 109 curves @ B1=11000, p=3 → t20.012 (requires more curves)
+
 ### Output Parsing
 - **ECM**: Multiple factor detection with prime factor filtering using `parse_ecm_output_multiple()` (lib/parsing_utils.py:61)
   - Pattern: `r'Factor found in step \d+: (\d+)'`

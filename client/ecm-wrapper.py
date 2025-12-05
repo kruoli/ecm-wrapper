@@ -4,36 +4,48 @@ import time
 import sys
 import signal
 import threading
+import hashlib
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple, Union, cast
+from typing import Optional, Dict, Any, List, Tuple, Union, Callable
 from lib.base_wrapper import BaseWrapper
-from lib.parsing_utils import parse_ecm_output_multiple, count_ecm_steps_completed, ECMPatterns
+from lib.parsing_utils import ECMPatterns
 from lib.residue_manager import ResidueFileManager
 from lib.result_processor import ResultProcessor
-from lib.results_builder import ResultsBuilder, results_for_stage1
+from lib.results_builder import results_for_stage1
 from lib.stage2_executor import Stage2Executor
 from lib.ecm_worker_process import run_worker_ecm_process
 from lib.ecm_arg_helpers import parse_sigma_arg, resolve_param, resolve_stage2_workers
 from lib.work_helpers import print_work_header, print_work_status, request_ecm_work
-from lib.stage1_helpers import submit_stage1_complete_workflow, handle_stage1_failure
+from lib.stage1_helpers import submit_stage1_complete_workflow
 from lib.error_helpers import handle_work_failure, check_work_limit_reached
 from lib.cleanup_helpers import handle_shutdown
 
 # New modularized utilities
 from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
 from lib.ecm_math import (
-    trial_division, is_probably_prime, calculate_tlevel,
-    calculate_curves_for_target, get_b1_for_digit_length, get_optimal_b1_for_tlevel
+    trial_division, is_probably_prime, get_b1_for_digit_length
 )
 
 class ECMWrapper(BaseWrapper):
+    """
+    Wrapper for GMP-ECM factorization with multiple execution modes.
+
+    Supports:
+    - Standard ECM execution (run_ecm_v2)
+    - Two-stage GPU/CPU pipeline (run_two_stage_v2)
+    - Multiprocess parallelization (run_multiprocess_v2)
+    - Progressive t-level targeting (run_tlevel_v2)
+    - Server-coordinated auto-work mode
+
+    All methods use type-safe configuration objects (ECMConfig, TwoStageConfig, etc.)
+    and return FactorResult objects with discovered factors and metadata.
+    """
+
     def __init__(self, config_path: str):
         super().__init__(config_path)
         self.residue_manager = ResidueFileManager()
         # Initialize new executor for config-based methods
-        from lib.ecm_executor import ECMExecutor
-        self.executor = ECMExecutor(self.config, self.run_subprocess_with_parsing)
-        # Graceful shutdown support
+                # Graceful shutdown support
         self.stop_event = threading.Event()
         self.interrupted = False
 
@@ -47,6 +59,11 @@ class ECMWrapper(BaseWrapper):
         This is the new, recommended method that uses ECMConfig dataclass.
         It has better type safety, validation, and testability.
 
+        Delegates to run_multiprocess_v2 with num_processes=1, which provides:
+        - Automatic stop on first factor found
+        - Accurate curve counting (not just requested count)
+        - Proven, well-tested implementation
+
         Args:
             config: ECM configuration object
 
@@ -59,7 +76,18 @@ class ECMWrapper(BaseWrapper):
             >>> if result.success:
             ...     print(f"Found factors: {result.factors}")
         """
-        return self.executor.execute_ecm_batch(config)
+        # Delegate to multiprocess with 1 worker for proper factor detection and curve counting
+        mp_config = MultiprocessConfig(
+            composite=config.composite,
+            b1=config.b1,
+            b2=config.b2,
+            total_curves=config.curves,
+            curves_per_process=config.curves,
+            num_processes=1,
+            method=config.method,
+            verbose=config.verbose
+        )
+        return self.run_multiprocess_v2(mp_config)
 
     def run_ecm_from_dict(self, params: Dict[str, Any]) -> FactorResult:
         """
@@ -90,11 +118,13 @@ class ECMWrapper(BaseWrapper):
 
         Args:
             config: Two-stage configuration object
+                   - If config.resume_file is provided, skip stage 1 and process existing residue
 
         Returns:
             FactorResult with discovered factors
 
         Example:
+            >>> # Full two-stage pipeline
             >>> config = TwoStageConfig(
             ...     composite="12345...",
             ...     b1=50000,
@@ -102,10 +132,95 @@ class ECMWrapper(BaseWrapper):
             ...     stage2_curves_per_residue=1000
             ... )
             >>> result = wrapper.run_two_stage_v2(config)
+            >>>
+            >>> # Resume from existing residue (stage 2 only)
+            >>> config = TwoStageConfig(
+            ...     composite="12345...",
+            ...     b1=50000,
+            ...     resume_file="path/to/residue.txt"
+            ... )
+            >>> result = wrapper.run_two_stage_v2(config)
         """
-        from lib.ecm_pipeline import TwoStagePipeline
-        pipeline = TwoStagePipeline(config, self)
-        return pipeline.execute()
+        start_time = time.time()
+
+        # Check if resuming from existing residue file
+        if config.resume_file:
+            residue_file = Path(config.resume_file)
+            if not residue_file.exists():
+                self.logger.error(f"Resume file not found: {residue_file}")
+                result = FactorResult()
+                result.success = False
+                result.execution_time = time.time() - start_time
+                return result
+
+            # Parse residue file for metadata
+            residue_info = self._parse_residue_file(residue_file)
+            _composite = residue_info['composite']
+            stage1_curves = residue_info['curve_count']
+            stage1_b1 = residue_info['b1']
+
+            # Use B1 from residue file if available
+            if stage1_b1 > 0:
+                if stage1_b1 != config.b1:
+                    self.logger.info(f"Using B1={stage1_b1} from residue file (overriding config B1={config.b1})")
+                actual_b1 = stage1_b1
+            else:
+                actual_b1 = config.b1
+
+            self.logger.info(f"Resuming from residue file: {residue_file}")
+            self.logger.info(f"Stage 1 completed {stage1_curves} curves at B1={actual_b1}")
+
+            # Skip stage 1, go directly to stage 2
+            stage1_result = None
+        else:
+            # Normal flow: Setup residue file and run stage 1
+            residue_file = self._create_residue_path(config)
+            actual_b1 = config.b1
+            stage1_curves = 0
+
+            # Stage 1: GPU execution
+            stage1_result = self._run_stage1_primitive(
+                composite=config.composite,
+                b1=config.b1,
+                curves=config.stage1_curves,
+                residue_file=residue_file,
+                use_gpu=(config.stage1_device == "GPU"),
+                param=config.stage1_parametrization,
+                verbose=config.verbose,
+                timeout=config.timeout_stage1
+            )
+
+            # Early return if factor found in stage 1
+            if stage1_result['factors']:
+                return self._build_factor_result(stage1_result, start_time)
+
+            # Skip stage 2 if b2=0 (stage 1 only mode)
+            if config.b2 == 0:
+                self.logger.info("B2=0: Skipping stage 2 (stage 1 only mode)")
+                return self._build_factor_result(stage1_result, start_time)
+
+            stage1_curves = stage1_result.get('curves_run', 0)
+
+        # Stage 2: Multi-threaded CPU processing
+        # _run_stage2_multithread returns: (factor, all_factors, curves_completed, execution_time, sigma)
+        _factor, all_factors, curves_completed, _stage2_time, sigma = self._run_stage2_multithread(
+            residue_file=residue_file,
+            b1=actual_b1,
+            b2=config.b2 or (actual_b1 * 100),  # Default B2
+            workers=config.threads,
+            verbose=config.verbose
+        )
+
+        # Build FactorResult from stage 2 results
+        result = FactorResult()
+        if all_factors:
+            for f in all_factors:
+                result.add_factor(f, sigma)
+        result.curves_run = curves_completed
+        result.execution_time = time.time() - start_time
+        result.success = len(all_factors) > 0
+
+        return result
 
     def run_multiprocess_v2(self, config: MultiprocessConfig) -> FactorResult:
         """
@@ -128,9 +243,87 @@ class ECMWrapper(BaseWrapper):
             ... )
             >>> result = wrapper.run_multiprocess_v2(config)
         """
-        from lib.ecm_pipeline import MultiprocessPipeline
-        pipeline = MultiprocessPipeline(config, self)
-        return pipeline.execute()
+        import multiprocessing as mp
+
+        # Ensure num_processes is set (should be auto-set in __post_init__)
+        num_processes = config.num_processes or mp.cpu_count()
+
+        self.logger.info(f"Running multi-process ECM: {num_processes} workers, {config.total_curves} total curves")
+        start_time = time.time()
+
+        # Distribute curves across workers
+        curves_per_worker = config.total_curves // num_processes
+        remaining_curves = config.total_curves % num_processes
+        worker_assignments = []
+
+        for worker_id in range(num_processes):
+            worker_curves = curves_per_worker + (1 if worker_id < remaining_curves else 0)
+            if worker_curves > 0:
+                worker_assignments.append((worker_id + 1, worker_curves))
+
+        # Create shared variables for worker coordination
+        manager = mp.Manager()
+        result_queue = manager.Queue()
+        progress_queue = manager.Queue()
+        stop_event = manager.Event()
+
+        # Start worker processes
+        processes = []
+        for worker_id, worker_curves in worker_assignments:
+            p = mp.Process(
+                target=run_worker_ecm_process,
+                args=(worker_id, config.composite, config.b1, config.b2, worker_curves,
+                      config.verbose, config.method, self.config['programs']['gmp_ecm']['path'],
+                      result_queue, stop_event, 0, progress_queue)
+            )
+            p.start()
+            processes.append(p)
+
+        # Collect results from workers
+        all_factors = []
+        all_sigmas = []
+        all_raw_outputs = []
+        total_curves_completed = 0
+        completed_workers = 0
+
+        while completed_workers < len(processes):
+            try:
+                result = result_queue.get(timeout=0.5)
+                total_curves_completed += result['curves_completed']
+
+                if result['factor_found']:
+                    all_factors.append(result['factor_found'])
+                    all_sigmas.append(result.get('sigma_found'))
+                    self.logger.info(f"Worker {result['worker_id']} found factor: {result['factor_found']}")
+                    stop_event.set()  # Signal workers to stop on factor found
+
+                # Collect raw output from each worker
+                if 'raw_output' in result:
+                    all_raw_outputs.append(f"=== Worker {result['worker_id']} ===\n{result['raw_output']}")
+
+                completed_workers += 1
+            except:
+                # Check if processes are still alive
+                if not any(p.is_alive() for p in processes):
+                    break
+                continue
+
+        # Wait for all processes to finish
+        for p in processes:
+            p.join(timeout=5)
+            if p.is_alive():
+                p.terminate()
+
+        # Build FactorResult
+        result = FactorResult()
+        for factor, sigma in zip(all_factors, all_sigmas):
+            result.add_factor(factor, sigma)
+        result.curves_run = total_curves_completed
+        result.execution_time = time.time() - start_time
+        result.success = len(all_factors) > 0
+        result.raw_output = '\n\n'.join(all_raw_outputs) if all_raw_outputs else None
+
+        return result
 
     def run_tlevel_v2(self, config: TLevelConfig) -> FactorResult:
         """
@@ -152,9 +345,149 @@ class ECMWrapper(BaseWrapper):
             ... )
             >>> result = wrapper.run_tlevel_v2(config)
         """
-        from lib.ecm_pipeline import TLevelPipeline
-        pipeline = TLevelPipeline(config, self)
-        return pipeline.execute()
+        from lib.ecm_math import (get_optimal_b1_for_tlevel, calculate_tlevel,
+                                  calculate_curves_to_target_direct, TLEVEL_TRANSITION_CACHE)
+
+        self.logger.info(f"Starting progressive ECM with target t{config.target_t_level:.1f}")
+        start_time = time.time()
+
+        # Accumulated results
+        all_factors = []
+        all_sigmas = []
+        total_curves = 0
+        curve_history = []  # Track B1 values and curves for t-level calculation
+
+        # Progressive loop: start at t20 and work up to target
+        current_t_level = 0.0
+        step_targets = []
+
+        # Build step targets (every 5 t-levels from 20 to target, plus final target)
+        t = 20.0
+        while t < config.target_t_level:
+            step_targets.append(t)
+            t += 5.0
+        # Always add the final target (might not be a multiple of 5)
+        if config.target_t_level not in step_targets:
+            step_targets.append(config.target_t_level)
+
+        # Run ECM at each step
+        for step_target in step_targets:
+            # Get optimal B1 for this t-level
+            b1, _ = get_optimal_b1_for_tlevel(step_target)
+
+            # Calculate curves needed to reach this step from current position
+            # First try the cached table for standard 5-digit increments
+            current_rounded = round(current_t_level)
+            target_rounded = round(step_target)
+            cache_key = (current_rounded, target_rounded, config.parametrization)
+
+            if cache_key in TLEVEL_TRANSITION_CACHE:
+                # Use cached value for standard transition
+                cached_b1, curves = TLEVEL_TRANSITION_CACHE[cache_key]
+                if cached_b1 == b1:  # Only use cache if B1 matches
+                    self.logger.info(f"Using cached transition: t{current_rounded} → t{target_rounded} = {curves} curves at B1={b1}, p={config.parametrization}")
+                else:
+                    # B1 doesn't match, call binary
+                    curves = calculate_curves_to_target_direct(current_t_level, step_target, b1, config.parametrization)
+            else:
+                # Non-standard transition, call t-level binary directly
+                curves = calculate_curves_to_target_direct(current_t_level, step_target, b1, config.parametrization)
+
+            if curves is None or curves <= 0:
+                self.logger.warning(f"Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, using Zimmermann estimate")
+                # Fallback to Zimmermann table estimate
+                _, curves = get_optimal_b1_for_tlevel(step_target)
+
+            self.logger.info(f"Running {curves} curves at B1={b1} (targeting t{step_target:.1f}, currently at t{current_t_level:.2f})")
+
+            # Run this batch (use multiprocess if workers > 1)
+            if config.threads > 1:
+                # Multiprocess mode
+                self.logger.info(f"Using multiprocess mode with {config.threads} workers")
+                step_result = self.run_multiprocess_v2(MultiprocessConfig(
+                    composite=config.composite,
+                    b1=b1,
+                    total_curves=curves,
+                    num_processes=config.threads,
+                    parametrization=config.parametrization,
+                    verbose=config.verbose,
+                    timeout=config.timeout
+                ))
+            else:
+                # Single process mode
+                step_result = self.run_ecm_v2(ECMConfig(
+                    composite=config.composite,
+                    b1=b1,
+                    curves=curves,
+                    parametrization=config.parametrization,
+                    threads=1,
+                    verbose=config.verbose,
+                    timeout=config.timeout
+                ))
+
+            # Accumulate results
+            all_factors.extend(step_result.factors)
+            all_sigmas.extend(step_result.sigmas)
+            total_curves += step_result.curves_run
+
+            # Track curve history for t-level calculation (format: "curves@b1,p=parametrization")
+            curve_history.append(f"{step_result.curves_run}@{b1},p={config.parametrization}")
+
+            # Submit this batch's results if enabled
+            if not config.no_submit and step_result.curves_run > 0:
+                step_results = {
+                    'success': True,
+                    'factors_found': step_result.factors,
+                    'curves_completed': step_result.curves_run,
+                    'execution_time': step_result.execution_time,
+                    'raw_output': step_result.raw_output,
+                    'composite': config.composite,
+                    'method': 'ecm',
+                    'b1': b1,
+                    'b2': None  # T-level mode uses default B2
+                }
+                if config.work_id:
+                    step_results['work_id'] = config.work_id
+
+                program_name = 'gmp-ecm-ecm'
+                submit_response = self.submit_result(step_results, config.project, program_name)
+                if not submit_response:
+                    self.logger.warning(f"Failed to submit results for B1={b1}")
+
+            # Break if factor found
+            if step_result.factors:
+                self.logger.info(f"Factor found after {total_curves} curves")
+                # Build and return result immediately
+                result = FactorResult()
+                for factor, sigma in zip(all_factors, all_sigmas):
+                    result.add_factor(factor, sigma)
+                result.curves_run = total_curves
+                result.execution_time = time.time() - start_time
+                result.success = True
+                return result
+
+            # Update current t-level after this batch
+            try:
+                current_t_level = calculate_tlevel(curve_history)
+                self.logger.info(f"Current t-level: {current_t_level:.2f}")
+            except:
+                # If t-level calculation fails, approximate it
+                current_t_level = step_target
+
+            # Check if we've reached overall target
+            if current_t_level >= config.target_t_level:
+                self.logger.info(f"Reached target t-level: {current_t_level:.2f} >= {config.target_t_level:.1f}")
+                break
+
+        # Build final FactorResult
+        result = FactorResult()
+        for factor, sigma in zip(all_factors, all_sigmas):
+            result.add_factor(factor, sigma)
+        result.curves_run = total_curves
+        result.execution_time = time.time() - start_time
+        result.success = len(all_factors) > 0
+
+        return result
 
     # ==================== LEGACY METHODS (BACKWARD COMPATIBLE) ====================
 
@@ -181,381 +514,325 @@ class ECMWrapper(BaseWrapper):
         processor = ResultProcessor(self, composite, method, b1, b2, curves, program)
         return processor.log_and_store_factors(all_factors, results, quiet=False)
 
-    def run_ecm(self, composite: str, b1: int, b2: Optional[int] = None,
-                curves: int = 100, sigma: Optional[Union[str, int]] = None,
-                param: Optional[int] = None,
-                use_gpu: bool = False, gpu_device: Optional[int] = None,
-                gpu_curves: Optional[int] = None, verbose: bool = False,
-                method: str = "ecm", continue_after_factor: bool = False,
-                quiet: bool = False, progress_interval: int = 0) -> Dict[str, Any]:
-        """Run GMP-ECM or P-1 and capture output"""
+    # ==================== PRIMITIVE ECM EXECUTION ====================
+    # Core primitive that all execution methods build upon
+
+    def _execute_ecm_primitive(
+        self,
+        composite: str,
+        b1: int,
+        b2: Optional[int] = None,
+        curves: int = 1,
+        # Stage separation
+        residue_save: Optional[Path] = None,
+        residue_load: Optional[Path] = None,
+        # ECM parameters
+        sigma: Optional[Union[str, int]] = None,
+        param: Optional[int] = None,
+        method: str = "ecm",
+        # GPU support
+        use_gpu: bool = False,
+        gpu_device: Optional[int] = None,
+        gpu_curves: Optional[int] = None,
+        # Progress and control
+        progress_callback: Optional[Callable[[str, List[str]], None]] = None,
+        stop_on_factor: bool = True,
+        # Execution
+        verbose: bool = False,
+        timeout: int = 3600
+    ) -> Dict[str, Any]:
+        """
+        Execute GMP-ECM primitive operation.
+
+        Single source of truth for all ECM execution. Handles 3 modes:
+        1. Full ECM (B1 + B2) - default
+        2. Stage 1 only - when residue_save is set
+        3. Stage 2 only - when residue_load is set
+
+        Args:
+            composite: Number to factor
+            b1: B1 bound
+            b2: B2 bound (None = GMP-ECM default, 0 = stage1 only)
+            curves: Number of curves to run
+            residue_save: Path to save residue file (stage 1 only)
+            residue_load: Path to load residue from (stage 2 only)
+            sigma: Sigma value
+            param: Parametrization (0-3)
+            method: Method ("ecm", "pm1", "pp1")
+            use_gpu: Use GPU acceleration
+            gpu_device: GPU device number
+            gpu_curves: Curves per GPU batch
+            progress_callback: Called for each output line with (line, all_lines)
+            stop_on_factor: Stop when first factor found
+            verbose: Verbose output
+            timeout: Execution timeout in seconds
+
+        Returns:
+            {
+                'success': bool,
+                'factors': List[str],
+                'sigmas': List[Optional[str]],
+                'curves_completed': int,
+                'raw_output': str,
+                'parametrization': Optional[int],
+                'exit_code': int,
+                'interrupted': bool
+            }
+        """
         ecm_path = self.config['programs']['gmp_ecm']['path']
 
-        # Build command base (without -c parameter, which will be added per batch)
-        cmd_base = [ecm_path]
+        # Build command
+        cmd = [ecm_path]
 
-        # Add method-specific parameters
+        # Method-specific flags
         if method == "pm1":
-            cmd_base.append('-pm1')
+            cmd.append('-pm1')
         elif method == "pp1":
-            cmd_base.append('-pp1')
-        # Default is ECM, no flag needed
+            cmd.append('-pp1')
 
-        if use_gpu and method == "ecm":  # GPU only works with ECM
-            cmd_base.append('-gpu')
+        # GPU flags (must come early)
+        if use_gpu and method == "ecm":
+            cmd.append('-gpu')
             if gpu_device is not None:
-                cmd_base.extend(['-gpudevice', str(gpu_device)])
+                cmd.extend(['-gpudevice', str(gpu_device)])
             if gpu_curves is not None:
-                cmd_base.extend(['-gpucurves', str(gpu_curves)])
+                cmd.extend(['-gpucurves', str(gpu_curves)])
+
+        # Residue operations
+        if residue_save:
+            cmd.extend(['-save', str(residue_save)])
+        if residue_load:
+            cmd.extend(['-resume', str(residue_load)])
+
+        # Verbosity
         if verbose:
-            cmd_base.append('-v')
-        if param is not None and method == "ecm":  # Param only applies to ECM
-            cmd_base.extend(['-param', str(param)])
-        if sigma and method == "ecm":  # Sigma only applies to ECM
-            cmd_base.extend(['-sigma', str(sigma)])
+            cmd.append('-v')
 
-        # B1 and B2 will be added after -c parameter
+        # Parametrization (ECM only)
+        if param is not None and method == "ecm":
+            cmd.extend(['-param', str(param)])
 
-        method_name = method.upper() if method != "ecm" else "ECM"
-        self.logger.info(f"Running {method_name} on {len(composite)}-digit number with B1={b1}, curves={curves}")
+        # Sigma (ECM only)
+        if sigma and method == "ecm":
+            cmd.extend(['-sigma', str(sigma)])
 
-        # Run ECM using optimized batch execution
-        start_time = time.time()
-        builder = (ResultsBuilder(composite, method=method)
-                   .with_b1(b1)
-                   .with_b2(b2)
-                   .with_curves(curves))
+        # Curves
+        cmd.extend(['-c', str(curves)])
 
-        # Use batch execution: run multiple curves in single subprocess call
-        batch_size = min(curves, 50)  # Process in batches to reduce overhead
-        curves_completed = 0
-        factor_found = False
+        # B1 parameter
+        cmd.append(str(b1))
 
-        while curves_completed < curves and not factor_found and not self.stop_event.is_set():
-            curves_this_batch = min(batch_size, curves - curves_completed)
+        # B2 parameter
+        if b2 is not None:
+            cmd.append(str(b2))
 
-            # Build proper command: ecm [options] -c curves B1 [B2]
-            batch_cmd = cmd_base + ['-c', str(curves_this_batch), str(b1)]
-            if b2 is not None:
-                batch_cmd.append(str(b2))
-
-            try:
-                # Track progress in callback
-                batch_curves_completed = 0
-                last_progress_report = 0
-
-                def progress_callback(line, output_lines):
-                    nonlocal batch_curves_completed, last_progress_report
-                    if "Step 1 took" in line:
-                        batch_curves_completed += 1
-                        total_completed = curves_completed + batch_curves_completed
-                        # Report progress based on progress_interval setting
-                        interval = progress_interval if progress_interval > 0 else 10
-                        if total_completed - last_progress_report >= interval:
-                            percentage = (total_completed / curves * 100) if curves > 0 else 0
-                            self.logger.info(f"Progress: {total_completed}/{curves} curves ({percentage:.1f}%)")
-                            last_progress_report = total_completed
-
-                # Stream subprocess output
-                _, output_lines = self._stream_subprocess_output(
-                    batch_cmd, composite, "ECM", progress_callback
-                )
-
-                stdout = '\n'.join(output_lines)
-                builder.add_raw_output(stdout)
-
-                # Parse output for factors using multiple factor parsing
-                all_factors = parse_ecm_output_multiple(stdout)
-                if all_factors:
-                    # Use precise curve count from output parsing
-                    actual_curves = count_ecm_steps_completed(stdout)
-                    curves_completed += actual_curves
-                    builder.with_curves(curves, curves_completed)
-
-                    # Add factors to builder
-                    builder.with_factors(all_factors)
-                    factor_found = True
-
-                    # Handle all factors found (skip logging if quiet mode)
-                    if not quiet:
-                        # Create temp results dict for logging
-                        temp_results = builder._data.copy()
-                        program_name = f"GMP-ECM ({method.upper()})" + (" with GPU" if use_gpu else "")
-                        self._log_and_store_factors(all_factors, temp_results, composite, b1, b2, curves, method, program_name)
-
-                    self.logger.info(f"Factors found after {curves_completed} curves")
-
-                    if not continue_after_factor:
-                        break
-                    else:
-                        self.logger.info("Continuing to process remaining curves due to --continue-after-factor flag")
-                else:
-                    # Update curves completed for this batch
-                    curves_completed += curves_this_batch
-                    builder.with_curves(curves, curves_completed)
-
-            except subprocess.SubprocessError as e:
-                self.logger.error(f"Subprocess error in batch starting at curve {curves_completed + 1}: {e}")
-                break
-            except (OSError, IOError) as e:
-                self.logger.error(f"I/O error in batch starting at curve {curves_completed + 1}: {e}")
-                break
-            except Exception as e:
-                self.logger.exception(f"Unexpected error in batch starting at curve {curves_completed + 1}: {e}")
-                break
-
-        # Set execution time and build results
-        builder.with_execution_time(time.time() - start_time)
-
-        # Extract parametrization from raw output before building
-        parametrization = 3  # Default to param 3
-        # Get the raw output so far to extract parametrization
-        temp_raw_output = '\n\n'.join(builder._data.get('raw_output_lines', []))
-        sigma_match = ECMPatterns.SIGMA_COLON_FORMAT.search(temp_raw_output)
-        if sigma_match:
-            sigma_str = sigma_match.group(1)
-            if ':' in sigma_str:
-                parametrization = int(sigma_str.split(':')[0])
-        builder.with_parametrization(parametrization)
-
-        # Build the results dictionary
-        results = builder.build_no_truncate()
-
-        # Final deduplication of factors found across all batches and full factorization
-        if 'factors_found' in results and results['factors_found'] and not quiet:
-            processor = ResultProcessor(self, composite, method, b1, b2, curves, f"GMP-ECM ({method.upper()})")
-            factors_for_processing = cast(List[str], results['factors_found'])
-            processor.fully_factor_and_store(factors_for_processing, results, quiet=False)
-
-        # Save raw output if configured
-        if self.config['execution']['save_raw_output']:
-            self.save_raw_output(results, f'gmp-ecm-{method}')
-
-        return results
-
-    def run_ecm_two_stage(self, composite: str, b1: int, b2: Optional[int] = None,
-                         curves: int = 100, sigma: Optional[Union[str, int]] = None,
-                         param: Optional[int] = None,
-                         use_gpu: bool = True,
-                         stage2_workers: int = 4, verbose: bool = False,
-                         save_residues: Optional[str] = None,
-                         resume_residues: Optional[str] = None,
-                         gpu_device: Optional[int] = None,
-                         gpu_curves: Optional[int] = None,
-                         continue_after_factor: bool = False,
-                         progress_interval: int = 0,
-                         project: Optional[str] = None,
-                         no_submit: bool = False) -> Dict[str, Any]:
-        """Run ECM using two-stage approach: GPU stage 1 + multi-threaded CPU stage 2"""
-
-        # Note: B2 can be None to use GMP-ECM defaults
-
-        stage1_desc = "GPU" if use_gpu else "CPU"
-        self.logger.info(f"Running two-stage ECM: {stage1_desc} stage 1 ({curves} curves) + {stage2_workers} CPU workers for stage 2")
-
-        start_time = time.time()
-        # Use ResultsBuilder for initial results structure
-        builder = (ResultsBuilder(composite, method='ecm')
-                   .with_b1(b1)
-                   .with_b2(b2)
-                   .with_curves(curves)
-                   .as_two_stage()
-                   .as_stage2_workers(stage2_workers))
-        # Build initial results dict (will be updated throughout execution)
-        results = builder._data.copy()  # Use internal dict for mutation-heavy code
-        results['raw_outputs'] = []  # Temporary accumulator (for backward compat)
-
-        # Initialize variables that may not be set in all code paths
-        stage1_output = ""
-        stage1_factor = None
-        actual_curves = curves
-        all_stage1_factors: List[Tuple[str, Optional[str]]] = []
-
-        # Handle residue file location
-        if resume_residues:
-            # Resume from existing residues - skip stage 1
-            residue_file = Path(resume_residues)
-            if not residue_file.exists():
-                self.logger.error(f"Resume residue file not found: {residue_file}")
-                results['execution_time'] = time.time() - start_time
-                return results
-
-            self.logger.info(f"Resuming from residue file: {residue_file}")
-            # stage1_factor already initialized to None above
-            residue_info = self._parse_residue_file(residue_file)
-            actual_curves = residue_info['curve_count']
-
-        else:
-            # Determine residue file location
-            if save_residues:
-                # Save to configured residue directory with specified filename
-                residue_dir = Path(self.config['execution']['residue_dir'])
-                residue_dir.mkdir(parents=True, exist_ok=True)
-                residue_file = residue_dir / save_residues
-                self.logger.info(f"Will save residues to: {residue_file}")
-            else:
-                # Use temporary directory for transient residue files
-                import tempfile
-                import hashlib
-                composite_hash = hashlib.md5(composite.encode()).hexdigest()[:12]
-                timestamp = time.strftime('%Y%m%d_%H%M%S')
-                residue_file = Path(tempfile.gettempdir()) / f"residue_{composite_hash}_{timestamp}.txt"
-                self.logger.info(f"Using temporary residue file: {residue_file}")
-
-            # actual_curves already initialized to curves above
-            try:
-                # Stage 1: GPU or CPU execution with residue saving
-                stage1_mode = "GPU" if use_gpu else "CPU"
-                self.logger.info(f"Starting Stage 1 ({stage1_mode})")
-                stage1_success, stage1_factor, actual_curves, stage1_output, all_stage1_factors = self._run_stage1(
-                    composite, b1, curves, residue_file, use_gpu, verbose, gpu_device, gpu_curves, sigma, param
-                )
-
-                if stage1_factor:
-                    # Stage 2 was never run, so set b2=0
-                    results['b2'] = 0
-
-                    # Log ALL unique factors found in Stage 1
-                    if all_stage1_factors:
-                        self._log_and_store_factors(all_stage1_factors, results, composite, b1, 0, curves, "ecm", "GMP-ECM (ECM)")
-                    else:
-                        # Fallback to single factor logging
-                        self.log_factor_found(composite, stage1_factor, b1, 0, curves, method="ecm", sigma=None, program="GMP-ECM (ECM)")
-                        results['factor_found'] = stage1_factor
-
-                    results['curves_completed'] = actual_curves
-                    results['execution_time'] = time.time() - start_time
-                    results['raw_output'] = stage1_output
-                    self.logger.info(f"Factor found in Stage 1: {stage1_factor}")
-                    return results
-
-                if not stage1_success:
-                    self.logger.error("Stage 1 failed")
-                    results['curves_completed'] = 0  # No valid results on failure
-                    results['execution_time'] = time.time() - start_time
-                    results['raw_output'] = stage1_output  # Include error output
-                    return results
-
-                if not residue_file.exists():
-                    self.logger.error(f"No residue file generated at: {residue_file}")
-                    results['curves_completed'] = 0  # No valid results
-                    results['execution_time'] = time.time() - start_time
-                    results['raw_output'] = stage1_output if 'stage1_output' in locals() else "No residue file generated"
-                    return results
-
-                # Check if residue file has content
-                if residue_file.stat().st_size == 0:
-                    self.logger.error(f"Residue file is empty: {residue_file}")
-                    results['curves_completed'] = 0  # No valid results
-                    results['execution_time'] = time.time() - start_time
-                    results['raw_output'] = stage1_output if 'stage1_output' in locals() else "Empty residue file"
-                    return results
-
-                self.logger.info(f"Residue file created successfully: {residue_file} ({residue_file.stat().st_size} bytes)")
-
-                if save_residues:
-                    self.logger.info(f"Stage 1 residues saved permanently to: {residue_file}")
-                else:
-                    self.logger.debug(f"Stage 1 residues in temporary file (will be auto-deleted): {residue_file}")
-
-            except subprocess.SubprocessError as e:
-                self.logger.error(f"Stage 1 subprocess execution failed: {e}")
-                results['curves_completed'] = 0
-                results['execution_time'] = time.time() - start_time
-                results['raw_output'] = f"Stage 1 subprocess failed: {e}"
-                return results
-            except (OSError, IOError) as e:
-                self.logger.error(f"Stage 1 I/O error: {e}")
-                results['curves_completed'] = 0
-                results['execution_time'] = time.time() - start_time
-                results['raw_output'] = f"Stage 1 I/O error: {e}"
-                return results
-            except Exception as e:
-                self.logger.exception(f"Stage 1 unexpected error: {e}")
-                results['curves_completed'] = 0
-                results['execution_time'] = time.time() - start_time
-                results['raw_output'] = f"Stage 1 unexpected error: {type(e).__name__}"
-                return results
-
-        # Stage 2: Multi-threaded CPU execution (skip if B2=0 or interrupted)
-        stage2_factor = None
-        stage2_sigma = None
-        if self.stop_event.is_set():
-            self.logger.info("Interrupt detected after Stage 1, skipping Stage 2")
-            # Return partial results from Stage 1
-            results['curves_completed'] = actual_curves
-            results['execution_time'] = time.time() - start_time
-            results['raw_output'] = stage1_output if 'stage1_output' in locals() else ""
-            return results
-        elif b2 and b2 > 0:
-            self.logger.info(f"Starting Stage 2 ({stage2_workers} workers) with B1={b1}, B2={b2}")
-            early_termination = self.config['programs']['gmp_ecm'].get('early_termination', True) and not continue_after_factor
-            if continue_after_factor:
-                self.logger.info("Early termination disabled due to --continue-after-factor flag")
-            stage2_result = self._run_stage2_multithread(
-                residue_file, b1, b2, stage2_workers, verbose, early_termination, progress_interval
+        # Execute subprocess with streaming
+        try:
+            process, output_lines = self._stream_subprocess_output(
+                cmd=cmd,
+                composite=composite if not residue_load else None,
+                log_prefix=method.upper(),
+                line_callback=progress_callback
             )
 
-            # Extract factor and curves completed from stage 2 result (Stage2Executor returns 5 values)
-            stage2_curves_completed = 0
-            if stage2_result:
-                stage2_factor, all_factors, stage2_curves_completed, stage2_time, stage2_sigma = stage2_result
-        else:
-            self.logger.info("Skipping Stage 2 (B2=0 - Stage 1 only mode)")
-            stage2_factor = None
-            stage2_sigma = None
-            stage2_curves_completed = 0
+            exit_code = process.returncode
+            raw_output = '\n'.join(output_lines)
 
-        factor_found = stage1_factor or stage2_factor
-        if factor_found:
-            # Only set factor_found if not already set by _log_and_store_factors
-            if 'factor_found' not in results:
-                results['factor_found'] = factor_found
-            stage_found = "Stage 1" if stage1_factor else "Stage 2"
-            sigma_used = stage2_sigma if stage2_factor else None
-            self.logger.info(f"Factor found in {stage_found}: {factor_found}")
-            self.log_factor_found(composite, factor_found, b1, b2, curves, method="ecm", sigma=sigma_used, program="GMP-ECM (ECM)")
+            # Check for interruption
+            interrupted = self.interrupted or exit_code == -15  # SIGTERM
 
-        # Extract parametrization from stage 1 output
-        parametrization = 3  # Default
-        if stage1_output:
-            sigma_match = ECMPatterns.SIGMA_COLON_FORMAT.search(stage1_output)
-            if sigma_match:
-                sigma_str = sigma_match.group(1)
-                if ':' in sigma_str:
-                    parametrization = int(sigma_str.split(':')[0])
-        results['parametrization'] = parametrization
+            # Parse factors
+            from lib.parsing_utils import parse_ecm_output_multiple
+            factors_with_sigmas = parse_ecm_output_multiple(raw_output)
 
-        # Determine curves completed based on which stage completed
-        if stage2_curves_completed > 0:
-            # Stage 2 ran - report those curves with B1+B2
-            results['curves_completed'] = stage2_curves_completed
+            # Separate factors and sigmas
+            factors = [f[0] for f in factors_with_sigmas]
+            sigmas = [f[1] for f in factors_with_sigmas]
 
-            # Submit stage1-only curves separately (if some didn't complete stage 2)
-            # NOTE: This submission happens BEFORE the main result submission (in the caller),
-            # so we use the original composite here. The main result will update it later.
-            stage1_only_curves = actual_curves - stage2_curves_completed
-            if stage1_only_curves > 0 and not no_submit:
-                self.logger.info(f"Submitting {stage1_only_curves} curves that completed Stage 1 only (B1={b1}, B2=0)")
-                # Use helper to build results with proper factor handling
-                # Get execution time with proper type handling
-                exec_time = results.get('execution_time', 0)
-                exec_time_float = exec_time if isinstance(exec_time, float) else 0.0
+            # Extract parametrization from output
+            parametrization_extracted = None
+            if sigmas and sigmas[0]:
+                first_sigma = sigmas[0]
+                if ':' in first_sigma:
+                    parametrization_extracted = int(first_sigma.split(':')[0])
+            if parametrization_extracted is None:
+                parametrization_extracted = param if param is not None else 3
 
-                stage1_only_results = (results_for_stage1(composite, b1, stage1_only_curves, parametrization)
-                    .with_curves(stage1_only_curves, stage1_only_curves)
-                    .with_factors(all_stage1_factors)
-                    .with_execution_time(exec_time_float)
-                    .add_raw_output(stage1_output if stage1_output else '')
-                    .build())
-                self.submit_result(stage1_only_results, project, 'gmp-ecm-ecm')
-        else:
-            # Stage 2 didn't run or completed all curves - use Stage 1 count
-            results['curves_completed'] = actual_curves
+            # Determine success
+            success = exit_code in [0, 8, 14] and not interrupted
 
-        results['execution_time'] = time.time() - start_time
+            # Count curves completed (extract from GPU output, fallback to requested)
+            curves_completed = curves  # Default fallback
+            if use_gpu:
+                # GPU mode: extract actual curve count from output
+                curve_match = ECMPatterns.CURVE_COUNT.search(raw_output)
+                if curve_match:
+                    curves_completed = int(curve_match.group(1))
+                    self.logger.debug(f"GPU completed {curves_completed} curves (requested {curves})")
 
-        return results
+            return {
+                'success': success,
+                'factors': factors,
+                'sigmas': sigmas,
+                'curves_completed': curves_completed,
+                'raw_output': raw_output,
+                'parametrization': parametrization_extracted,
+                'exit_code': exit_code,
+                'interrupted': interrupted
+            }
+
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"{method.upper()} execution timed out after {timeout}s")
+            return {
+                'success': False,
+                'factors': [],
+                'sigmas': [],
+                'curves_completed': 0,
+                'raw_output': '',
+                'parametrization': param if param is not None else 3,
+                'exit_code': -1,
+                'interrupted': False
+            }
+        except Exception as e:
+            self.logger.error(f"{method.upper()} execution failed: {e}")
+            return {
+                'success': False,
+                'factors': [],
+                'sigmas': [],
+                'curves_completed': 0,
+                'raw_output': str(e),
+                'parametrization': param if param is not None else 3,
+                'exit_code': -1,
+                'interrupted': False
+            }
+
+    def _run_stage1_primitive(
+        self,
+        composite: str,
+        b1: int,
+        curves: int,
+        residue_file: Path,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Run stage 1 only, save residue to file.
+
+        Helper wrapper around _execute_ecm_primitive() for stage 1 execution.
+
+        Args:
+            composite: Number to factor
+            b1: B1 bound
+            curves: Number of curves
+            residue_file: Path to save residue file
+            **kwargs: Pass through sigma, param, use_gpu, verbose, etc.
+
+        Returns:
+            Result dict from primitive
+        """
+        return self._execute_ecm_primitive(
+            composite=composite,
+            b1=b1,
+            b2=0,  # Stage 1 only
+            curves=curves,
+            residue_save=residue_file,
+            **kwargs
+        )
+
+    def _run_stage2_primitive(
+        self,
+        residue_file: Path,
+        b1: int,
+        b2: Optional[int],
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Run stage 2 from residue file.
+
+        Helper wrapper around _execute_ecm_primitive() for stage 2 execution.
+        Automatically parses residue metadata to extract composite and curve count.
+
+        Args:
+            residue_file: Path to residue file
+            b1: B1 bound (must match stage1)
+            b2: B2 bound for stage 2
+            **kwargs: Pass through verbose, etc.
+
+        Returns:
+            Result dict from primitive
+        """
+        # Parse residue metadata to get composite and curve count
+        metadata = self.residue_manager.parse_metadata(str(residue_file))
+        if not metadata:
+            raise ValueError(f"Could not parse residue file: {residue_file}")
+
+        composite, _, curve_count = metadata
+
+        return self._execute_ecm_primitive(
+            composite=composite,
+            b1=b1,
+            b2=b2,
+            curves=curve_count,
+            residue_load=residue_file,
+            **kwargs
+        )
+
+    def _build_factor_result(self, prim_result: Dict[str, Any], start_time: float) -> FactorResult:
+        """
+        Convert primitive result dict to FactorResult object.
+
+        Recursively factors any composite factors found to ensure
+        all returned factors are prime (or small composites).
+
+        Args:
+            prim_result: Result dictionary from _execute_ecm_primitive()
+            start_time: Timestamp when execution started (from time.time())
+
+        Returns:
+            FactorResult object with populated fields
+        """
+        result = FactorResult()
+
+        # Recursively factor each discovered factor to get all primes
+        for factor, sigma in zip(prim_result['factors'], prim_result['sigmas']):
+            # Fully factor this composite to get all prime factors
+            prime_factors = self._fully_factor_found_result(factor, quiet=False)
+
+            # Add each prime factor with the original sigma
+            # (the sigma that found the composite factor)
+            for prime in prime_factors:
+                result.add_factor(prime, sigma)
+
+        # Populate metadata fields
+        result.curves_run = prim_result['curves_completed']
+        result.execution_time = time.time() - start_time
+        result.success = prim_result['success']
+        result.raw_output = prim_result['raw_output']
+
+        return result
+
+    def _create_residue_path(self, config: TwoStageConfig) -> Path:
+        """
+        Create residue file path with auto-mkdir.
+
+        If config specifies save_residues path, uses that. Otherwise creates
+        an auto-generated path in the residue directory.
+
+        Args:
+            config: TwoStageConfig with optional save_residues path
+
+        Returns:
+            Path object for residue file
+        """
+        if config.save_residues:
+            return Path(config.save_residues)
+
+        # Auto-generate residue path
+        residue_dir = Path(self.config['execution']['residue_dir'])
+        residue_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        composite_hash = hashlib.md5(config.composite.encode()).hexdigest()[:8]
+        return residue_dir / f"stage1_{composite_hash}_{timestamp}.txt"
+
 
     def _preserve_failed_upload(self, residue_file: Path) -> None:
         """
@@ -643,56 +920,37 @@ class ECMWrapper(BaseWrapper):
                    residue_file: Path, use_gpu: bool, verbose: bool,
                    gpu_device: Optional[int] = None, gpu_curves: Optional[int] = None,
                    sigma: Optional[Union[str, int]] = None, param: Optional[int] = None) -> tuple[bool, Optional[str], int, str, List[tuple[str, Optional[str]]]]:
-        """Run Stage 1 with GPU or CPU and save residues - returns (success, factor, actual_curves)"""
-        ecm_path = self.config['programs']['gmp_ecm']['path']
+        """
+        Run Stage 1 with GPU or CPU and save residues.
 
-        cmd = [ecm_path, '-save', str(residue_file)]
-        if use_gpu:
-            cmd.insert(1, '-gpu')
-            if gpu_device is not None:
-                cmd.extend(['-gpudevice', str(gpu_device)])
-            # Only set -gpucurves if explicitly specified
-            if gpu_curves is not None:
-                cmd.extend(['-gpucurves', str(gpu_curves)])
-        if verbose:
-            cmd.append('-v')
-        if param is not None:
-            cmd.extend(['-param', str(param)])
-        if sigma is not None:
-            cmd.extend(['-sigma', str(sigma)])
-        cmd.extend(['-c', str(curves), str(b1), '0'])  # B2=0 for stage 1 only
+        This is a convenience wrapper around _run_stage1_primitive() that provides
+        a tuple-based return format for easier unpacking in main block code.
 
-        try:
-            # Stream subprocess output
-            process, output_lines = self._stream_subprocess_output(
-                cmd, composite, "Stage1"
-            )
+        Returns:
+            tuple: (success, factor, actual_curves, raw_output, all_factors)
+        """
+        # Call the primitive
+        result = self._run_stage1_primitive(
+            composite=composite,
+            b1=b1,
+            curves=curves,
+            residue_file=residue_file,
+            use_gpu=use_gpu,
+            gpu_device=gpu_device,
+            gpu_curves=gpu_curves,
+            sigma=sigma,
+            param=param,
+            verbose=verbose
+        )
 
-            # Check for factors found in stage 1
-            output = '\n'.join(output_lines)
-            all_factors = parse_ecm_output_multiple(output)
-            factor = all_factors[-1][0] if all_factors else None  # Use last factor for consistency
+        # Convert dict result to tuple format for backward compatibility
+        success = result['success']
+        factor = result['factors'][-1] if result['factors'] else None  # Use last factor
+        actual_curves = result['curves_completed']
+        output = result['raw_output']
+        all_factors = list(zip(result['factors'], result['sigmas']))
 
-            # Extract actual curve count from GPU output
-            actual_curves = curves  # fallback to requested
-            curve_match = ECMPatterns.CURVE_COUNT.search(output)
-            if curve_match:
-                actual_curves = int(curve_match.group(1))
-                self.logger.info(f"Stage 1 actually completed {actual_curves} curves")
-
-            # Success if returncode is 0 (no factor) or if a factor was found (returncode 8)
-            success = process.returncode == 0 or factor is not None
-            return success, factor, actual_curves, output, all_factors
-
-        except subprocess.SubprocessError as e:
-            self.logger.error(f"Stage 1 subprocess error: {e}")
-            return False, None, curves, "", []
-        except (OSError, IOError) as e:
-            self.logger.error(f"Stage 1 I/O error: {e}")
-            return False, None, curves, "", []
-        except Exception as e:
-            self.logger.exception(f"Stage 1 unexpected error: {e}")
-            return False, None, curves, "", []
+        return success, factor, actual_curves, output, all_factors
 
     def _run_stage2_multithread(self, residue_file: Path, b1: int, b2: Optional[int],
                                workers: int, verbose: bool, early_termination: bool = True,
@@ -723,298 +981,7 @@ class ECMWrapper(BaseWrapper):
         # Convert string paths to Path objects
         return [Path(p) for p in chunk_paths]
 
-    def run_ecm_multiprocess(self, composite: str, b1: int, b2: Optional[int] = None,
-                            curves: int = 100, workers: int = 4, verbose: bool = False,
-                            method: str = "ecm", continue_after_factor: bool = False,
-                            progress_interval: int = 0) -> Dict[str, Any]:
-        """Run ECM using multi-process approach: each worker runs full ECM cycles"""
 
-        self.logger.info(f"Running multi-process ECM: {workers} workers, {curves} total curves")
-
-        start_time = time.time()
-        # Use ResultsBuilder for initial results structure
-        builder = (ResultsBuilder(composite, method=method)
-                   .with_b1(b1)
-                   .with_b2(b2)
-                   .with_curves(curves)
-                   .as_multiprocess(workers))
-        # Build initial results dict (will be updated throughout execution)
-        results = builder._data.copy()  # Use internal dict for mutation-heavy code
-        results['raw_outputs'] = []  # Temporary accumulator (for backward compat)
-
-        # Distribute curves across workers
-        curves_per_worker = curves // workers
-        remaining_curves = curves % workers
-        worker_assignments = []
-
-        for worker_id in range(workers):
-            worker_curves = curves_per_worker + (1 if worker_id < remaining_curves else 0)
-            if worker_curves > 0:
-                worker_assignments.append((worker_id + 1, worker_curves))
-
-        self.logger.info(f"Curve distribution: {[f'Worker {w}: {c} curves' for w, c in worker_assignments]}")
-
-        # Run workers in parallel
-        factor_found = None
-        total_curves_completed = 0
-
-        # Use multiprocessing with a global function instead of ProcessPoolExecutor
-        # to avoid pickling issues with instance methods
-        import multiprocessing as mp
-
-        # Create shared variables for early termination and progress tracking
-        manager = mp.Manager()
-        result_queue = manager.Queue()
-        progress_queue = manager.Queue()
-        stop_event = manager.Event()
-
-        # Start worker processes
-        processes = []
-        for worker_id, worker_curves in worker_assignments:
-            p = mp.Process(
-                target=run_worker_ecm_process,
-                args=(worker_id, composite, b1, b2, worker_curves, verbose, method,
-                      self.config['programs']['gmp_ecm']['path'], result_queue, stop_event,
-                      progress_interval, progress_queue)
-            )
-            p.start()
-            processes.append(p)
-
-        # Wait for results with improved synchronization
-        factor_found = None
-        factor_sigma = None
-        all_sigma_values = []  # Collect all sigma values from all workers
-        total_curves_completed = 0
-        completed_workers = 0
-        results_received = []
-        worker_progress = {}  # Track progress per worker: {worker_id: curves_completed}
-        stop_signaled = False  # Track if we've already signaled workers to stop
-
-        # Use a shorter timeout and check processes more frequently
-        while completed_workers < len(processes):
-            # Check for interruption signal
-            if self.stop_event.is_set() and not stop_signaled:
-                self.logger.info("Interrupt detected, signaling workers to stop...")
-                stop_event.set()
-                stop_signaled = True
-                # Don't break - continue collecting results as workers terminate
-
-            got_result = False
-
-            # Check for progress updates from workers
-            try:
-                while True:  # Drain all progress updates
-                    progress_update = progress_queue.get_nowait()
-                    worker_id = progress_update['worker_id']
-                    curves_done = progress_update['curves_completed']
-                    worker_progress[worker_id] = curves_done
-
-                    # Display aggregated progress if enabled
-                    if progress_interval > 0:
-                        total_progress = sum(worker_progress.values())
-                        percentage = (total_progress / curves * 100) if curves > 0 else 0
-                        self.logger.info(f"Progress: {total_progress}/{curves} curves ({percentage:.1f}%) across {len(worker_progress)} worker(s)")
-            except:
-                pass  # Queue is empty
-
-            # Try to get results from queue with short timeout
-            try:
-                result = result_queue.get(timeout=0.5)
-                results_received.append(result)
-                total_curves_completed += result['curves_completed']
-
-                # Collect sigma values from this worker
-                if 'sigma_values' in result:
-                    all_sigma_values.extend(result['sigma_values'])
-
-                if result['factor_found'] and not factor_found:
-                    factor_found = result['factor_found']
-                    factor_sigma = result.get('sigma_found')
-                    self.logger.info(f"Worker {result['worker_id']} found factor: {factor_found}")
-                    if factor_sigma:
-                        self.logger.info(f"Factor found with sigma: {factor_sigma}")
-                    # Signal other workers to stop (unless continue_after_factor is enabled)
-                    if not continue_after_factor:
-                        stop_event.set()
-                    else:
-                        self.logger.info("Continuing all workers due to --continue-after-factor flag")
-
-                got_result = True
-            except:
-                pass  # Timeout or empty queue
-
-            # Check process status regardless of queue results
-            active_processes = 0
-            for i, p in enumerate(processes):
-                if p.is_alive():
-                    active_processes += 1
-                elif p.exitcode is not None:
-                    # Process finished - count it if we haven't already
-                    if p.exitcode != 0:
-                        self.logger.warning(f"Worker process {i+1} exited with code {p.exitcode}")
-
-            completed_workers = len(processes) - active_processes
-
-            # If no result was received and no processes are running, we might be done
-            if not got_result and active_processes == 0:
-                break
-
-            # Brief sleep to prevent busy waiting
-            if not got_result:
-                time.sleep(0.1)
-
-        # Final check for any remaining results in queue
-        remaining_results = []
-        try:
-            while True:
-                result = result_queue.get_nowait()
-                remaining_results.append(result)
-                total_curves_completed += result['curves_completed']
-
-                # Collect sigma values from remaining results
-                if 'sigma_values' in result:
-                    all_sigma_values.extend(result['sigma_values'])
-
-                if result['factor_found'] and not factor_found:
-                    factor_found = result['factor_found']
-                    factor_sigma = result.get('sigma_found')
-                    self.logger.info(f"Worker {result['worker_id']} found factor: {factor_found}")
-                    if factor_sigma:
-                        self.logger.info(f"Factor found with sigma: {factor_sigma}")
-        except:
-            pass  # Queue is empty
-
-        all_results = results_received + remaining_results
-        self.logger.info(f"Collected results from {len(all_results)} worker(s)")
-
-        # If we got fewer results than processes, some workers may have failed
-        if len(all_results) < len(processes):
-            missing_workers = len(processes) - len(all_results)
-            self.logger.warning(f"{missing_workers} worker(s) completed without reporting results")
-
-        # Clean up processes
-        for p in processes:
-            if p.is_alive():
-                p.terminate()
-                p.join(timeout=1)
-
-        # Recalculate total curves from actual results
-        actual_curves_completed = sum(result['curves_completed'] for result in all_results)
-
-        # Remove duplicate sigma values and log summary
-        unique_sigma_values = list(set(all_sigma_values))
-        self.logger.info(f"Multiprocess run used {len(unique_sigma_values)} unique sigma values")
-
-        # Extract parametrization from sigma values (format: "1:xxx" or "3:xxx")
-        parametrization = None
-        if unique_sigma_values:
-            first_sigma = unique_sigma_values[0]
-            if ':' in first_sigma:
-                parametrization = int(first_sigma.split(':')[0])
-            else:
-                parametrization = 3  # Default
-
-        # Fully factor any composite factors found
-        if factor_found:
-            processor = ResultProcessor(self, composite, method, b1, b2, curves, f"GMP-ECM ({method.upper()})")
-            # Store factor and sigma first
-            results['factor_found'] = factor_found
-            results['factors_found'] = [factor_found]
-            results['sigma'] = factor_sigma
-            # Store factor-to-sigma mapping for the processor
-            results['factor_sigmas'] = {factor_found: factor_sigma} if factor_sigma else {}
-            # Then fully factor it
-            processor.fully_factor_and_store([factor_found], results, quiet=False)
-        else:
-            # No factors found
-            if 'factor_found' not in results:
-                results['factor_found'] = None
-
-        # Set sigma and parametrization
-        if 'sigma' not in results:
-            results['sigma'] = factor_sigma  # Sigma that found the factor (if any)
-        results['sigma_values'] = unique_sigma_values  # All sigma values used
-        results['parametrization'] = parametrization
-        results['curves_completed'] = actual_curves_completed
-        results['execution_time'] = time.time() - start_time
-
-        return results
-
-    def run_stage2_only(self, residue_file: str, b1: int, b2: Optional[int],
-                       stage2_workers: int = 4, verbose: bool = False,
-                       continue_after_factor: bool = False,
-                       progress_interval: int = 0) -> Dict[str, Any]:
-        """Run Stage 2 only on existing residue file"""
-
-        residue_path = Path(residue_file)
-        if not residue_path.exists():
-            self.logger.error(f"Residue file not found: {residue_path}")
-            return {
-                'residue_file': residue_file,
-                'factor_found': None,
-                'execution_time': 0,
-                'error': 'Residue file not found'
-            }
-
-        # Extract composite number, curve count, and B1 from residue file
-        residue_info = self._parse_residue_file(residue_path)
-        composite = residue_info['composite']
-        stage1_curves = residue_info['curve_count']
-        stage1_b1 = residue_info['b1']
-
-        self.logger.info(f"Running Stage 2 on residue file: {residue_path}")
-        if composite != "unknown":
-            self.logger.info(f"Composite: {composite[:20]}...{composite[-20:]} ({len(composite)} digits)")
-        if stage1_curves > 0:
-            self.logger.info(f"Stage 1 completed {stage1_curves} curves")
-        # Use B1 from residue file instead of parameter
-        actual_b1 = stage1_b1 if stage1_b1 > 0 else b1
-        self.logger.info(f"Using {stage2_workers} CPU workers, B1={actual_b1}, B2={b2}")
-        if stage1_b1 > 0 and stage1_b1 != b1:
-            self.logger.info(f"Note: Using B1={actual_b1} from residue file (overriding parameter B1={b1})")
-
-        start_time = time.time()
-
-        # Run stage 2 multithread
-        early_termination = self.config['programs']['gmp_ecm'].get('early_termination', True) and not continue_after_factor
-        if continue_after_factor:
-            self.logger.info("Early termination disabled due to --continue-after-factor flag")
-        stage2_result = self._run_stage2_multithread(
-            residue_path, actual_b1, b2, stage2_workers, verbose, early_termination, progress_interval
-        )
-
-        # Extract factor from result (Stage2Executor returns 5 values)
-        factor_found = None
-        sigma_found = None
-        if stage2_result:
-            factor_found, all_factors, stage2_curves, stage2_time, sigma_found = stage2_result
-
-        execution_time = time.time() - start_time
-
-        # Use ResultsBuilder for results construction
-        builder = (ResultsBuilder(composite, method='ecm')
-                   .with_b1(actual_b1)
-                   .with_b2(b2)
-                   .with_curves(stage1_curves, stage1_curves)
-                   .with_residue_file(residue_file)
-                   .as_stage2_workers(stage2_workers)
-                   .with_execution_time(execution_time))
-
-        if factor_found:
-            builder.with_single_factor(factor_found, sigma_found)
-
-        if sigma_found:
-            builder.with_sigma(sigma_found)
-
-        results = builder.build_no_truncate()
-
-        if factor_found:
-            self.logger.info(f"Factor found in Stage 2: {factor_found}")
-            self.log_factor_found(composite, factor_found, actual_b1, b2, stage1_curves, method="ecm", sigma=sigma_found, program="GMP-ECM (ECM-STAGE2)")
-        else:
-            self.logger.info("No factor found in Stage 2")
-
-        return results
 
     def _parse_residue_file(self, residue_path: Path) -> Dict[str, Any]:
         """
@@ -1123,17 +1090,18 @@ class ECMWrapper(BaseWrapper):
             self.logger.info(f"ECM attempt {attempt+1}/{max_ecm_attempts} on C{cofactor_digits} with B1={b1}, {curves} curves")
 
             try:
-                ecm_result = self.run_ecm(
+                # Use v2 API for ECM execution
+                from lib.ecm_config import ECMConfig
+                config = ECMConfig(
                     composite=str(current_cofactor),
                     b1=b1,
                     curves=curves,
-                    verbose=False,
-                    quiet=quiet
+                    verbose=False
                 )
+                ecm_result = self.run_ecm_v2(config)
 
-                found_factors = ecm_result.get('factors_found', [])
-                if not found_factors and ecm_result.get('factor_found'):
-                    found_factors = [ecm_result['factor_found']]
+                # Extract factors from FactorResult
+                found_factors = ecm_result.factors if ecm_result.factors else []
 
                 if found_factors:
                     self.logger.info(f"ECM found {len(found_factors)} factor(s): {found_factors}")
@@ -1171,261 +1139,18 @@ class ECMWrapper(BaseWrapper):
 
         return all_primes
 
-    def run_ecm_with_tlevel(self, composite: str, target_tlevel: float,
-                           start_tlevel: float = 0.0,
-                           batch_size: int = 100, workers: int = 1,
-                           use_two_stage: bool = False, verbose: bool = False,
-                           start_b1: Optional[int] = None, no_submit: bool = False,
-                           project: Optional[str] = None,
-                           auto_adjust_target: bool = False,
-                           progress_interval: int = 0,
-                           work_id: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Run ECM progressively until target t-level reached.
-        Uses progressive approach: starts at specified t-level and increases by 5 digits each step.
-        Fully factors any composite factors found.
 
-        Args:
-            composite: Number to factor
-            target_tlevel: Target t-level in digits (e.g., 30.0, 40.0)
-            start_tlevel: Starting t-level (default: 0.0 for starting from scratch)
-            batch_size: DEPRECATED - uses optimal curve counts from Zimmermann table
-            workers: Number of parallel workers (default: 1)
-            use_two_stage: Use two-stage GPU mode (default: False)
-            verbose: Verbose output
-            start_b1: DEPRECATED - uses optimal B1 from Zimmermann table
-            no_submit: Skip API submission if True (default: False)
-            project: Optional project name for API submission
-            auto_adjust_target: Auto-adjust target t-level when factors found (default: False)
-                               Uses same ratio: new_target = (target/original_digits) * new_digits
-                               Keeps current_t_level to preserve work done
-
-        Returns:
-            Results dict with:
-            - success: bool
-            - factors_found: List of all prime factors (or empty if none found)
-            - final_cofactor: Remaining cofactor as string (or None if fully factored)
-            - all_prime_factors: Alias for factors_found
-            - curves_completed: Total curves run
-            - execution_time: Time in seconds
-        """
-        current_composite = int(composite)
-        original_digits = len(str(current_composite))
-        all_prime_factors = []
-        total_curves = 0
-        curve_history = []  # Track all curves run for t-level calculation
-
-        if start_tlevel > 0:
-            self.logger.info(f"Resuming progressive ECM from t{start_tlevel:.1f} to t{target_tlevel:.1f} on C{original_digits}")
-        else:
-            self.logger.info(f"Starting progressive ECM with target t{target_tlevel:.1f} on C{original_digits}")
-
-        start_time = time.time()
-
-        # Build step targets starting from start_tlevel
-        current_t_level = start_tlevel
-        step_targets = []
-
-        # Start at t20 or the first step above start_tlevel
-        if start_tlevel <= 20.0:
-            t = 20.0
-        else:
-            # Round up to next 5-digit increment
-            t = ((int(start_tlevel) // 5) + 1) * 5.0
-
-        # Generate steps in 5-digit increments
-        while t <= target_tlevel:
-            if t > start_tlevel:  # Only include steps after starting point
-                step_targets.append(t)
-            t += 5.0
-
-        # Add final target if it's not already a step and is above start_tlevel
-        if target_tlevel not in step_targets and target_tlevel > start_tlevel:
-            step_targets.append(target_tlevel)
-
-        if step_targets:
-            self.logger.info(f"Progressive steps: {' → '.join([f't{t:.1f}' for t in step_targets])}")
-        else:
-            self.logger.warning(f"No steps to run (already at or past target)")
-
-        # Use while loop instead of for loop to support dynamic step_targets regeneration
-        step_index = 0
-        while step_index < len(step_targets):
-            # Check for interruption
-            if self.stop_event.is_set():
-                self.logger.info("Interrupt detected, stopping t-level progression")
-                break
-
-            if current_composite == 1:
-                break
-
-            step_target = step_targets[step_index]
-
-            # Skip steps that exceed adjusted target (when auto_adjust_target=True)
-            if step_target > target_tlevel:
-                self.logger.debug(f"Skipping step t{step_target:.1f} (exceeds adjusted target t{target_tlevel:.1f})")
-                step_index += 1
-                continue
-
-            cofactor_digits = len(str(current_composite))
-
-            # Get optimal B1 for this step from Zimmermann table
-            optimal_b1, _ = get_optimal_b1_for_tlevel(step_target)
-
-            # Calculate exact curves needed to reach this step from current position
-            curves_needed = calculate_curves_for_target(current_t_level, step_target, optimal_b1)
-
-            if curves_needed is None or curves_needed <= 0:
-                self.logger.warning(f"Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, using Zimmermann estimate")
-                # Fallback to Zimmermann table estimate
-                _, curves_needed = get_optimal_b1_for_tlevel(step_target)
-
-            self.logger.info(f"Progressive ECM: t{current_t_level:.3f} → t{step_target:.1f} on C{cofactor_digits}, B1={optimal_b1}, {curves_needed} curves")
-
-            # Run ECM with exact number of curves at this B1
-            if use_two_stage:
-                batch_results = self.run_ecm_two_stage(
-                    composite=str(current_composite),
-                    b1=optimal_b1,
-                    curves=curves_needed,
-                    use_gpu=True,
-                    verbose=verbose,
-                    progress_interval=progress_interval
-                )
-            elif workers > 1:
-                batch_results = self.run_ecm_multiprocess(
-                    composite=str(current_composite),
-                    b1=optimal_b1,
-                    curves=curves_needed,
-                    workers=workers,
-                    verbose=verbose,
-                    progress_interval=progress_interval
-                )
-            else:
-                batch_results = self.run_ecm(
-                    composite=str(current_composite),
-                    b1=optimal_b1,
-                    curves=curves_needed,
-                    verbose=verbose,
-                    progress_interval=progress_interval
-                )
-
-            curves_completed = batch_results.get('curves_completed', 0)
-            total_curves += curves_completed
-
-            # Update curve history and calculate new t-level
-            param = batch_results.get('parametrization', 1)
-            curve_history.append(f"{curves_completed}@{optimal_b1},p={param}")
-            current_t_level = calculate_tlevel(curve_history)
-            self.logger.info(f"Reached t{current_t_level:.3f} after {curves_completed} curves")
-
-            # Submit this step's results if submission enabled
-            if not no_submit and curves_completed > 0:
-                # Include work_id for failed submission recovery
-                if work_id:
-                    batch_results['work_id'] = work_id
-                program_name = f'gmp-ecm-{batch_results.get("method", "ecm")}'
-                self.logger.info(f"Submitting results for t{step_target:.1f} step (B1={optimal_b1}, {curves_completed} curves)")
-                self.submit_result(batch_results, project, program_name)
-
-            # Handle factors
-            found_factors = batch_results.get('factors_found', [])
-            if found_factors:
-                self.logger.info(f"Found {len(found_factors)} factor(s): {found_factors}")
-                all_prime_factors.extend(found_factors)
-
-                # Divide out all found factors
-                for factor in found_factors:
-                    current_composite //= int(factor)
-
-                new_digits = len(str(current_composite))
-                self.logger.info(f"Cofactor reduced from C{cofactor_digits} to C{new_digits}")
-
-                # Check if fully factored
-                if current_composite == 1:
-                    self.logger.info("Fully factored by progressive ECM")
-                    break
-
-                # Handle target adjustment and curve history based on auto_adjust_target flag
-                if auto_adjust_target:
-                    # Calculate new target using same ratio as original
-                    old_target = target_tlevel
-                    target_tlevel = (old_target / original_digits) * new_digits
-                    self.logger.info(f"Target adjusted from t{old_target:.1f} to t{target_tlevel:.1f} for C{new_digits} (keeping t{current_t_level:.3f} progress)")
-
-                    # Regenerate step_targets for remaining work
-                    step_targets = []
-                    t = ((int(current_t_level) // 5) + 1) * 5.0 if current_t_level > 20.0 else 20.0
-                    while t <= target_tlevel:
-                        if t > current_t_level:
-                            step_targets.append(t)
-                        t += 5.0
-                    if target_tlevel not in step_targets and target_tlevel > current_t_level:
-                        step_targets.append(target_tlevel)
-
-                    if step_targets:
-                        self.logger.info(f"Remaining steps: {' → '.join([f't{t:.1f}' for t in step_targets])}")
-                    else:
-                        self.logger.info(f"Target t{target_tlevel:.1f} already reached at t{current_t_level:.3f}, stopping")
-                        break
-
-                    # Update original_digits reference for future adjustments
-                    original_digits = new_digits
-
-                    # Reset step_index to start from beginning of regenerated step_targets
-                    step_index = 0
-
-                    # Keep curve_history and current_t_level to preserve work done
-                    # Continue to restart loop with regenerated step_targets
-                    continue
-                else:
-                    # Legacy behavior: reset curve history for the new cofactor
-                    curve_history = []
-                    current_t_level = 0.0
-                    self.logger.info(f"Starting fresh t-level progression on C{new_digits} cofactor")
-            else:
-                self.logger.info(f"No factors found at this step")
-
-            # Move to next step (only reached if not regenerating step_targets)
-            step_index += 1
-
-        execution_time = time.time() - start_time
-
-        results = {
-            'success': True,
-            'factors_found': all_prime_factors,
-            'all_prime_factors': all_prime_factors,  # Alias for compatibility
-            'final_cofactor': str(current_composite) if current_composite > 1 else None,
-            'current_tlevel': current_t_level,
-            'target_tlevel': target_tlevel,
-            'curves_completed': total_curves,
-            'execution_time': execution_time,
-            'method': 'ecm',
-            'original_digits': original_digits,
-            'final_cofactor_digits': len(str(current_composite)) if current_composite > 1 else 0
-        }
-
-        if all_prime_factors:
-            self.logger.info(f"Progressive ECM found {len(all_prime_factors)} prime factor(s): {all_prime_factors}")
-
-        if current_composite > 1:
-            self.logger.info(f"Cofactor remaining: C{len(str(current_composite))} at t{current_t_level:.3f}/{target_tlevel:.1f}")
-        else:
-            self.logger.info(f"Fully factored at t{current_t_level:.3f}")
-
-        return results
-
-
-def main():
-    from lib.arg_parser import create_ecm_parser, validate_ecm_args, print_validation_errors
-    from lib.arg_parser import get_method_defaults, resolve_gpu_settings, resolve_worker_count, get_stage2_workers_default
+if __name__ == '__main__':
+    from lib.arg_parser import (
+        create_ecm_parser, validate_ecm_args, print_validation_errors,
+        resolve_gpu_settings, get_method_defaults,
+        resolve_worker_count, get_stage2_workers_default
+    )
 
     parser = create_ecm_parser()
     args = parser.parse_args()
+    wrapper = ECMWrapper('client.yaml')
 
-    wrapper = ECMWrapper(args.config)
-
-    # Validate arguments with config context
     errors = validate_ecm_args(args, wrapper.config)
     print_validation_errors(errors)
 
@@ -1465,6 +1190,9 @@ def main():
             print("Press Ctrl+C to stop")
         print("=" * 60)
         print()
+
+        # Initialize API clients for auto-work mode
+        wrapper._ensure_api_clients()
 
         # Get client ID from config
         client_id = wrapper.config['client']['username']
@@ -1546,8 +1274,8 @@ def main():
                             continue
 
                         # Build results using ResultsBuilder
-                        builder = (results_for_stage1(composite, args.b1, curves, param if param is not None else 3)
-                            .with_curves(curves, actual_curves)
+                        builder = (results_for_stage1(composite, args.b1, actual_curves, param if param is not None else 3)
+                            .with_curves(actual_curves, actual_curves)
                             .with_factors(all_factors)
                             .add_raw_output(raw_output)
                             .with_execution_time(0))  # Will be filled by subprocess
@@ -1610,7 +1338,7 @@ def main():
                 )
 
             # Exit after stage1-only mode completes to avoid falling through to standard mode
-            return
+            sys.exit(0)
 
         # Stage 2 Work Mode
         elif is_stage2_work:
@@ -1704,7 +1432,7 @@ def main():
                         results = {
                             'composite': composite,
                             'b1': b1,
-                            'b2': b2,
+                            'b2': None if b2 == -1 else b2,  # -1 means GMP-ECM default, submit as None
                             'curves_requested': curve_count,
                             'curves_completed': stage2_curves,
                             'factors_found': stage2_all_factors if stage2_all_factors else [],
@@ -1802,7 +1530,7 @@ def main():
                 )
 
             # Exit after stage2-work mode completes to avoid falling through to standard mode
-            return
+            sys.exit(0)
 
         # Standard auto-work mode
         try:
@@ -1849,19 +1577,21 @@ def main():
                         # Resolve worker count for multiprocess
                         workers = resolve_worker_count(args) if args.multiprocess else 1
 
-                        results = wrapper.run_ecm_with_tlevel(
+                        # T-level mode (v2 API) - submits after each step internally
+                        config = TLevelConfig(
                             composite=composite,
-                            target_tlevel=target_tlevel,
-                            start_tlevel=start_tlevel,
-                            batch_size=args.batch_size if hasattr(args, 'batch_size') else 100,
-                            workers=workers,
-                            use_two_stage=False,  # T-level mode doesn't use two-stage
+                            target_t_level=target_tlevel,
+                            threads=workers,
                             verbose=args.verbose,
-                            no_submit=False,  # Always submit in auto-work mode
                             project=args.project,
-                            progress_interval=args.progress_interval if hasattr(args, 'progress_interval') else 0,
-                            work_id=current_work_id  # For failed submission recovery
+                            no_submit=False,
+                            work_id=current_work_id
                         )
+                        result = wrapper.run_tlevel_v2(config)
+
+                        # Note: Batches were submitted individually during execution
+                        # Just need to track results for factor detection
+                        results = result.to_dict(composite, args.method)
 
                     else:
                         # B1/B2 mode with optional two-stage or multiprocess
@@ -1876,66 +1606,66 @@ def main():
                         continue_after_factor = args.continue_after_factor if hasattr(args, 'continue_after_factor') else False
 
                         if args.two_stage and args.method == 'ecm':
-                            # Two-stage mode
+                            # Two-stage mode (v2 API)
                             print(f"Mode: two-stage GPU+CPU (B1={b1}, B2={b2}, curves={curves})")
                             stage2_workers = resolve_stage2_workers(args, wrapper.config)
 
-                            results = wrapper.run_ecm_two_stage(
+                            config = TwoStageConfig(
                                 composite=composite,
                                 b1=b1,
                                 b2=b2,
-                                curves=curves,
-                                sigma=sigma,
-                                param=param,
-                                use_gpu=use_gpu,
-                                stage2_workers=stage2_workers,
-                                verbose=args.verbose,
-                                save_residues=None,
-                                resume_residues=None,
-                                gpu_device=gpu_device,
-                                gpu_curves=gpu_curves,
-                                continue_after_factor=continue_after_factor,
-                                progress_interval=args.progress_interval if hasattr(args, 'progress_interval') else 0,
-                                project=args.project,
-                                no_submit=False
+                                stage1_curves=curves,
+                                stage1_device="GPU" if use_gpu else "CPU",
+                                stage2_device="CPU",
+                                stage1_parametrization=param if param else 3,
+                                threads=stage2_workers,
+                                verbose=args.verbose
                             )
+                            result = wrapper.run_two_stage_v2(config)
+
+                            # Convert FactorResult to dict
+                            results = result.to_dict(composite, args.method)
 
                         elif args.multiprocess:
-                            # Multiprocess mode
+                            # Multiprocess mode (v2 API)
                             workers = resolve_worker_count(args)
                             print(f"Mode: multiprocess (B1={b1}, B2={b2}, curves={curves}, workers={workers})")
 
-                            results = wrapper.run_ecm_multiprocess(
+                            config = MultiprocessConfig(
                                 composite=composite,
                                 b1=b1,
                                 b2=b2,
-                                curves=curves,
-                                workers=workers,
-                                verbose=args.verbose,
-                                continue_after_factor=continue_after_factor,
-                                method=args.method
+                                total_curves=curves,
+                                num_processes=workers,
+                                parametrization=param if param else 3,
+                                method=args.method,
+                                verbose=args.verbose
                             )
+                            result = wrapper.run_multiprocess_v2(config)
+
+                            # Convert FactorResult to dict
+                            results = result.to_dict(composite, args.method)
 
                         else:
-                            # Standard mode
+                            # Standard mode (v2 API)
                             print(f"Mode: standard (B1={b1}, B2={b2}, curves={curves})")
 
-                            results = wrapper.run_ecm(
+                            config = ECMConfig(
                                 composite=composite,
                                 b1=b1,
                                 b2=b2,
                                 curves=curves,
                                 sigma=sigma,
-                                param=param,
-                                use_gpu=use_gpu,
-                                gpu_device=gpu_device,
-                                gpu_curves=gpu_curves,
-                                verbose=args.verbose,
+                                parametrization=param if param else 3,
                                 method=args.method,
-                                continue_after_factor=continue_after_factor
+                                verbose=args.verbose
                             )
+                            result = wrapper.run_ecm_v2(config)
 
-                        # Submit results for B1/B2 modes (t-level mode handles submission in each batch)
+                            # Convert FactorResult to dict
+                            results = result.to_dict(composite, args.method)
+
+                        # Submit results for B1/B2 modes
                         if results.get('curves_completed', 0) > 0:
                             # Include work_id for failed submission recovery
                             results['work_id'] = current_work_id
@@ -1973,7 +1703,7 @@ def main():
             )
 
         # Exit after auto-work mode completes to avoid falling through to standard mode
-        return
+        sys.exit(0)
 
     # Use shared argument processing utilities
     b1_default, b2_default = get_method_defaults(wrapper.config, args.method)
@@ -2040,8 +1770,8 @@ def main():
             sys.exit(1)
 
         # Build results using ResultsBuilder
-        results = (results_for_stage1(args.composite, args.b1, args.curves, param if param is not None else 3)
-            .with_curves(args.curves, actual_curves)
+        results = (results_for_stage1(args.composite, args.b1, actual_curves, param if param is not None else 3)
+            .with_curves(actual_curves, actual_curves)
             .with_factors(all_factors)
             .add_raw_output(raw_output)
             .with_execution_time(0)
@@ -2076,105 +1806,119 @@ def main():
 
     # Check for T-level mode first (highest priority)
     elif hasattr(args, 'tlevel') and args.tlevel:
-        # T-level mode: run ECM iteratively until target t-level reached
-        start_tlevel = args.start_tlevel if hasattr(args, 'start_tlevel') and args.start_tlevel else 0.0
-        results = wrapper.run_ecm_with_tlevel(
+        # T-level mode: run ECM iteratively until target t-level reached (v2 API)
+        # Submits each step individually if not --no-submit
+        config = TLevelConfig(
             composite=args.composite,
-            target_tlevel=args.tlevel,
-            start_tlevel=start_tlevel,
-            batch_size=args.batch_size,
-            workers=args.workers if args.multiprocess else 1,
-            use_two_stage=args.two_stage,
+            target_t_level=args.tlevel,
+            threads=args.workers if args.multiprocess else 1,
             verbose=args.verbose,
-            no_submit=args.no_submit,
-            project=args.project,
-            progress_interval=args.progress_interval
+            project=args.project if hasattr(args, 'project') else None,
+            no_submit=args.no_submit if hasattr(args, 'no_submit') else False
         )
+        result = wrapper.run_tlevel_v2(config)
+
+        # Convert FactorResult to dict for backward compatibility with result handling below
+        # Note: Individual batches already submitted during execution if enabled
+        results = result.to_dict(args.composite, args.method)
     # Run ECM - choose mode based on arguments (validation already done by validate_ecm_args)
     elif args.resume_residues:
-        # Resume from existing residues - run stage 2 only
-        results = wrapper.run_stage2_only(
-            residue_file=args.resume_residues,
+        # Resume from existing residues - run stage 2 only (v2 API)
+        config = TwoStageConfig(
+            composite="",  # Will be extracted from residue file
             b1=b1,
             b2=b2,
-            stage2_workers=stage2_workers,
-            verbose=args.verbose,
+            resume_file=args.resume_residues,
+            threads=stage2_workers,
             continue_after_factor=args.continue_after_factor,
-            progress_interval=args.progress_interval
+            verbose=args.verbose
         )
+        result = wrapper.run_two_stage_v2(config)
+
+        # Convert FactorResult to dict for backward compatibility
+        results = result.to_dict(args.composite, args.method)
     elif args.stage2_only:
-        # Stage 2 only mode
-        results = wrapper.run_stage2_only(
-            residue_file=args.stage2_only,
+        # Stage 2 only mode (v2 API)
+        config = TwoStageConfig(
+            composite="",  # Will be extracted from residue file
             b1=b1,
             b2=b2,
-            stage2_workers=stage2_workers,
-            verbose=args.verbose,
+            resume_file=args.stage2_only,
+            threads=stage2_workers,
             continue_after_factor=args.continue_after_factor,
-            progress_interval=args.progress_interval
+            verbose=args.verbose
         )
+        result = wrapper.run_two_stage_v2(config)
+
+        # Convert FactorResult to dict for backward compatibility
+        results = result.to_dict(args.composite, args.method)
     elif args.multiprocess:
-        results = wrapper.run_ecm_multiprocess(
+        # Multiprocess mode (v2 API)
+        # Resolve parametrization (multiprocess is CPU-only, so use_gpu=False)
+        param = resolve_param(args, use_gpu=False)
+
+        config = MultiprocessConfig(
             composite=args.composite,
             b1=b1,
             b2=b2,
-            curves=curves,
-            workers=args.workers,
-            verbose=args.verbose,
-            continue_after_factor=args.continue_after_factor,
-            method=args.method
+            total_curves=curves,
+            num_processes=args.workers,
+            parametrization=param,
+            verbose=args.verbose
         )
+        result = wrapper.run_multiprocess_v2(config)
+
+        # Convert FactorResult to dict for backward compatibility
+        results = result.to_dict(args.composite, args.method)
     elif args.two_stage and args.method == 'ecm':
+        # Two-stage mode (v2 API)
         # Parse sigma if provided (convert "N" to integer, keep "3:N" as string)
         sigma = parse_sigma_arg(args)
 
-        # Get param if provided, default to 3 for GPU
+        # Get param if provided (two-stage uses GPU by default)
         param = resolve_param(args, use_gpu)
 
-        results = wrapper.run_ecm_two_stage(
+        config = TwoStageConfig(
             composite=args.composite,
             b1=b1,
             b2=b2,
-            curves=curves,
-            sigma=sigma,
-            param=param,
-            use_gpu=use_gpu,
-            stage2_workers=stage2_workers,
+            stage1_curves=curves,
+            stage1_device="GPU" if use_gpu else "CPU",
+            stage2_device="CPU",
+            stage1_parametrization=param,
+            threads=stage2_workers,
             verbose=args.verbose,
-            save_residues=args.save_residues,
-            resume_residues=args.resume_residues,
-            gpu_device=gpu_device,
-            gpu_curves=gpu_curves,
-            continue_after_factor=args.continue_after_factor,
-            progress_interval=args.progress_interval,
-            project=args.project,
-            no_submit=args.no_submit
+            save_residues=args.save_residues
         )
+        result = wrapper.run_two_stage_v2(config)
+
+        # Convert FactorResult to dict for backward compatibility
+        results = result.to_dict(args.composite, args.method)
     else:
-        # Standard mode
+        # Standard mode (v2 API)
         if args.two_stage:
             print("Warning: Two-stage mode only available for ECM method, falling back to standard mode")
 
         # Parse sigma if provided (convert "N" to integer, keep "3:N" as string)
         sigma = parse_sigma_arg(args)
 
-        # Get param if provided, default to 3 for GPU
+        # Get param if provided
         param = resolve_param(args, use_gpu)
 
-        results = wrapper.run_ecm(
+        config = ECMConfig(
             composite=args.composite,
             b1=b1,
             b2=b2,
             curves=curves,
             sigma=sigma,
-            param=param,
-            use_gpu=use_gpu,
-            gpu_device=gpu_device,
-            gpu_curves=gpu_curves,
-            verbose=args.verbose,
+            parametrization=param,
             method=args.method,
-            continue_after_factor=args.continue_after_factor
+            verbose=args.verbose
         )
+        result = wrapper.run_ecm_v2(config)
+
+        # Convert FactorResult to dict for backward compatibility
+        results = result.to_dict(args.composite, args.method)
 
     # Submit results unless disabled or failed
     # Skip submission for t-level mode (each step already submitted)
@@ -2210,5 +1954,3 @@ def main():
         print(f"\nCompleted {curves_completed}/{curves_requested} curves in {exec_time:.1f}s before interruption")
         print("Skipping submission (--no-submit flag)")
 
-if __name__ == '__main__':
-    main()

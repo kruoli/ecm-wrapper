@@ -176,7 +176,7 @@
                         <td>{{ residue.id }}</td>
                         <td>
                             {% if composite %}
-                            <a href="/api/v1/admin/composites/{{ composite.id }}/details" class="number">
+                            <a href="#" onclick="navigateWithAuth('/api/v1/admin/composites/{{ composite.id }}/details'); return false;" class="number">
                                 {{ esc(format_composite(composite.number, 30)) }}
                             </a>
                             {% else %}
@@ -271,11 +271,11 @@ function applyFilters(event) {
     if (compositeId) params.set('composite_id', compositeId);
     if (expiringSoon) params.set('expiring_soon', 'true');
 
-    location.href = `/api/v1/admin/residue-status?${params.toString()}`;
+    navigateWithAuth(`/api/v1/admin/residue-status?${params.toString()}`);
 }
 
 function clearFilters() {
-    location.href = '/api/v1/admin/residue-status';
+    navigateWithAuth('/api/v1/admin/residue-status');
 }
 
 function releaseClaim(residueId) {
@@ -333,7 +333,7 @@ function navigatePage(newOffset) {
     const params = new URLSearchParams(location.search);
     params.set('offset', newOffset);
     params.set('limit', '{{ limit }}');
-    location.href = `/api/v1/admin/residue-status?${params.toString()}`;
+    navigateWithAuth(`/api/v1/admin/residue-status?${params.toString()}`);
 }
 </script>
 {% endblock %}

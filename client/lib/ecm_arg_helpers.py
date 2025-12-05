@@ -33,7 +33,7 @@ def parse_sigma_arg(args: argparse.Namespace) -> Optional[Union[str, int]]:
     return int(args.sigma)
 
 
-def resolve_param(args: argparse.Namespace, use_gpu: bool) -> Optional[int]:
+def resolve_param(args: argparse.Namespace, use_gpu: bool) -> int:
     """
     Resolve ECM parametrization from arguments with GPU default.
 
@@ -48,14 +48,14 @@ def resolve_param(args: argparse.Namespace, use_gpu: bool) -> Optional[int]:
         use_gpu: Whether GPU mode is enabled
 
     Returns:
-        Parametrization value (0-3) or None if not specified
+        Parametrization value (0-3)
     """
     # Check if param explicitly specified in args
     if hasattr(args, 'param') and args.param is not None:
         return args.param
 
-    # Default to param 3 for GPU mode, None otherwise
-    return 3 if use_gpu else None
+    # Default to param 3 for GPU mode, param 1 for CPU mode
+    return 3 if use_gpu else 1
 
 
 def resolve_stage2_workers(args: argparse.Namespace, config: Dict[str, Any]) -> int:

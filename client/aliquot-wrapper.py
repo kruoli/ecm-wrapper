@@ -17,7 +17,8 @@ from typing import Dict, List, Optional, Tuple
 from collections import Counter
 
 from lib.base_wrapper import BaseWrapper
-from lib.ecm_math import trial_division
+from lib.ecm_math import trial_division, is_probably_prime
+from lib.ecm_config import TLevelConfig
 import importlib.util
 
 # Import cado-wrapper.py
@@ -269,7 +270,7 @@ class AliquotWrapper(BaseWrapper):
         self.logger.info(f"Cofactor after trial division: {current_composite} ({cofactor_digits} digits)")
 
         # Check if cofactor is prime before attempting ECM
-        if self.ecm._is_probably_prime(current_composite):
+        if is_probably_prime(current_composite):
             self.logger.info(f"Cofactor C{cofactor_digits} is prime, factorization complete")
             all_factors.append(str(current_composite))
             factorization = self.parse_factorization(all_factors)
@@ -304,30 +305,32 @@ class AliquotWrapper(BaseWrapper):
                 else:
                     current_composite = 1
         else:
-            # Use GMP-ECM's progressive approach with t-level
+            # Use GMP-ECM's progressive approach with t-level (v2 API)
             target_t_level = (4.0 / 13.0) * cofactor_digits  # Target: 4/13 of digit length
 
             self.logger.info(f"Running progressive GMP-ECM to t{target_t_level:.1f} on C{cofactor_digits}")
 
-            ecm_results = self.ecm.run_ecm_with_tlevel(
+            config = TLevelConfig(
                 composite=str(current_composite),
-                target_tlevel=target_t_level,
-                workers=self.threads if self.threads else 1,
-                verbose=self.verbose,
-                no_submit=True,  # Never submit to API - aliquot-wrapper only submits to FactorDB
-                auto_adjust_target=True  # Adjust target t-level when factors found
+                target_t_level=target_t_level,
+                threads=self.threads if self.threads else 1,
+                verbose=self.verbose
             )
+            ecm_result = self.ecm.run_tlevel_v2(config)
 
             # Collect ECM factors (all are guaranteed to be prime)
-            ecm_factors = ecm_results.get('factors_found', [])
+            ecm_factors = ecm_result.factors
             if ecm_factors:
                 self.logger.info(f"Progressive GMP-ECM found {len(ecm_factors)} prime factor(s)")
                 all_factors.extend(ecm_factors)
 
-                # Get final cofactor from ECM results
-                final_cofactor = ecm_results.get('final_cofactor')
-                if final_cofactor:
-                    current_composite = int(final_cofactor)
+                # Calculate final cofactor by dividing out found factors
+                cofactor = current_composite
+                for factor in ecm_factors:
+                    cofactor //= int(factor)
+
+                if cofactor > 1:
+                    current_composite = cofactor
                     self.logger.info(f"Cofactor after GMP-ECM: C{len(str(current_composite))}")
                 else:
                     # Fully factored
@@ -337,11 +340,13 @@ class AliquotWrapper(BaseWrapper):
         if current_composite == 1:
             self.logger.info(f"Fully factored by {'YAFU' if self.ecm_program == 'yafu' else 'GMP'} ECM")
             factorization = self.parse_factorization(all_factors)
-            return True, factorization, ecm_results
+            # Create dummy dict for backward compatibility (not used by caller)
+            ecm_results_compat = {'factors_found': ecm_factors, 'success': True}
+            return True, factorization, ecm_results_compat
 
         # Check if cofactor is prime before continuing
         cofactor_digits = len(str(current_composite))
-        if self.ecm._is_probably_prime(current_composite):
+        if is_probably_prime(current_composite):
             self.logger.info(f"Cofactor C{cofactor_digits} is prime, factorization complete")
             all_factors.append(str(current_composite))
             factorization = self.parse_factorization(all_factors)

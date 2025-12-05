@@ -31,7 +31,15 @@ class BaseWrapper:
         cpu_name = self.config['client']['cpu_name']
         self.client_id = f"{username}-{cpu_name}"
 
-        # Initialize API client(s) - support both single endpoint and multiple endpoints
+        # Defer API client initialization until first use (lazy loading)
+        self.api_clients = None
+        self.api_client = None
+
+    def _ensure_api_clients(self):
+        """Initialize API clients on first use (lazy loading)."""
+        if self.api_clients is not None:
+            return  # Already initialized
+
         self.api_clients = []
         api_config = self.config['api']
 
@@ -238,6 +246,8 @@ class BaseWrapper:
         If multiple endpoints are configured, submits to all of them.
         Returns response from first successful submission (contains attempt_id).
         """
+        self._ensure_api_clients()  # Lazy load API clients on first use
+
         # Build payload once (same for all endpoints)
         payload = self.api_clients[0]['client'].build_submission_payload(
             composite=results['composite'],
@@ -267,6 +277,7 @@ class BaseWrapper:
         Returns:
             True if successfully abandoned, False otherwise
         """
+        self._ensure_api_clients()  # Lazy load API clients on first use
         return self.api_client.abandon_work(work_id, reason=reason, client_id=self.client_id)
 
     def create_base_results(self, composite: str, method: str = "ecm", **kwargs) -> Dict[str, Any]:

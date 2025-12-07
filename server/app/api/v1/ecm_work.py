@@ -9,6 +9,7 @@ import logging
 import json
 
 from ...database import get_db
+from ...dependencies import get_t_level_calculator
 from ...models.composites import Composite
 from ...models.attempts import ECMAttempt
 from ...models.work_assignments import WorkAssignment
@@ -19,9 +20,6 @@ from ...config import get_settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-# Initialize t-level calculator
-t_level_calc = TLevelCalculator()
 settings = get_settings()
 
 
@@ -33,7 +31,8 @@ async def get_ecm_work(
     max_digits: Optional[int] = None,
     timeout_days: int = 1,
     work_type: str = "standard",
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    t_level_calc: TLevelCalculator = Depends(get_t_level_calculator)
 ):
     """
     Get ECM work assignment with t-level targeting.

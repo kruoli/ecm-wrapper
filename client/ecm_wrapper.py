@@ -300,6 +300,12 @@ def main():
     if result and not args.no_submit:
         results_dict = result.to_dict(args.composite, args.method or 'ecm')
 
+        # Add ECM parameters that aren't in FactorResult
+        results_dict['b1'] = args.b1
+        results_dict['b2'] = args.b2
+        results_dict['curves_requested'] = args.curves
+        results_dict['parametrization'] = args.param or (3 if getattr(args, 'gpu', False) else 1)
+
         # Add project if specified
         if args.project:
             results_dict['project'] = args.project

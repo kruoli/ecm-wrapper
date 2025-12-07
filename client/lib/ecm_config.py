@@ -256,7 +256,7 @@ class FactorResult:
         Returns:
             Dictionary with v1-compatible format
         """
-        result = {
+        result: Dict[str, Any] = {
             'success': self.success,
             'factors_found': self.factors,
             'curves_completed': self.curves_run,
@@ -266,4 +266,15 @@ class FactorResult:
         }
         if composite:
             result['composite'] = composite
+
+        # Include factor_sigmas mapping for API submission
+        if self.factors and self.sigmas:
+            result['factor_sigmas'] = {
+                factor: sigma for factor, sigma in zip(self.factors, self.sigmas)
+                if sigma is not None
+            }
+            # Also include first sigma as main sigma for backward compat
+            if self.sigmas[0] is not None:
+                result['sigma'] = self.sigmas[0]
+
         return result

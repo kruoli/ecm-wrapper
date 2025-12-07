@@ -16,6 +16,7 @@ from datetime import datetime
 import logging
 
 from ...database import get_db
+from ...dependencies import get_residue_manager
 from ...models.residues import ECMResidue
 from ...models.composites import Composite
 from ...services.residue_manager import ResidueManager
@@ -28,12 +29,10 @@ from ...schemas.residues import (
     ResidueStatsResponse
 )
 from ...utils.transactions import transaction_scope
+from ...utils.errors import get_or_404
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-# Initialize residue manager
-residue_manager = ResidueManager()
 
 
 @router.post("/upload", response_model=ResidueUploadResponse)
@@ -42,7 +41,8 @@ async def upload_residue(
     client_id: str = Header(..., alias="X-Client-ID", description="Client identifier"),
     stage1_attempt_id: Optional[int] = Query(None, description="ID of stage 1 ECM attempt to link"),
     expiry_days: int = Query(7, ge=1, le=30, description="Days until residue expires"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    residue_manager: ResidueManager = Depends(get_residue_manager)
 ):
     """
     Upload a residue file after completing stage 1 ECM.
@@ -134,7 +134,8 @@ async def get_residue_work(
     max_digits: Optional[int] = Query(None, ge=1, description="Maximum composite digit size"),
     min_priority: Optional[int] = Query(None, description="Minimum composite priority"),
     claim_timeout_hours: int = Query(24, ge=1, le=168, description="Hours until claim expires"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    residue_manager: ResidueManager = Depends(get_residue_manager)
 ):
     """
     Request stage 2 work (an available residue file).
@@ -215,7 +216,8 @@ async def get_residue_work(
 async def download_residue(
     residue_id: int,
     client_id: str = Header(..., alias="X-Client-ID", description="Client identifier"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    residue_manager: ResidueManager = Depends(get_residue_manager)
 ):
     """
     Download a residue file for stage 2 processing.
@@ -230,13 +232,11 @@ async def download_residue(
     Returns:
         File content as response
     """
-    residue = db.query(ECMResidue).filter(ECMResidue.id == residue_id).first()
-
-    if not residue:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Residue {residue_id} not found"
-        )
+    residue = get_or_404(
+        db.query(ECMResidue).filter(ECMResidue.id == residue_id).first(),
+        "Residue",
+        str(residue_id)
+    )
 
     # Verify client has claimed this residue
     if residue.claimed_by != client_id:
@@ -267,7 +267,8 @@ async def complete_residue(
     residue_id: int,
     request: ResidueCompleteRequest,
     client_id: str = Header(..., alias="X-Client-ID", description="Client identifier"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    residue_manager: ResidueManager = Depends(get_residue_manager)
 ):
     """
     Mark a residue as completed after stage 2 finishes.
@@ -288,13 +289,11 @@ async def complete_residue(
         Completion confirmation with updated t-level
     """
     with transaction_scope(db, "complete_residue"):
-        residue = db.query(ECMResidue).filter(ECMResidue.id == residue_id).first()
-
-        if not residue:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Residue {residue_id} not found"
-            )
+        residue = get_or_404(
+            db.query(ECMResidue).filter(ECMResidue.id == residue_id).first(),
+            "Residue",
+            str(residue_id)
+        )
 
         # Verify client has claimed this residue
         if residue.claimed_by != client_id:
@@ -336,7 +335,8 @@ async def complete_residue(
 async def abandon_residue_claim(
     residue_id: int,
     client_id: str = Header(..., alias="X-Client-ID", description="Client identifier"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    residue_manager: ResidueManager = Depends(get_residue_manager)
 ):
     """
     Release a claimed residue back to the available pool.
@@ -383,13 +383,11 @@ async def get_residue_info(
     Returns:
         Residue details
     """
-    residue = db.query(ECMResidue).filter(ECMResidue.id == residue_id).first()
-
-    if not residue:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Residue {residue_id} not found"
-        )
+    residue = get_or_404(
+        db.query(ECMResidue).filter(ECMResidue.id == residue_id).first(),
+        "Residue",
+        str(residue_id)
+    )
 
     composite = db.query(Composite).filter(
         Composite.id == residue.composite_id
@@ -415,7 +413,10 @@ async def get_residue_info(
 
 
 @router.get("/stats/summary", response_model=ResidueStatsResponse)
-async def get_residue_stats(db: Session = Depends(get_db)):
+async def get_residue_stats(
+    db: Session = Depends(get_db),
+    residue_manager: ResidueManager = Depends(get_residue_manager)
+):
     """
     Get statistics about residues in the system.
 

@@ -119,3 +119,21 @@ def get_t_level_calculator():
     """
     from .services.t_level_calculator import TLevelCalculator
     return TLevelCalculator()
+
+
+def get_residue_manager():
+    """
+    Dependency for residue manager service injection.
+
+    Returns:
+        ResidueManager instance
+
+    Example:
+        @router.post("/residues/upload")
+        async def upload_residue(
+            residue_manager: ResidueManager = Depends(get_residue_manager)
+        ):
+            return residue_manager.store_residue_file(...)
+    """
+    from .services.residue_manager import ResidueManager
+    return ResidueManager()

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func, case
 from typing import List, Optional
@@ -74,6 +74,7 @@ async def dashboard(
 async def testing_status(
     request: Request,
     db: Session = Depends(get_db),
+    composite_service: CompositeService = Depends(get_composite_service),
     limit: int = Query(200, ge=1, le=200, description="Composites per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     min_t_level: Optional[float] = Query(None, ge=0, description="Minimum current t-level"),
@@ -87,8 +88,6 @@ async def testing_status(
     Now supports pagination and filtering for efficient handling of large datasets.
     """
     # Get milestone groups (not paginated, shows overall progress)
-    from ...services.composites import CompositeService
-    composite_service = CompositeService()
     milestone_groups = composite_service.get_milestone_groups(db)
 
     # Build query with filters
@@ -246,8 +245,6 @@ async def find_composite_public(
     Returns:
         Redirect to the composite's details page
     """
-    from fastapi.responses import RedirectResponse
-
     composite = composite_service.find_composite_by_identifier(db, q)
     if not composite:
         raise HTTPException(
@@ -289,8 +286,6 @@ async def get_composite_details_public(
         """
 
     # Get method breakdown for tabbed interface
-    from ...services.composites import CompositeService
-    composite_service = CompositeService()
     method_breakdown = composite_service.get_method_breakdown(composite_id, db)
 
     return templates.TemplateResponse("public/composite_details.html", {

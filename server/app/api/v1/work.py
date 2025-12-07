@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from ...database import get_db
+from ...dependencies import get_work_service
 from ...schemas.work import WorkRequest, WorkResponse
 from ...services.work_assignment import WorkAssignmentService
 from ...config import get_settings
@@ -11,19 +12,14 @@ from ...utils.transactions import transaction_scope
 router = APIRouter()
 settings = get_settings()
 
-# Initialize work assignment service
-work_service = WorkAssignmentService(
-    default_timeout_minutes=settings.default_work_timeout_minutes,
-    max_work_per_client=settings.max_work_items_per_client
-)
-
 @router.get("/work", response_model=WorkResponse)
 async def get_work(
     client_id: str,
     methods: Optional[List[str]] = None,
     max_digits: Optional[int] = None,
     min_digits: Optional[int] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    work_service: WorkAssignmentService = Depends(get_work_service)
 ):
     """
     Get work assignment for a client.
@@ -73,7 +69,8 @@ async def get_work(
 async def claim_work(
     work_id: str,
     client_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    work_service: WorkAssignmentService = Depends(get_work_service)
 ):
     """
     Claim a specific work assignment.
@@ -104,7 +101,8 @@ async def claim_work(
 async def start_work(
     work_id: str,
     client_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    work_service: WorkAssignmentService = Depends(get_work_service)
 ):
     """
     Mark work as started.
@@ -137,7 +135,8 @@ async def update_progress(
     client_id: str,
     curves_completed: int,
     message: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    work_service: WorkAssignmentService = Depends(get_work_service)
 ):
     """
     Update work progress.
@@ -177,7 +176,8 @@ async def update_progress(
 async def complete_work(
     work_id: str,
     client_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    work_service: WorkAssignmentService = Depends(get_work_service)
 ):
     """
     Mark work as completed.
@@ -210,7 +210,8 @@ async def abandon_work(
     work_id: str,
     client_id: str,
     reason: Optional[str] = "client_request",
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    work_service: WorkAssignmentService = Depends(get_work_service)
 ):
     """
     Abandon/release a work assignment.

@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -6,6 +7,7 @@ import logging
 from ...database import get_db
 from ...schemas.factors import FactorResponse, FactorWithComposite, FactorsListResponse
 from ...models import Factor, ECMAttempt, Composite
+from ...utils.errors import get_or_404
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +52,6 @@ async def get_latest_factors(
 
     # Apply time filter if provided
     if since:
-        from datetime import datetime
         try:
             since_dt = datetime.fromisoformat(since.replace('Z', '+00:00'))
             query = query.filter(Factor.created_at > since_dt)
@@ -97,9 +98,9 @@ async def get_factor(
     db: Session = Depends(get_db)
 ):
     """Get details of a specific factor by ID"""
-    factor = db.query(Factor).filter(Factor.id == factor_id).first()
-    if not factor:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Factor not found")
-
+    factor = get_or_404(
+        db.query(Factor).filter(Factor.id == factor_id).first(),
+        "Factor",
+        str(factor_id)
+    )
     return factor

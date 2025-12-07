@@ -2,43 +2,28 @@
 Admin-specific residue management endpoints.
 Provides functionality to delete residues and trigger cleanup of expired entries.
 """
-import secrets
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+import logging
+import os
+from fastapi import APIRouter, Depends, Header
 from sqlalchemy.orm import Session
 
-from ....config import get_settings
 from ....database import get_db
+from ....dependencies import verify_admin_key, get_residue_manager
 from ....models.residues import ECMResidue
 from ....services.residue_manager import ResidueManager
+from ....utils.errors import get_or_404
+from ....utils.transactions import transaction_scope
 
 router = APIRouter()
-
-
-def verify_admin_key(x_admin_key: Optional[str] = None) -> bool:
-    """
-    Verify admin API key with constant-time comparison.
-
-    Args:
-        x_admin_key: API key from X-Admin-Key header
-
-    Returns:
-        True if valid
-
-    Raises:
-        HTTPException: If key is invalid
-    """
-    settings = get_settings()
-    if not x_admin_key or not secrets.compare_digest(x_admin_key, settings.admin_api_key):
-        raise HTTPException(status_code=401, detail="Invalid admin key")
-    return True
+logger = logging.getLogger(__name__)
 
 
 @router.delete("/residues/{residue_id}")
 async def delete_residue(
     residue_id: int,
     db: Session = Depends(get_db),
-    _admin: bool = Depends(verify_admin_key)
+    _admin: bool = Depends(verify_admin_key),
+    residue_manager: ResidueManager = Depends(get_residue_manager)
 ):
     """
     Admin endpoint to delete a residue (even if claimed/completed).
@@ -50,6 +35,7 @@ async def delete_residue(
         residue_id: ID of the residue to delete
         db: Database session
         _admin: Admin authentication check
+        residue_manager: Residue manager service
 
     Returns:
         Success message with deleted residue info
@@ -58,29 +44,26 @@ async def delete_residue(
         HTTPException: If residue not found
     """
     # Get residue
-    residue = db.query(ECMResidue).filter(ECMResidue.id == residue_id).first()
-    if not residue:
-        raise HTTPException(status_code=404, detail=f"Residue {residue_id} not found")
-
-    residue_manager = ResidueManager()
+    residue = get_or_404(
+        db.query(ECMResidue).filter(ECMResidue.id == residue_id).first(),
+        "Residue",
+        str(residue_id)
+    )
 
     # Delete file if exists
-    if residue.storage_path:
-        import os
-        if os.path.exists(residue.storage_path):
-            try:
-                os.remove(residue.storage_path)
-            except Exception as e:
-                # Log error but continue with database deletion
-                print(f"Warning: Failed to delete residue file {residue.storage_path}: {e}")
+    if residue.storage_path and os.path.exists(residue.storage_path):
+        try:
+            os.remove(residue.storage_path)
+        except Exception as e:
+            logger.warning(f"Failed to delete residue file {residue.storage_path}: {e}")
 
     # Store info for response
     composite_id = residue.composite_id
     status = residue.status
 
-    # Delete database record
-    db.delete(residue)
-    db.commit()
+    # Delete database record within transaction
+    with transaction_scope(db, "delete_residue"):
+        db.delete(residue)
 
     return {
         "success": True,
@@ -94,7 +77,8 @@ async def delete_residue(
 @router.post("/residues/cleanup")
 async def cleanup_expired_residues(
     db: Session = Depends(get_db),
-    _admin: bool = Depends(verify_admin_key)
+    _admin: bool = Depends(verify_admin_key),
+    residue_manager: ResidueManager = Depends(get_residue_manager)
 ):
     """
     Manually trigger cleanup of expired residues.
@@ -105,12 +89,11 @@ async def cleanup_expired_residues(
     Args:
         db: Database session
         _admin: Admin authentication check
+        residue_manager: Residue manager service
 
     Returns:
         Cleanup summary with count of removed residues
     """
-    residue_manager = ResidueManager()
-
     # Use ResidueManager's cleanup method
     cleaned_count = residue_manager.cleanup_expired_residues(db)
 

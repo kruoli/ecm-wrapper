@@ -806,6 +806,14 @@ class StandardAutoWorkMode(WorkMode):
             result = self.wrapper.run_ecm_v2(ecm_config)
 
         self._results_dict = result.to_dict(composite, self.args.method)
+
+        # Add ECM parameters that aren't in FactorResult
+        self._results_dict['b1'] = self.args.b1
+        self._results_dict['b2'] = self.args.b2
+        self._results_dict['curves_requested'] = self.args.curves
+        use_gpu, _, _ = resolve_gpu_settings(self.args, self.wrapper.config)
+        self._results_dict['parametrization'] = self.args.param or (3 if use_gpu else 1)
+
         return result
 
     def submit_results(self, work: Dict[str, Any], result: FactorResult) -> bool:

@@ -59,10 +59,8 @@ class ECMWrapper(BaseWrapper):
         This is the new, recommended method that uses ECMConfig dataclass.
         It has better type safety, validation, and testability.
 
-        Delegates to run_multiprocess_v2 with num_processes=1, which provides:
-        - Automatic stop on first factor found
-        - Accurate curve counting (not just requested count)
-        - Proven, well-tested implementation
+        For GPU mode or when saving residues, uses _execute_ecm_primitive directly.
+        For CPU mode without residues, delegates to run_multiprocess_v2 with 1 worker.
 
         Args:
             config: ECM configuration object
@@ -76,7 +74,30 @@ class ECMWrapper(BaseWrapper):
             >>> if result.success:
             ...     print(f"Found factors: {result.factors}")
         """
-        # Delegate to multiprocess with 1 worker for proper factor detection and curve counting
+        # Use primitive directly for GPU mode or when saving residues
+        # (multiprocess doesn't support these features)
+        if config.use_gpu or config.save_residues:
+            start_time = time.time()
+            residue_path = Path(config.save_residues) if config.save_residues else None
+
+            prim_result = self._execute_ecm_primitive(
+                composite=config.composite,
+                b1=config.b1,
+                b2=config.b2,
+                curves=config.curves,
+                residue_save=residue_path,
+                sigma=config.sigma,
+                param=config.parametrization,
+                method=config.method,
+                use_gpu=config.use_gpu,
+                gpu_device=config.gpu_device,
+                gpu_curves=config.gpu_curves,
+                verbose=config.verbose
+            )
+
+            return FactorResult.from_primitive_result(prim_result, time.time() - start_time)
+
+        # For CPU mode without residues, delegate to multiprocess for proper handling
         mp_config = MultiprocessConfig(
             composite=config.composite,
             b1=config.b1,
@@ -84,8 +105,10 @@ class ECMWrapper(BaseWrapper):
             total_curves=config.curves,
             curves_per_process=config.curves,
             num_processes=1,
+            parametrization=config.parametrization,
             method=config.method,
-            verbose=config.verbose
+            verbose=config.verbose,
+            progress_interval=config.progress_interval
         )
         return self.run_multiprocess_v2(mp_config)
 

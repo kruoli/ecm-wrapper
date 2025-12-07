@@ -212,3 +212,32 @@ class ConfigManager:
                 return default
 
         return value
+
+    def load_typed_config(self, config_path: str) -> 'AppConfig':
+        """
+        Load configuration as typed AppConfig object.
+
+        This provides type-safe access to configuration values with
+        IDE autocompletion and validation.
+
+        Args:
+            config_path: Path to base configuration file
+
+        Returns:
+            Typed AppConfig instance
+
+        Example:
+            manager = ConfigManager()
+            config = manager.load_typed_config('client.yaml')
+            print(config.programs.gmp_ecm.path)
+            print(config.api.endpoint)
+        """
+        from .typed_config import TypedConfigLoader
+        loader = TypedConfigLoader()
+        return loader.load(config_path)
+
+
+# Type hint for forward reference
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .typed_config import AppConfig

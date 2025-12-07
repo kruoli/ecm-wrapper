@@ -20,7 +20,6 @@ def execute_subprocess(
     verbose: bool = False,
     progress_interval: int = 0,
     line_callback: Optional[Callable[[str, List[str]], None]] = None,
-    timeout: Optional[int] = None,
     log_prefix: str = "",
     stop_event: Optional[Any] = None
 ) -> Dict[str, Any]:
@@ -34,13 +33,14 @@ def execute_subprocess(
     - Callback mode: call function for each output line
     - Early termination: check stop_event for coordinated shutdown
 
+    Note: No timeout is enforced - ECM factorization can run for extended periods.
+
     Args:
         cmd: Command and arguments to execute
         composite: Optional composite number to send to stdin
         verbose: If True, stream output to console in real-time
         progress_interval: If > 0, show progress every N lines (overrides verbose)
         line_callback: Optional function called for each line: callback(line, all_lines_so_far)
-        timeout: Optional timeout in seconds
         log_prefix: Prefix for log messages (e.g., "Worker 1", "Stage1")
         stop_event: Optional multiprocessing.Event for early termination
 
@@ -55,8 +55,7 @@ def execute_subprocess(
         >>> result = execute_subprocess(
         ...     ["ecm", "1000000"],
         ...     composite="123456789",
-        ...     verbose=True,
-        ...     timeout=3600
+        ...     verbose=True
         ... )
         >>> print(result['stdout'])
     """
@@ -121,13 +120,8 @@ def execute_subprocess(
                     if line_callback:
                         line_callback(line, output_lines)
 
-        # Wait for process to complete
-        try:
-            process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-            raise
+        # Wait for process to complete (no timeout - ECM can run indefinitely)
+        process.wait()
 
         stdout = '\n'.join(output_lines)
 
@@ -138,10 +132,6 @@ def execute_subprocess(
             'terminated_early': terminated_early
         }
 
-    except subprocess.TimeoutExpired as e:
-        if logger:
-            logger.error(f"Process timed out after {timeout} seconds")
-        raise
     except Exception as e:
         if logger:
             logger.error(f"Subprocess execution failed: {e}")
@@ -156,16 +146,20 @@ def execute_subprocess_simple(
     """
     Simple subprocess execution for quick commands (like t-level calculations).
 
+    Unlike execute_subprocess(), this function supports timeouts because it's
+    intended for quick utility commands that should complete in seconds, not
+    long-running factorization operations.
+
     Args:
         cmd: Command and arguments to execute
         input_text: Optional text to send to stdin
-        timeout: Optional timeout in seconds
+        timeout: Optional timeout in seconds (reasonable for quick commands)
 
     Returns:
         Tuple of (stdout, returncode)
 
     Example:
-        >>> output, code = execute_subprocess_simple(["t-level", "-q", "100@50000"])
+        >>> output, code = execute_subprocess_simple(["t-level", "-q", "100@50000"], timeout=10)
         >>> print(output)
         t25.4
     """
@@ -178,49 +172,3 @@ def execute_subprocess_simple(
         check=False
     )
     return result.stdout, result.returncode
-
-
-def create_subprocess_silent(
-    cmd: List[str],
-    composite: Optional[str] = None
-) -> Tuple[subprocess.Popen, List[str]]:
-    """
-    Create and run subprocess, capturing output silently.
-
-    This is for cases where you need the Popen object for manual handling
-    but want silent output capture.
-
-    Args:
-        cmd: Command and arguments to execute
-        composite: Optional composite number to send to stdin
-
-    Returns:
-        Tuple of (process, output_lines)
-
-    Example:
-        >>> process, lines = create_subprocess_silent(["ecm", "1000"], "12345")
-        >>> process.wait()
-        >>> print(lines)
-    """
-    process = subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE if composite else None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
-    )
-
-    # Send composite to stdin if provided
-    if composite and process.stdin:
-        process.stdin.write(composite)
-        process.stdin.close()
-
-    # Capture all output
-    output_lines = []
-    if process.stdout:
-        for line in iter(process.stdout.readline, ''):
-            line = line.rstrip()
-            if line:
-                output_lines.append(line)
-
-    return process, output_lines

@@ -78,21 +78,15 @@ def test_execute_subprocess_with_composite():
 
 
 def test_execute_subprocess_timeout():
-    """Test subprocess timeout handling"""
+    """Test subprocess timeout handling - SKIPPED.
+
+    Timeout was intentionally removed from execute_subprocess() because
+    ECM factorization can legitimately run for days/weeks. Only the
+    execute_subprocess_simple() function (for quick utility commands like
+    t-level calculations) retains timeout support.
+    """
     import pytest
-
-    # Test with a command that should timeout
-    result = execute_subprocess(
-        cmd=['sleep', '10'],
-        verbose=False,
-        timeout=1  # 1 second timeout for a 10 second sleep
-    )
-
-    # Should either timeout or terminate
-    # The function handles TimeoutExpired internally
-    assert result is not None, "Should return result even on timeout"
-
-    print("✓ test_execute_subprocess_timeout passed")
+    pytest.skip("Timeout removed from execute_subprocess() - ECM can run for extended periods")
 
 
 def test_execute_subprocess_returncode():

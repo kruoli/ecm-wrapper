@@ -28,15 +28,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Import the scientific notation parser
 from lib.arg_parser import parse_int_with_scientific
 
-# Import wrapper and utilities using importlib to handle hyphenated module name
-import importlib.util
-spec = importlib.util.spec_from_file_location("ecm_wrapper",
-    str(Path(__file__).parent.parent / "ecm-wrapper.py"))
-ecm_wrapper_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(ecm_wrapper_module)
-ECMWrapper = ecm_wrapper_module.ECMWrapper
-
-# Import ResultProcessor for factor handling
+# Import wrapper and utilities
+from lib.ecm_executor import ECMWrapper
 from lib.result_processor import ResultProcessor
 from lib.results_builder import ResultsBuilder
 

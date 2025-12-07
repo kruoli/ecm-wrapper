@@ -16,7 +16,7 @@ while IFS= read -r number <&3; do
 
     count=$((count + 1))
     echo "[$count/$total] Starting ECM on: $number"
-    python3 ecm-wrapper.py -n "$number" --two-stage -v --b1 11000000 --b2 0
+    python3 ecm_wrapper.py --composite "$number" --stage1-only -v --b1 11000000 --curves 1
     echo "[$count/$total] Completed"
     echo "---"
 done 3< data/numbers.txt

@@ -5,6 +5,8 @@ import sys
 from typing import Optional, Dict, Any, List
 from lib.base_wrapper import BaseWrapper
 from lib.parsing_utils import Timeouts
+from lib.user_output import UserOutput
+from lib.results_builder import ResultsBuilder
 
 class CADOWrapper(BaseWrapper):
     def __init__(self, config_path: str):
@@ -44,7 +46,7 @@ class CADOWrapper(BaseWrapper):
         Returns:
             List of (factor, sigma) tuples (sigma is always None for NFS)
         """
-        factors = []
+        factors: List[tuple[str, Optional[str]]] = []
 
         # Strategy 1: Look for "Square Root: Factors:" line
         for line in output.split('\n'):
@@ -94,10 +96,13 @@ class CADOWrapper(BaseWrapper):
         # Build command
         cmd = self._build_cado_cmd(composite, threads)
 
-        # Create results dictionary
-        results = self.create_base_results(composite, method='nfs', threads=threads)
+        # Create results dictionary using ResultsBuilder
+        builder = ResultsBuilder(composite, 'nfs')
+        results = builder.build_no_truncate()
+        results['threads'] = threads
 
         start_time = time.time()
+        process: Optional[subprocess.Popen[str]] = None
 
         try:
             self.logger.info(f"Running CADO-NFS on {len(composite)}-digit number with {threads or self.config['programs']['cado_nfs'].get('threads', 4)} threads")
@@ -114,7 +119,7 @@ class CADOWrapper(BaseWrapper):
             )
 
             # Stream output in real-time if verbose
-            if verbose:
+            if verbose and process.stdout:
                 stdout_lines = []
                 for line in process.stdout:
                     sys.stdout.write(line)  # Print to terminal in real-time
@@ -137,7 +142,8 @@ class CADOWrapper(BaseWrapper):
 
         except subprocess.TimeoutExpired:
             self.logger.error(f"CADO-NFS timed out after {Timeouts.CADO_NFS} seconds")
-            process.kill()
+            if process:
+                process.kill()
             results['success'] = False
             results['timeout'] = True
         except Exception as e:
@@ -160,24 +166,18 @@ class CADOWrapper(BaseWrapper):
         return results
 
     def get_program_version(self, program: str) -> str:
-        """Override base class method to get CADO-NFS version"""
+        """Override base class method to get CADO-NFS version."""
         return self.get_cado_version()
 
     def get_cado_version(self) -> str:
-        """Get CADO-NFS version"""
-        try:
-            cado_path = os.path.expanduser(self.config['programs']['cado_nfs']['path'])
-            result = subprocess.run(
-                ['python3', cado_path, '--help'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            # CADO-NFS doesn't have a clear version string, return "installed"
-            return "installed" if result.returncode == 0 else "unknown"
-        except (subprocess.SubprocessError, FileNotFoundError, OSError):
-            pass
-        return "unknown"
+        """Get CADO-NFS version."""
+        from lib.parsing_utils import get_binary_version
+        return get_binary_version(
+            self.config['programs']['cado_nfs']['path'],
+            'cado',
+            help_flag='--help',
+            use_python=True
+        )
 
 
 def main():
@@ -190,16 +190,16 @@ def main():
         epilog="""
 Examples:
   # Factor a composite number
-  python3 cado-wrapper.py --composite 1191913975959397481605242916777
+  python3 cado_wrapper.py --composite 1191913975959397481605242916777
 
   # Use specific number of threads
-  python3 cado-wrapper.py --composite 1191913975959397481605242916777 --threads 8
+  python3 cado_wrapper.py --composite 1191913975959397481605242916777 --threads 8
 
   # Show CADO-NFS output in real-time
-  python3 cado-wrapper.py --composite 1191913975959397481605242916777 -v
+  python3 cado_wrapper.py --composite 1191913975959397481605242916777 -v
 
   # Test without API submission
-  python3 cado-wrapper.py --composite 1191913975959397481605242916777 --no-submit
+  python3 cado_wrapper.py --composite 1191913975959397481605242916777 --no-submit
         """
     )
 
@@ -228,13 +228,14 @@ Examples:
     )
 
     # Print results
+    output = UserOutput()
     if results.get('factors_found'):
-        print(f"\n✓ Factorization successful!")
-        print(f"  Composite: {args.composite}")
-        print(f"  Factors: {' × '.join(results['factors_found'])}")
-        print(f"  Time: {results['execution_time']:.2f}s")
+        output.section("Factorization successful!")
+        output.item("Composite", args.composite)
+        output.item("Factors", ' × '.join(results['factors_found']))
+        output.item("Time", f"{results['execution_time']:.2f}s")
     else:
-        print(f"\n✗ Factorization failed")
+        output.error("Factorization failed")
         sys.exit(1)
 
     # Submit results unless disabled

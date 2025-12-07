@@ -28,7 +28,7 @@ class FailedResultsResender(BaseWrapper):
 
     def find_failed_results(self) -> List[Dict[str, Any]]:
         """Find results files that may have failed to submit."""
-        failed_results = []
+        failed_results: List[Dict[str, Any]] = []
 
         # Look for result files in data directory
         data_dir = Path("data/results")
@@ -56,7 +56,7 @@ class FailedResultsResender(BaseWrapper):
 
     def parse_log_for_failed_attempts(self, log_file: str = "data/logs/ecm_client.log") -> List[Dict[str, Any]]:
         """Parse log files to find attempts that completed but failed to submit."""
-        failed_attempts = []
+        failed_attempts: List[Dict[str, Any]] = []
         log_path = Path(log_file)
 
         if not log_path.exists():
@@ -152,8 +152,8 @@ class FailedResultsResender(BaseWrapper):
             print(f"❌ Error processing {result_file}: {e}")
             return None
 
-    def submit_result(self, submission: Dict[str, Any], work_id: Optional[str] = None) -> bool:
-        """Submit a single result to all configured API endpoints using BaseWrapper infrastructure.
+    def resubmit_result(self, submission: Dict[str, Any], work_id: Optional[str] = None) -> bool:
+        """Resubmit a previously failed result to all configured API endpoints.
 
         Args:
             submission: API payload to submit
@@ -184,7 +184,7 @@ class FailedResultsResender(BaseWrapper):
                 # Don't fail the whole operation if work abandonment fails
                 print(f"   ⚠️  Failed to release work {work_id}: {e}")
 
-        return success
+        return success is not None
 
     def mark_as_submitted(self, result_file: str):
         """Mark a result file as successfully submitted."""
@@ -235,7 +235,7 @@ class FailedResultsResender(BaseWrapper):
                 print(f"   (associated with work assignment {work_id})")
 
             # Attempt submission (and abandon work if successful)
-            if self.submit_result(submission, work_id=work_id if not self.dry_run else None):
+            if self.resubmit_result(submission, work_id=work_id if not self.dry_run else None):
                 stats["success"] += 1
                 if not self.dry_run:
                     self.mark_as_submitted(result_file)
@@ -291,7 +291,7 @@ Arguments:
         # Print endpoint info (handle both single and multi-endpoint configs)
         if hasattr(resender, 'api_endpoint'):
             print(f"🌐 API Endpoint: {resender.api_endpoint}")
-        else:
+        elif resender.api_clients:
             endpoints_str = ', '.join([c['name'] for c in resender.api_clients])
             print(f"🌐 API Endpoints: {endpoints_str}")
         print()

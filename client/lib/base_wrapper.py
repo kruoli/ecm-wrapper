@@ -7,11 +7,14 @@ import logging
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List, Callable, TYPE_CHECKING
 
 from .config_manager import ConfigManager
 from .api_client import APIClient
 from .file_utils import save_json, load_json
+
+if TYPE_CHECKING:
+    from .typed_config import AppConfig
 
 
 class BaseWrapper:
@@ -20,6 +23,10 @@ class BaseWrapper:
     def __init__(self, config_path: str):
         """Initialize wrapper with configuration."""
         self._validate_working_directory()
+
+        # Store config path for lazy typed config loading
+        self._config_path = config_path
+        self._typed_config: Optional['AppConfig'] = None
 
         # Load configuration using ConfigManager
         config_manager = ConfigManager()
@@ -34,6 +41,28 @@ class BaseWrapper:
         # Defer API client initialization until first use (lazy loading)
         self.api_clients = None
         self.api_client = None
+
+    @property
+    def typed_config(self) -> 'AppConfig':
+        """
+        Get typed configuration object (lazy-loaded).
+
+        Provides type-safe access to configuration values with IDE
+        autocompletion. Use this instead of self.config for new code.
+
+        Returns:
+            Typed AppConfig instance
+
+        Example:
+            path = self.typed_config.programs.gmp_ecm.path
+            timeout = self.typed_config.api.timeout
+        """
+        if self._typed_config is None:
+            from .typed_config import TypedConfigLoader
+            loader = TypedConfigLoader()
+            self._typed_config = loader.load(self._config_path)
+        assert self._typed_config is not None  # For type checker
+        return self._typed_config
 
     def _ensure_api_clients(self):
         """Initialize API clients on first use (lazy loading)."""
@@ -75,12 +104,27 @@ class BaseWrapper:
         # Keep backward compatibility reference to first client
         self.api_client = self.api_clients[0]['client']
 
+    def _get_api_client(self) -> 'APIClient':
+        """
+        Get the API client, ensuring it's initialized.
+
+        Returns:
+            The primary APIClient instance
+
+        Raises:
+            RuntimeError: If API client cannot be initialized
+        """
+        self._ensure_api_clients()
+        if self.api_client is None:
+            raise RuntimeError("API client failed to initialize")
+        return self.api_client
+
     def _validate_working_directory(self):
         """Validate that we're running from the correct directory."""
         current_dir = Path.cwd()
 
         # Check if we're in the client directory by looking for key files
-        expected_files = ['ecm-wrapper.py', 'yafu-wrapper.py', 'client.yaml', 'lib']
+        expected_files = ['ecm_wrapper.py', 'ecm_client.py', 'yafu_wrapper.py', 'client.yaml', 'lib']
         missing_files = [f for f in expected_files if not (current_dir / f).exists()]
 
         if missing_files:
@@ -93,7 +137,7 @@ class BaseWrapper:
 
             # Also check if we're one level up (in ecm-wrapper root)
             if (current_dir / 'client').exists():
-                print("💡 TIP: Try running: cd client && python3 ecm-wrapper.py [args]")
+                print("💡 TIP: Try running: cd client && python3 ecm_wrapper.py [args]")
             print()
 
     def setup_logging(self):
@@ -200,6 +244,11 @@ class BaseWrapper:
             Response dictionary from first successful submission (contains attempt_id, composite_id, etc.)
             Returns None if all submissions failed
         """
+        # Ensure API clients are initialized
+        if not self.api_clients:
+            self._ensure_api_clients()
+        assert self.api_clients is not None  # For type checker
+
         submission_results = []
         first_success_response = None
 
@@ -247,6 +296,7 @@ class BaseWrapper:
         Returns response from first successful submission (contains attempt_id).
         """
         self._ensure_api_clients()  # Lazy load API clients on first use
+        assert self.api_clients is not None  # For type checker
 
         # Build payload once (same for all endpoints)
         payload = self.api_clients[0]['client'].build_submission_payload(
@@ -278,37 +328,10 @@ class BaseWrapper:
             True if successfully abandoned, False otherwise
         """
         self._ensure_api_clients()  # Lazy load API clients on first use
+        assert self.api_client is not None  # For type checker
         return self.api_client.abandon_work(work_id, reason=reason, client_id=self.client_id)
 
-    def create_base_results(self, composite: str, method: str = "ecm", **kwargs) -> Dict[str, Any]:
-        """
-        DEPRECATED: Use ResultsBuilder for new code.
-
-        Create standardized results dictionary.
-        Kept for backward compatibility with run_subprocess_with_parsing().
-        """
-        from lib.results_builder import ResultsBuilder
-
-        builder = ResultsBuilder(composite, method)
-
-        if 'b1' in kwargs:
-            builder.with_b1(kwargs['b1'])
-        if 'b2' in kwargs:
-            builder.with_b2(kwargs['b2'])
-        if 'curves' in kwargs:
-            builder.with_curves(kwargs['curves'])
-        if 'sigma' in kwargs:
-            builder.with_sigma(kwargs['sigma'])
-
-        # Add any extra kwargs to the data
-        results = builder.build_no_truncate()
-        for key, value in kwargs.items():
-            if key not in ['b1', 'b2', 'curves', 'sigma']:
-                results[key] = value
-
-        return results
-
-    def run_subprocess_with_parsing(self, cmd: List[str], timeout: Optional[int],
+    def run_subprocess_with_parsing(self, cmd: List[str],
                                   composite: str, method: str,
                                   parse_function: Callable,
                                   **kwargs) -> Dict[str, Any]:
@@ -316,11 +339,12 @@ class BaseWrapper:
         Unified subprocess execution with parsing for factorization programs.
 
         This method provides comprehensive error handling for subprocess execution,
-        including timeout, I/O errors, and parsing errors. Subclasses should use
-        this method instead of reimplementing subprocess execution and error handling.
+        including I/O errors and parsing errors. Subclasses should use this method
+        instead of reimplementing subprocess execution and error handling.
+
+        Note: No timeout is enforced - ECM factorization can run for extended periods.
 
         The method handles:
-        - Subprocess timeouts (subprocess.TimeoutExpired)
         - Subprocess execution errors (subprocess.SubprocessError)
         - I/O errors (OSError, IOError)
         - Invalid parameters (ValueError)
@@ -328,7 +352,6 @@ class BaseWrapper:
 
         Args:
             cmd: Command list to execute
-            timeout: Timeout in seconds (None for no timeout)
             composite: Number being factored
             method: Method name (ecm, pm1, pp1, etc.)
             parse_function: Function to parse output (factor, sigma)
@@ -343,9 +366,27 @@ class BaseWrapper:
             this method, as all error cases are already handled internally.
         """
         from lib.subprocess_utils import execute_subprocess
+        from lib.results_builder import ResultsBuilder
 
         start_time = time.time()
-        results = self.create_base_results(composite, method, **kwargs)
+
+        # Build results using ResultsBuilder
+        builder = ResultsBuilder(composite, method)
+        if 'b1' in kwargs:
+            builder.with_b1(kwargs['b1'])
+        if 'b2' in kwargs:
+            builder.with_b2(kwargs['b2'])
+        if 'curves' in kwargs:
+            builder.with_curves(kwargs['curves'])
+        if 'sigma' in kwargs:
+            builder.with_sigma(kwargs['sigma'])
+        results = builder.build_no_truncate()
+
+        # Add any extra kwargs to results
+        for key, value in kwargs.items():
+            if key not in ['b1', 'b2', 'curves', 'sigma', 'verbose', 'input']:
+                results[key] = value
+
         verbose = kwargs.get('verbose', False)
 
         try:
@@ -359,8 +400,7 @@ class BaseWrapper:
             result = execute_subprocess(
                 cmd=cmd,
                 composite=program_input if program_input is not None else composite,
-                verbose=verbose,
-                timeout=timeout
+                verbose=verbose
             )
 
             stdout = result['stdout']
@@ -396,11 +436,6 @@ class BaseWrapper:
 
             results['success'] = result['returncode'] == 0
 
-        except subprocess.TimeoutExpired:
-            timeout_msg = f"{timeout} seconds" if timeout is not None else "limit"
-            self.logger.error(f"{method.upper()} timed out after {timeout_msg}")
-            results['success'] = False
-            results['timeout'] = True
         except subprocess.SubprocessError as e:
             self.logger.error(f"{method.upper()} subprocess execution failed: {e}")
             results['success'] = False
@@ -455,20 +490,34 @@ class BaseWrapper:
         if not process.stdout:
             return process, output_lines
 
-        while True:
-            line = process.stdout.readline()
-            if not line:
-                break
-            line = line.rstrip()
-            if line:
-                self.logger.info(f"{log_prefix}: {line}")
-                output_lines.append(line)
+        try:
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    break
+                line = line.rstrip()
+                if line:
+                    self.logger.info(f"{log_prefix}: {line}")
+                    output_lines.append(line)
 
-                # Call optional per-line callback
-                if line_callback:
-                    line_callback(line, output_lines)
+                    # Call optional per-line callback
+                    if line_callback:
+                        line_callback(line, output_lines)
 
-        process.wait()
+            process.wait()
+        except KeyboardInterrupt:
+            self.logger.info(f"{log_prefix}: Interrupted by user, terminating subprocess...")
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            # Set interrupted flag if available (ECMWrapper has this, BaseWrapper may not)
+            if hasattr(self, 'interrupted'):
+                self.interrupted = True
+            raise  # Re-raise to let caller know about the interrupt
+
         return process, output_lines
 
     def get_program_version(self, program: str) -> str:

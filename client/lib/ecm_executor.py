@@ -186,8 +186,7 @@ class ECMWrapper(BaseWrapper):
                 residue_file=residue_file,
                 use_gpu=(config.stage1_device == "GPU"),
                 param=config.stage1_parametrization,
-                verbose=config.verbose,
-                timeout=config.timeout_stage1
+                verbose=config.verbose
             )
 
             # Early return if factor found in stage 1
@@ -202,13 +201,17 @@ class ECMWrapper(BaseWrapper):
             stage1_curves = stage1_result.get('curves_run', 0)
 
         # Stage 2: Multi-threaded CPU processing
+        actual_b2 = config.b2 or (actual_b1 * 100)  # Default B2
+        self.logger.info(f"Starting stage 2: B1={actual_b1:,}, B2={actual_b2:,}, workers={config.threads}")
+
         # _run_stage2_multithread returns: (factor, all_factors, curves_completed, execution_time, sigma)
         _factor, all_factors, curves_completed, _stage2_time, sigma = self._run_stage2_multithread(
             residue_file=residue_file,
             b1=actual_b1,
-            b2=config.b2 or (actual_b1 * 100),  # Default B2
+            b2=actual_b2,
             workers=config.threads,
-            verbose=config.verbose
+            verbose=config.verbose,
+            progress_interval=config.progress_interval
         )
 
         # Build FactorResult from stage 2 results
@@ -314,13 +317,19 @@ class ECMWrapper(BaseWrapper):
             if p.is_alive():
                 p.terminate()
 
-        # Build FactorResult
+        # Build FactorResult with recursive factoring of any composite factors
         result = FactorResult()
         for factor, sigma in zip(all_factors, all_sigmas):
-            result.add_factor(factor, sigma)
+            # Fully factor each discovered factor to get all prime factors
+            # This handles cases where ECM finds a composite factor (product of primes)
+            # Use _fully_factor_composite which calls primitives directly (no recursion through run_ecm_v2)
+            prime_factors = self._fully_factor_composite(factor)
+            for prime in prime_factors:
+                result.add_factor(prime, sigma)
+
         result.curves_run = total_curves_completed
         result.execution_time = time.time() - start_time
-        result.success = len(all_factors) > 0
+        result.success = len(result.factors) > 0
         result.raw_output = '\n\n'.join(all_raw_outputs) if all_raw_outputs else None
 
         return result
@@ -348,7 +357,10 @@ class ECMWrapper(BaseWrapper):
         from lib.ecm_math import (get_optimal_b1_for_tlevel, calculate_tlevel,
                                   calculate_curves_to_target_direct, TLEVEL_TRANSITION_CACHE)
 
-        self.logger.info(f"Starting progressive ECM with target t{config.target_t_level:.1f}")
+        if config.start_t_level > 0:
+            self.logger.info(f"Starting progressive ECM with target t{config.target_t_level:.1f} (starting from t{config.start_t_level:.2f})")
+        else:
+            self.logger.info(f"Starting progressive ECM with target t{config.target_t_level:.1f}")
         start_time = time.time()
 
         # Accumulated results
@@ -357,127 +369,150 @@ class ECMWrapper(BaseWrapper):
         total_curves = 0
         curve_history = []  # Track B1 values and curves for t-level calculation
 
-        # Progressive loop: start at t20 and work up to target
-        current_t_level = 0.0
+        # Progressive loop: start from start_t_level (default 0) and work up to target
+        current_t_level = config.start_t_level
         step_targets = []
 
         # Build step targets (every 5 t-levels from 20 to target, plus final target)
+        # Skip steps that are below our starting t-level
         t = 20.0
         while t < config.target_t_level:
-            step_targets.append(t)
+            if t > current_t_level:  # Only add steps above our starting point
+                step_targets.append(t)
             t += 5.0
         # Always add the final target (might not be a multiple of 5)
-        if config.target_t_level not in step_targets:
+        if config.target_t_level not in step_targets and config.target_t_level > current_t_level:
             step_targets.append(config.target_t_level)
 
         # Run ECM at each step
-        for step_target in step_targets:
-            # Get optimal B1 for this t-level
-            b1, _ = get_optimal_b1_for_tlevel(step_target)
+        try:
+            for step_target in step_targets:
+                # Check for interruption at start of each step
+                if self.interrupted:
+                    self.logger.info("T-level execution interrupted, returning partial results")
+                    break
 
-            # Calculate curves needed to reach this step from current position
-            # First try the cached table for standard 5-digit increments
-            current_rounded = round(current_t_level)
-            target_rounded = round(step_target)
-            cache_key = (current_rounded, target_rounded, config.parametrization)
+                # Get optimal B1 for this t-level
+                b1, _ = get_optimal_b1_for_tlevel(step_target)
 
-            if cache_key in TLEVEL_TRANSITION_CACHE:
-                # Use cached value for standard transition
-                cached_b1, curves = TLEVEL_TRANSITION_CACHE[cache_key]
-                if cached_b1 == b1:  # Only use cache if B1 matches
-                    self.logger.info(f"Using cached transition: t{current_rounded} → t{target_rounded} = {curves} curves at B1={b1}, p={config.parametrization}")
+                # Calculate curves needed to reach this step from current position
+                # First try the cached table for standard 5-digit increments
+                current_rounded = round(current_t_level)
+                target_rounded = round(step_target)
+                cache_key = (current_rounded, target_rounded, config.parametrization)
+
+                curves: Optional[int] = None  # Will be set below
+                if cache_key in TLEVEL_TRANSITION_CACHE:
+                    # Use cached value for standard transition
+                    cached_b1, cached_curves = TLEVEL_TRANSITION_CACHE[cache_key]
+                    if cached_b1 == b1:  # Only use cache if B1 matches
+                        curves = cached_curves
+                        self.logger.info(f"Using cached transition: t{current_rounded} → t{target_rounded} = {curves} curves at B1={b1}, p={config.parametrization}")
+                    else:
+                        # B1 doesn't match, call binary
+                        curves = calculate_curves_to_target_direct(current_t_level, step_target, b1, config.parametrization)
                 else:
-                    # B1 doesn't match, call binary
+                    # Non-standard transition, call t-level binary directly
                     curves = calculate_curves_to_target_direct(current_t_level, step_target, b1, config.parametrization)
-            else:
-                # Non-standard transition, call t-level binary directly
-                curves = calculate_curves_to_target_direct(current_t_level, step_target, b1, config.parametrization)
 
-            if curves is None or curves <= 0:
-                self.logger.warning(f"Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, using Zimmermann estimate")
-                # Fallback to Zimmermann table estimate
-                _, curves = get_optimal_b1_for_tlevel(step_target)
+                if curves is None or curves <= 0:
+                    self.logger.warning(f"Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, using Zimmermann estimate")
+                    # Fallback to Zimmermann table estimate
+                    _, curves = get_optimal_b1_for_tlevel(step_target)
 
-            self.logger.info(f"Running {curves} curves at B1={b1} (targeting t{step_target:.1f}, currently at t{current_t_level:.2f})")
+                self.logger.info(f"Running {curves} curves at B1={b1} (targeting t{step_target:.1f}, currently at t{current_t_level:.2f})")
 
-            # Run this batch (use multiprocess if workers > 1)
-            if config.threads > 1:
-                # Multiprocess mode
-                self.logger.info(f"Using multiprocess mode with {config.threads} workers")
-                step_result = self.run_multiprocess_v2(MultiprocessConfig(
-                    composite=config.composite,
-                    b1=b1,
-                    total_curves=curves,
-                    num_processes=config.threads,
-                    parametrization=config.parametrization,
-                    verbose=config.verbose,
-                    timeout=config.timeout
-                ))
-            else:
-                # Single process mode
-                step_result = self.run_ecm_v2(ECMConfig(
-                    composite=config.composite,
-                    b1=b1,
-                    curves=curves,
-                    parametrization=config.parametrization,
-                    threads=1,
-                    verbose=config.verbose,
-                    timeout=config.timeout
-                ))
+                # Run this batch (use multiprocess if workers > 1)
+                if config.threads > 1:
+                    # Multiprocess mode
+                    self.logger.info(f"Using multiprocess mode with {config.threads} workers")
+                    step_result = self.run_multiprocess_v2(MultiprocessConfig(
+                        composite=config.composite,
+                        b1=b1,
+                        total_curves=curves,
+                        num_processes=config.threads,
+                        parametrization=config.parametrization,
+                        verbose=config.verbose
+                    ))
+                else:
+                    # Single process mode
+                    step_result = self.run_ecm_v2(ECMConfig(
+                        composite=config.composite,
+                        b1=b1,
+                        curves=curves,
+                        parametrization=config.parametrization,
+                        threads=1,
+                        verbose=config.verbose
+                    ))
 
-            # Accumulate results
-            all_factors.extend(step_result.factors)
-            all_sigmas.extend(step_result.sigmas)
-            total_curves += step_result.curves_run
+                # Check for interruption after execution
+                if self.interrupted:
+                    self.logger.info("T-level execution interrupted after ECM run, returning partial results")
+                    # Still accumulate results from this batch
+                    all_factors.extend(step_result.factors)
+                    all_sigmas.extend(step_result.sigmas)
+                    total_curves += step_result.curves_run
+                    break
 
-            # Track curve history for t-level calculation (format: "curves@b1,p=parametrization")
-            curve_history.append(f"{step_result.curves_run}@{b1},p={config.parametrization}")
+                # Accumulate results
+                all_factors.extend(step_result.factors)
+                all_sigmas.extend(step_result.sigmas)
+                total_curves += step_result.curves_run
 
-            # Submit this batch's results if enabled
-            if not config.no_submit and step_result.curves_run > 0:
-                step_results = {
-                    'success': True,
-                    'factors_found': step_result.factors,
-                    'curves_completed': step_result.curves_run,
-                    'execution_time': step_result.execution_time,
-                    'raw_output': step_result.raw_output,
-                    'composite': config.composite,
-                    'method': 'ecm',
-                    'b1': b1,
-                    'b2': None  # T-level mode uses default B2
-                }
-                if config.work_id:
-                    step_results['work_id'] = config.work_id
+                # Track curve history for t-level calculation (format: "curves@b1,p=parametrization")
+                curve_history.append(f"{step_result.curves_run}@{b1},p={config.parametrization}")
 
-                program_name = 'gmp-ecm-ecm'
-                submit_response = self.submit_result(step_results, config.project, program_name)
-                if not submit_response:
-                    self.logger.warning(f"Failed to submit results for B1={b1}")
+                # Submit this batch's results if enabled
+                if not config.no_submit and step_result.curves_run > 0:
+                    step_results = {
+                        'success': True,
+                        'factors_found': step_result.factors,
+                        'curves_completed': step_result.curves_run,
+                        'execution_time': step_result.execution_time,
+                        'raw_output': step_result.raw_output,
+                        'composite': config.composite,
+                        'method': 'ecm',
+                        'b1': b1,
+                        'b2': None  # T-level mode uses default B2
+                    }
+                    if config.work_id:
+                        step_results['work_id'] = config.work_id
 
-            # Break if factor found
-            if step_result.factors:
-                self.logger.info(f"Factor found after {total_curves} curves")
-                # Build and return result immediately
-                result = FactorResult()
-                for factor, sigma in zip(all_factors, all_sigmas):
-                    result.add_factor(factor, sigma)
-                result.curves_run = total_curves
-                result.execution_time = time.time() - start_time
-                result.success = True
-                return result
+                    program_name = 'gmp-ecm-ecm'
+                    submit_response = self.submit_result(step_results, config.project, program_name)
+                    if not submit_response:
+                        self.logger.warning(f"Failed to submit results for B1={b1}")
 
-            # Update current t-level after this batch
-            try:
-                current_t_level = calculate_tlevel(curve_history)
-                self.logger.info(f"Current t-level: {current_t_level:.2f}")
-            except:
-                # If t-level calculation fails, approximate it
-                current_t_level = step_target
+                # Break if factor found
+                if step_result.factors:
+                    self.logger.info(f"Factor found after {total_curves} curves")
+                    # Build and return result immediately
+                    result = FactorResult()
+                    for factor, sigma in zip(all_factors, all_sigmas):
+                        result.add_factor(factor, sigma)
+                    result.curves_run = total_curves
+                    result.execution_time = time.time() - start_time
+                    result.success = True
+                    result.t_level_achieved = current_t_level  # Track achieved t-level
+                    return result
 
-            # Check if we've reached overall target
-            if current_t_level >= config.target_t_level:
-                self.logger.info(f"Reached target t-level: {current_t_level:.2f} >= {config.target_t_level:.1f}")
-                break
+                # Update current t-level after this batch
+                try:
+                    current_t_level = calculate_tlevel(curve_history)
+                    self.logger.info(f"Current t-level: {current_t_level:.2f}")
+                except:
+                    # If t-level calculation fails, approximate it
+                    current_t_level = step_target
+
+                # Check if we've reached overall target
+                if current_t_level >= config.target_t_level:
+                    self.logger.info(f"Reached target t-level: {current_t_level:.2f} >= {config.target_t_level:.1f}")
+                    break
+
+        except KeyboardInterrupt:
+            self.logger.info("T-level execution interrupted by Ctrl+C")
+            self.interrupted = True
+            # Fall through to build partial result
 
         # Build final FactorResult
         result = FactorResult()
@@ -486,6 +521,8 @@ class ECMWrapper(BaseWrapper):
         result.curves_run = total_curves
         result.execution_time = time.time() - start_time
         result.success = len(all_factors) > 0
+        result.t_level_achieved = current_t_level  # Track achieved t-level
+        result.interrupted = self.interrupted  # Signal that execution was interrupted
 
         return result
 
@@ -538,8 +575,7 @@ class ECMWrapper(BaseWrapper):
         progress_callback: Optional[Callable[[str, List[str]], None]] = None,
         stop_on_factor: bool = True,
         # Execution
-        verbose: bool = False,
-        timeout: int = 3600
+        verbose: bool = False
     ) -> Dict[str, Any]:
         """
         Execute GMP-ECM primitive operation.
@@ -548,6 +584,8 @@ class ECMWrapper(BaseWrapper):
         1. Full ECM (B1 + B2) - default
         2. Stage 1 only - when residue_save is set
         3. Stage 2 only - when residue_load is set
+
+        Note: No timeout is enforced - ECM factorization can run for extended periods.
 
         Args:
             composite: Number to factor
@@ -565,7 +603,6 @@ class ECMWrapper(BaseWrapper):
             progress_callback: Called for each output line with (line, all_lines)
             stop_on_factor: Stop when first factor found
             verbose: Verbose output
-            timeout: Execution timeout in seconds
 
         Returns:
             {
@@ -681,18 +718,22 @@ class ECMWrapper(BaseWrapper):
                 'interrupted': interrupted
             }
 
-        except subprocess.TimeoutExpired:
-            self.logger.error(f"{method.upper()} execution timed out after {timeout}s")
+        except KeyboardInterrupt:
+            # KeyboardInterrupt doesn't inherit from Exception in Python 3
+            # Handle it explicitly so we can return a proper result
+            self.logger.info(f"{method.upper()} execution interrupted by user")
+            self.interrupted = True
             return {
                 'success': False,
                 'factors': [],
                 'sigmas': [],
                 'curves_completed': 0,
-                'raw_output': '',
+                'raw_output': 'Interrupted by user',
                 'parametrization': param if param is not None else 3,
-                'exit_code': -1,
-                'interrupted': False
+                'exit_code': -2,
+                'interrupted': True
             }
+
         except Exception as e:
             self.logger.error(f"{method.upper()} execution failed: {e}")
             return {
@@ -790,10 +831,17 @@ class ECMWrapper(BaseWrapper):
         Returns:
             FactorResult object with populated fields
         """
-        result = FactorResult()
+        # Use factory method for base fields, then customize
+        execution_time = time.time() - start_time
+        result = FactorResult.from_primitive_result(prim_result, execution_time)
+
+        # Clear factors - we'll re-add after recursive factoring
+        original_factors = list(zip(prim_result.get('factors', []), prim_result.get('sigmas', [])))
+        result.factors = []
+        result.sigmas = []
 
         # Recursively factor each discovered factor to get all primes
-        for factor, sigma in zip(prim_result['factors'], prim_result['sigmas']):
+        for factor, sigma in original_factors:
             # Fully factor this composite to get all prime factors
             prime_factors = self._fully_factor_found_result(factor, quiet=False)
 
@@ -801,12 +849,6 @@ class ECMWrapper(BaseWrapper):
             # (the sigma that found the composite factor)
             for prime in prime_factors:
                 result.add_factor(prime, sigma)
-
-        # Populate metadata fields
-        result.curves_run = prim_result['curves_completed']
-        result.execution_time = time.time() - start_time
-        result.success = prim_result['success']
-        result.raw_output = prim_result['raw_output']
 
         return result
 
@@ -867,7 +909,7 @@ class ECMWrapper(BaseWrapper):
     def _upload_residue_if_needed(
         self,
         residue_file: Path,
-        stage1_attempt_id: Optional[str],
+        stage1_attempt_id: Optional[int],
         factor_found: Optional[str],
         client_id: str
     ) -> Optional[Dict[str, Any]]:
@@ -879,7 +921,7 @@ class ECMWrapper(BaseWrapper):
 
         Args:
             residue_file: Path to the residue file
-            stage1_attempt_id: Attempt ID from stage1 submission (None if submission failed)
+            stage1_attempt_id: Attempt ID (int) from stage1 submission (None if submission failed)
             factor_found: Factor found in stage 1 (None if no factor)
             client_id: Client identifier for upload
 
@@ -889,7 +931,8 @@ class ECMWrapper(BaseWrapper):
         if not factor_found and stage1_attempt_id:
             # No factor found and we have attempt ID - upload residue for potential stage 2
             print(f"Uploading residue file ({residue_file.stat().st_size} bytes)...")
-            upload_result = self.api_client.upload_residue(
+            api_client = self._get_api_client()
+            upload_result = api_client.upload_residue(
                 client_id=client_id,
                 residue_file_path=str(residue_file),
                 stage1_attempt_id=stage1_attempt_id,
@@ -1027,22 +1070,16 @@ class ECMWrapper(BaseWrapper):
 
 
     def get_program_version(self, program: str) -> str:
-        """Override base class method to get GMP-ECM version"""
+        """Override base class method to get GMP-ECM version."""
         return self.get_ecm_version()
 
     def get_ecm_version(self) -> str:
-        """Get GMP-ECM version"""
-        try:
-            result = subprocess.run(
-                [self.config['programs']['gmp_ecm']['path'], '-h'],
-                capture_output=True,
-                text=True
-            )
-            from lib.parsing_utils import extract_program_version
-            return extract_program_version(result.stdout, 'ecm')
-        except:
-            pass
-        return "unknown"
+        """Get GMP-ECM version."""
+        from lib.parsing_utils import get_binary_version
+        return get_binary_version(
+            self.config['programs']['gmp_ecm']['path'],
+            'ecm'
+        )
 
     def _fully_factor_found_result(self, factor: str, max_ecm_attempts: int = 5, quiet: bool = False) -> List[str]:
         """
@@ -1080,12 +1117,13 @@ class ECMWrapper(BaseWrapper):
             if current_cofactor == 1:
                 break
 
-            # Select B1 based on cofactor size
+            # Select B1 based on cofactor size - target factors up to half the digits
             cofactor_digits = len(str(current_cofactor))
-            b1 = get_b1_for_digit_length(cofactor_digits)
+            target_digits = (cofactor_digits + 1) // 2
+            b1 = get_b1_for_digit_length(target_digits)
 
             # Use more curves for smaller numbers (they're faster)
-            curves = max(10, 50 - (cofactor_digits // 2))
+            curves = max(10, 50 - (target_digits // 2))
 
             self.logger.info(f"ECM attempt {attempt+1}/{max_ecm_attempts} on C{cofactor_digits} with B1={b1}, {curves} curves")
 
@@ -1133,6 +1171,101 @@ class ECMWrapper(BaseWrapper):
                 break
 
         # If we still have a composite cofactor after all attempts, return it as-is
+        if current_cofactor > 1:
+            self.logger.warning(f"Could not fully factor C{len(str(current_cofactor))}: {current_cofactor}")
+            all_primes.append(str(current_cofactor))
+
+        return all_primes
+
+    def _fully_factor_composite(self, factor: str, max_ecm_attempts: int = 5) -> List[str]:
+        """
+        Recursively factor a composite using primitives directly (no run_ecm_v2).
+
+        This method is called from run_multiprocess_v2 to factor any composite
+        factors found. It uses _execute_ecm_primitive directly to avoid infinite
+        recursion through run_ecm_v2 -> run_multiprocess_v2 -> _fully_factor_composite.
+
+        Args:
+            factor: Factor found by ECM (may be composite)
+            max_ecm_attempts: Maximum ECM attempts with increasing B1
+
+        Returns:
+            List of prime factors (as strings)
+        """
+        from lib.ecm_math import trial_division, is_probably_prime, get_b1_for_digit_length
+
+        factor_int = int(factor)
+
+        # Trial division catches small factors quickly
+        small_primes, cofactor = trial_division(factor_int, limit=10**7)
+        all_primes = [str(p) for p in small_primes]
+
+        if cofactor == 1:
+            return all_primes
+
+        # Check if cofactor is prime
+        if is_probably_prime(cofactor):
+            self.logger.info(f"Cofactor {cofactor} is prime")
+            all_primes.append(str(cofactor))
+            return all_primes
+
+        # Cofactor is composite - use ECM primitive directly
+        digit_length = len(str(cofactor))
+        self.logger.info(f"Factoring composite cofactor C{digit_length} using ECM primitive")
+
+        current_cofactor = cofactor
+        for attempt in range(max_ecm_attempts):
+            if current_cofactor == 1:
+                break
+
+            cofactor_digits = len(str(current_cofactor))
+            # Target factors up to half the digit length (smallest factor can't be larger)
+            target_digits = (cofactor_digits + 1) // 2
+            b1 = get_b1_for_digit_length(target_digits)
+            curves = max(10, 50 - (target_digits // 2))
+
+            self.logger.info(f"ECM attempt {attempt+1}/{max_ecm_attempts} on C{cofactor_digits} with B1={b1}")
+
+            try:
+                # Call primitive directly - no recursive factoring
+                prim_result = self._execute_ecm_primitive(
+                    composite=str(current_cofactor),
+                    b1=b1,
+                    curves=curves,
+                    verbose=False
+                )
+
+                found_factors = prim_result.get('factors', [])
+
+                if found_factors:
+                    self.logger.info(f"Found {len(found_factors)} factor(s): {found_factors}")
+
+                    for found_factor in found_factors:
+                        # Recursively factor each found factor
+                        sub_primes = self._fully_factor_composite(found_factor, max_ecm_attempts)
+                        all_primes.extend(sub_primes)
+
+                        # Divide out from cofactor
+                        for prime in sub_primes:
+                            while current_cofactor % int(prime) == 0:
+                                current_cofactor //= int(prime)
+
+                    if current_cofactor == 1:
+                        break
+
+                    if is_probably_prime(current_cofactor):
+                        self.logger.info(f"Remaining cofactor {current_cofactor} is prime")
+                        all_primes.append(str(current_cofactor))
+                        current_cofactor = 1
+                        break
+                else:
+                    self.logger.info(f"No factor found in attempt {attempt+1}")
+
+            except Exception as e:
+                self.logger.error(f"ECM factorization error: {e}")
+                break
+
+        # If we still have a composite cofactor, return it as-is
         if current_cofactor > 1:
             self.logger.warning(f"Could not fully factor C{len(str(current_cofactor))}: {current_cofactor}")
             all_primes.append(str(current_cofactor))

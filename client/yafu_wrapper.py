@@ -229,23 +229,16 @@ class YAFUWrapper(BaseWrapper):
 
 
     def get_program_version(self, program: str) -> str:
-        """Override base class method to get YAFU version"""
+        """Override base class method to get YAFU version."""
         return self.get_yafu_version()
 
     def get_yafu_version(self) -> str:
-        """Get YAFU version"""
-        try:
-            result = subprocess.run(
-                [self.config['programs']['yafu']['path'], '-h'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            from parsing_utils import extract_program_version
-            return extract_program_version(result.stdout, 'yafu')
-        except:
-            pass
-        return "unknown"
+        """Get YAFU version."""
+        from lib.parsing_utils import get_binary_version
+        return get_binary_version(
+            self.config['programs']['yafu']['path'],
+            'yafu'
+        )
 
 
 def main():

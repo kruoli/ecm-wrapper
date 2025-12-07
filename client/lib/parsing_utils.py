@@ -47,7 +47,7 @@ class ECMPatterns:
     # Alternative curve completion patterns
     CURVE_COMPLETED_ALT = re.compile(r'ECM: Step 2 took (\d+)ms')
 
-    # Sigma extraction patterns (used in ecm-wrapper.py line-by-line parsing)
+    # Sigma extraction patterns (used in ecm_executor.py line-by-line parsing)
     # Parametrization 0-3: 0 for large numbers (Brent-Suyama), 1 for Montgomery, 2/3 for twisted Edwards
     SIGMA_COLON_FORMAT = re.compile(r'sigma=([0-3]:\d+)')
     SIGMA_DASH_FORMAT = re.compile(r'-sigma ([0-3]:\d+|\d+)')
@@ -606,3 +606,80 @@ def extract_program_version(output: str, program_type: str) -> str:
         return match.group(1) if match else "unknown"
     else:
         return "unknown"
+
+
+def get_binary_version(
+    binary_path: str,
+    program_type: str,
+    help_flag: str = '-h',
+    timeout: int = 5,
+    use_python: bool = False
+) -> str:
+    """
+    Get version string from a binary by running it with help flag.
+
+    This is the unified version extraction function that handles:
+    - Running the binary with the appropriate flag
+    - Capturing and parsing output
+    - Error handling with graceful fallback
+
+    Args:
+        binary_path: Path to the binary (can include ~ for home directory)
+        program_type: Type of program for version parsing ('ecm', 'yafu', 'cado')
+        help_flag: Flag to get help/version output (default: '-h')
+        timeout: Subprocess timeout in seconds (default: 5)
+        use_python: If True, run as 'python3 binary_path' (for Python scripts like CADO)
+
+    Returns:
+        Version string or 'unknown' on failure
+
+    Examples:
+        >>> get_binary_version('/usr/bin/ecm', 'ecm')
+        '7.0.5'
+        >>> get_binary_version('~/cado-nfs/cado-nfs.py', 'cado', '--help', use_python=True)
+        'installed'
+    """
+    import subprocess
+    import os
+
+    try:
+        # Expand home directory if present
+        expanded_path = os.path.expanduser(binary_path)
+
+        # Special case for ECM: version banner appears during execution, not help
+        # Run with minimal B1 and empty input to get version banner
+        if program_type == 'ecm':
+            result = subprocess.run(
+                [expanded_path, '1000'],
+                input='',
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            # Version appears in stdout during execution
+            return extract_program_version(result.stdout, program_type)
+
+        # Build command for other programs
+        if use_python:
+            cmd = ['python3', expanded_path, help_flag]
+        else:
+            cmd = [expanded_path, help_flag]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+
+        # Special case for CADO-NFS (no clear version string)
+        if program_type == 'cado':
+            return "installed" if result.returncode == 0 else "unknown"
+
+        # Use existing version extraction for yafu
+        return extract_program_version(result.stdout, program_type)
+
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        pass
+
+    return "unknown"

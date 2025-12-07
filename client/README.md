@@ -17,31 +17,31 @@ Standalone Python clients for distributed integer factorization using GMP-ECM, Y
 3. **Run factorization:**
    ```bash
    # ECM with GMP-ECM (standard mode)
-   python3 ecm-wrapper.py --composite "123456789012345" --curves 100 --b1 50000
+   python3 ecm_wrapper.py --composite "123456789012345" --curves 100 --b1 50000
 
    # ECM with two-stage GPU/CPU pipeline
-   python3 ecm-wrapper.py --composite "123456789012345" --two-stage --curves 1000 --b1 50000
+   python3 ecm_wrapper.py --composite "123456789012345" --two-stage --curves 1000 --b1 50000
 
    # ECM with multiprocess parallelization
-   python3 ecm-wrapper.py --composite "123456789012345" --multiprocess --workers 4 --curves 1000
+   python3 ecm_wrapper.py --composite "123456789012345" --multiprocess --workers 4 --curves 1000
 
    # ECM targeting specific t-level
-   python3 ecm-wrapper.py --composite "123456789012345" --tlevel 30
-
-   # Auto-work mode - continuously get work from server
-   python3 ecm-wrapper.py --auto-work                          # Use server t-levels
-   python3 ecm-wrapper.py --auto-work --work-count 5           # Process 5 assignments
-   python3 ecm-wrapper.py --auto-work --tlevel 35              # Override with client t-level
-   python3 ecm-wrapper.py --auto-work --multiprocess --workers 8  # Multiprocess mode
+   python3 ecm_wrapper.py --composite "123456789012345" --tlevel 30
 
    # P-1 with GMP-ECM
-   python3 ecm-wrapper.py --composite "123456789012345" --method pm1 --b1 1000000
+   python3 ecm_wrapper.py --composite "123456789012345" --method pm1 --b1 1000000
+
+   # Auto-work mode - continuously get work from server
+   python3 ecm_client.py                                       # Use server t-levels
+   python3 ecm_client.py --work-count 5                        # Process 5 assignments
+   python3 ecm_client.py --b1 50000 --b2 5000000 --curves 100  # Override server params
+   python3 ecm_client.py --multiprocess --workers 8            # Multiprocess mode
 
    # YAFU automatic factorization
-   python3 yafu-wrapper.py --composite "123456789012345" --mode auto
+   python3 yafu_wrapper.py --composite "123456789012345" --mode auto
 
    # YAFU P-1 factorization
-   python3 yafu-wrapper.py --composite "123456789012345" --mode pm1 --b1 1000000
+   python3 yafu_wrapper.py --composite "123456789012345" --mode pm1 --b1 1000000
    ```
 
 4. **Batch processing:**
@@ -63,29 +63,78 @@ Standalone Python clients for distributed integer factorization using GMP-ECM, Y
 
 ## Core Wrappers
 
-### `ecm-wrapper.py` - GMP-ECM Factorization
-Comprehensive wrapper for GMP-ECM with multiple execution modes:
+### `ecm_client.py` - Server-Coordinated ECM
+Server-coordinated factorization work - continuously requests and processes assignments from the API server.
+
+**Modes:**
+- **Auto-work**: Continuously request and process work assignments from server
+- **Stage 1 only**: Run GPU stage 1, upload residues to server
+- **Stage 2 only**: Download residues from server, run CPU stage 2
+
+**Key Features:**
+- Automatic work assignment from server (no manual composite input needed)
+- Work lifecycle management (claim → execute → submit → complete)
+- Server t-level targeting or client overrides
+- Compatible with multiprocess and two-stage modes
+- Graceful shutdown (Ctrl+C abandons current work properly)
+
+**Usage:**
+```bash
+# Simple auto-work (uses server t-levels)
+python3 ecm_client.py
+
+# Process 10 assignments then exit
+python3 ecm_client.py --work-count 10
+
+# Override with client B1/B2
+python3 ecm_client.py --b1 50000 --b2 5000000 --curves 100
+
+# GPU stage 1 only (upload residues to server)
+python3 ecm_client.py --stage1-only --b1 110000000 --curves 3000
+
+# CPU stage 2 only (download residues from server)
+python3 ecm_client.py --stage2-only --b2 11000000000000 --stage2-workers 8
+```
+
+### `ecm_wrapper.py` - Local/Manual ECM Factorization
+Local factorization with explicit composite input - for manual/batch processing.
 
 **Modes:**
 - **Standard**: Run N curves with specified B1/B2
 - **Two-stage**: GPU Stage 1 + multi-threaded CPU Stage 2 (optimal for large-scale ECM)
 - **Multiprocess**: Multi-core CPU parallelization
 - **T-level**: Progressive ECM targeting specific t-level (e.g., t30, t35)
-- **Auto-work**: Continuously request and process work assignments from server
-- **Stage 2 only**: Resume from existing residue files
+- **Stage 1 only**: Save residue to local file
+- **Stage 2 only**: Load residue from local file
 
 **Methods:** ECM (default), P-1 (`--method pm1`), P+1 (`--method pp1`)
 
 **GPU Support:** Optional GPU acceleration for Stage 1 (`--gpu` flag)
 
 **Key Features:**
+- Requires `--composite` flag (manual input)
 - Multiple factors per run (automatically detects and logs all factors)
 - Automatic composite factor recursion (fully factors composite results)
 - Primality testing (Miller-Rabin)
 - Residue file management for two-stage processing
 - Parametrization support (0, 1, 2, 3 for different curve families)
 
-### `yafu-wrapper.py` - YAFU Multi-Method Factorization
+**Usage:**
+```bash
+# Standard ECM
+python3 ecm_wrapper.py --composite "123456789012345" --b1 50000 --curves 100
+
+# Two-stage mode
+python3 ecm_wrapper.py --composite "123456789012345" --two-stage --b1 110000000 --curves 100
+
+# Stage 1 only - save residue to local file
+python3 ecm_wrapper.py --composite "123456789012345" --stage1-only --b1 110000000 --curves 3000
+
+# Stage 2 only - load residue from local file
+python3 ecm_wrapper.py --stage2-only --residue-file /path/to/residue.txt --b2 11000000000000
+```
+
+### `yafu_wrapper.py` - YAFU Multi-Method Factorization
 Wrapper for YAFU with support for multiple factorization methods:
 
 **Modes:**
@@ -102,7 +151,7 @@ Wrapper for YAFU with support for multiple factorization methods:
 - Real-time verbose output streaming
 - Intelligent pretesting for ECM mode
 
-### `cado-wrapper.py` - CADO-NFS Large Number Factorization
+### `cado_wrapper.py` - CADO-NFS Large Number Factorization
 Wrapper for CADO-NFS (Number Field Sieve) for large factorizations:
 
 **Key Features:**
@@ -110,7 +159,7 @@ Wrapper for CADO-NFS (Number Field Sieve) for large factorizations:
 - Designed for integration with aliquot sequences
 - Output parsing for NFS-specific factor formats
 
-### `aliquot-wrapper.py` - Aliquot Sequence Calculator
+### `aliquot_wrapper.py` - Aliquot Sequence Calculator
 Progressive factorization of aliquot sequences (n → σ(n) - n → ...):
 
 **Factorization Strategy:**
@@ -237,12 +286,12 @@ pytest tests/test_api_client.py -v        # Test API client
 ### Two-Stage ECM with GPU
 ```bash
 # Stage 1 on GPU, Stage 2 on 8 CPU cores
-python3 ecm-wrapper.py --composite "123...456" \
+python3 ecm_wrapper.py --composite "123...456" \
   --two-stage --curves 10000 --b1 50000 --b2 12500000 \
   --stage2-workers 8 --gpu-device 0
 
 # Using scientific notation for large bounds
-python3 ecm-wrapper.py --composite "123...456" \
+python3 ecm_wrapper.py --composite "123...456" \
   --two-stage --curves 10000 --b1 26e7 --b2 4e11 \
   --stage2-workers 8 --gpu-device 0
 ```
@@ -250,27 +299,27 @@ python3 ecm-wrapper.py --composite "123...456" \
 ### Resume from Residue File
 ```bash
 # Run Stage 2 only on existing residues
-python3 ecm-wrapper.py --stage2-only residue_file.txt \
+python3 ecm_wrapper.py --stage2-only residue_file.txt \
   --b1 50000 --b2 12500000 --stage2-workers 8
 ```
 
 ### Multiprocess ECM
 ```bash
 # Use 16 CPU cores for parallel ECM
-python3 ecm-wrapper.py --composite "123...456" \
+python3 ecm_wrapper.py --composite "123...456" \
   --multiprocess --workers 16 --curves 10000 --b1 50000
 ```
 
 ### T-Level Targeting
 ```bash
 # Progressive ECM to reach t30 (uses optimal B1 values)
-python3 ecm-wrapper.py --composite "123...456" --tlevel 30
+python3 ecm_wrapper.py --composite "123...456" --tlevel 30
 ```
 
 ### Test Without API Submission
 ```bash
 # Run locally without submitting results
-python3 ecm-wrapper.py --composite "123...456" --curves 100 --no-submit
+python3 ecm_wrapper.py --composite "123...456" --curves 100 --no-submit
 ```
 
 ## Configuration

@@ -8,37 +8,45 @@ from typing import Optional, Dict, Any
 import argparse
 import time
 
+from .user_output import UserOutput
 
-def print_work_header(work_id: str, composite: str, digit_length: int,
-                     params: Dict[str, Any]) -> None:
+
+def print_work_header(work_id: Optional[str], composite: str, digit_length: int,
+                     params: Dict[str, Any], output: Optional[UserOutput] = None) -> None:
     """
     Print formatted work assignment header.
 
     Args:
-        work_id: Work assignment ID
+        work_id: Work assignment ID (may be None for residue work)
         composite: Composite number being factored
         digit_length: Number of digits in composite
         params: Dictionary of parameters to display (e.g., {'B1': 50000, 'curves': 100})
+        output: Optional UserOutput instance (creates one if not provided)
     """
-    print()
-    print("=" * 60)
-    print(f"Processing work assignment {work_id}")
+    if output is None:
+        output = UserOutput()
+
+    output.blank()
+    output.separator()
+    work_id_display = work_id if work_id else "(no work_id)"
+    output.info(f"Processing work assignment {work_id_display}")
 
     # Truncate composite for display
     composite_display = composite[:50] + "..." if len(composite) > 50 else composite
-    print(f"Composite: {composite_display} ({digit_length} digits)")
+    output.info(f"Composite: {composite_display} ({digit_length} digits)")
 
     # Format parameters
     if params:
         param_strs = [f"{k}={v}" for k, v in params.items()]
-        print(f"Parameters: {', '.join(param_strs)}")
+        output.info(f"Parameters: {', '.join(param_strs)}")
 
-    print("=" * 60)
-    print()
+    output.separator()
+    output.blank()
 
 
 def print_work_status(stage_name: str, completed_count: int,
-                     work_count_limit: Optional[int] = None) -> bool:
+                     work_count_limit: Optional[int] = None,
+                     output: Optional[UserOutput] = None) -> bool:
     """
     Print work completion status and check if limit reached.
 
@@ -46,24 +54,28 @@ def print_work_status(stage_name: str, completed_count: int,
         stage_name: Name of the stage/mode (e.g., "Stage 1", "Stage 2 work")
         completed_count: Number of work assignments completed
         work_count_limit: Optional limit on number of assignments
+        output: Optional UserOutput instance (creates one if not provided)
 
     Returns:
         True if work count limit has been reached, False otherwise
     """
-    print()
+    if output is None:
+        output = UserOutput()
+
+    output.blank()
 
     # Display completion status
     if work_count_limit:
-        print(f"{stage_name} complete ({completed_count}/{work_count_limit})")
+        output.info(f"{stage_name} complete ({completed_count}/{work_count_limit})")
     else:
-        print(f"{stage_name} complete (total: {completed_count})")
+        output.info(f"{stage_name} complete (total: {completed_count})")
 
-    print("=" * 60)
-    print()
+    output.separator()
+    output.blank()
 
     # Check if limit reached
     if work_count_limit and completed_count >= work_count_limit:
-        print(f"Reached work count limit ({work_count_limit}), exiting...")
+        output.info(f"Reached work count limit ({work_count_limit}), exiting...")
         return True
 
     return False

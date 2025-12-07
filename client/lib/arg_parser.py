@@ -72,6 +72,8 @@ def create_ecm_parser() -> argparse.ArgumentParser:
                        help='Run stage 1 only, submit results and upload residue file to server (GPU producer mode)')
     parser.add_argument('--stage2-work', action='store_true',
                        help='Request and process stage 2 work from server residue pool (CPU consumer mode)')
+    parser.add_argument('--upload', action='store_true',
+                       help='Upload residue file to server after stage 1 (for --stage1-only mode)')
 
     # GPU options
     parser.add_argument('--gpu', action='store_true', help='Use GPU acceleration (CGBN)')

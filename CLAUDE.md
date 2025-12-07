@@ -18,29 +18,32 @@ ECM Coordination Middleware - a minimal, focused system for coordinating distrib
 pip install requests pyyaml
 
 # Run ECM factorization with GMP-ECM
-python3 client/ecm-wrapper.py --composite "123456789012345" --curves 100 --b1 50000
+python3 client/ecm_wrapper.py --composite "123456789012345" --curves 100 --b1 50000
 
 # Run YAFU factorization (various modes)
-python3 client/yafu-wrapper.py --composite "123456789012345" --mode ecm --curves 100
-python3 client/yafu-wrapper.py --composite "123456789012345" --mode pm1 --b1 1000000
-python3 client/yafu-wrapper.py --composite "123456789012345" --mode auto
+python3 client/yafu_wrapper.py --composite "123456789012345" --mode ecm --curves 100
+python3 client/yafu_wrapper.py --composite "123456789012345" --mode pm1 --b1 1000000
+python3 client/yafu_wrapper.py --composite "123456789012345" --mode auto
 
 # Test without API submission
-python3 client/ecm-wrapper.py --composite "123456789012345" --no-submit
+python3 client/ecm_wrapper.py --composite "123456789012345" --no-submit
+
+# Stage 1 only with residue upload to server (manual mode)
+python3 client/ecm_wrapper.py --composite "123456789012345" --b1 50000 --curves 100 --stage1-only --upload
 
 # Auto-work mode - continuously request and process work from server
-python3 client/ecm-wrapper.py --auto-work                    # Use server's target t-levels
-python3 client/ecm-wrapper.py --auto-work --work-count 5     # Process 5 assignments then exit
-python3 client/ecm-wrapper.py --auto-work --tlevel 35        # Override with client t-level
-python3 client/ecm-wrapper.py --auto-work --b1 50000 --b2 5000000 --curves 100  # Override with B1/B2
-python3 client/ecm-wrapper.py --auto-work --b1 26e7 --b2 4e11 --curves 100      # Scientific notation support
-python3 client/ecm-wrapper.py --auto-work --two-stage --b1 50000 --b2 5000000   # GPU two-stage mode
-python3 client/ecm-wrapper.py --auto-work --multiprocess --workers 8            # Multiprocess mode
-python3 client/ecm-wrapper.py --auto-work --min-digits 60 --max-digits 80       # Filter by size
+python3 client/ecm_client.py                    # Use server's target t-levels
+python3 client/ecm_client.py --work-count 5     # Process 5 assignments then exit
+python3 client/ecm_client.py --tlevel 35        # Override with client t-level
+python3 client/ecm_client.py --b1 50000 --b2 5000000 --curves 100  # Override with B1/B2
+python3 client/ecm_client.py --b1 26e7 --b2 4e11 --curves 100      # Scientific notation support
+python3 client/ecm_client.py --two-stage --b1 50000 --b2 5000000   # GPU two-stage mode
+python3 client/ecm_client.py --multiprocess --workers 8            # Multiprocess mode
+python3 client/ecm_client.py --min-digits 60 --max-digits 80       # Filter by size
 
 # Decoupled two-stage mode - separate GPU and CPU workers
-python3 client/ecm-wrapper.py --auto-work --stage1-only --b1 110000000 --curves 3000 --gpu  # GPU producer
-python3 client/ecm-wrapper.py --auto-work --stage2-work --b2 11000000000000 --stage2-workers 8  # CPU consumer
+python3 client/ecm_client.py --stage1-only --b1 110000000 --curves 3000 --gpu  # GPU producer
+python3 client/ecm_client.py --stage2-work --b2 11000000000000 --stage2-workers 8  # CPU consumer
 
 # Run batch processing scripts
 cd client/scripts/
@@ -140,7 +143,7 @@ pytest test_factorization.py -v               # Test parsing logic
 Clients can now continuously request and process work assignments from the server without manually specifying composites:
 
 **Implementation:**
-- **Client**: New `--auto-work` flag in `ecm-wrapper.py` (lines 1547-1751)
+- **Client**: New `--auto-work` flag in `ecm_wrapper.py` (lines 1547-1751)
 - **API**: Uses `/ecm-work` endpoint to request assignments
 - **Work Lifecycle**: Automatic claim → execute → submit → complete workflow
 
@@ -165,13 +168,13 @@ Clients can now continuously request and process work assignments from the serve
 **Example workflows:**
 ```bash
 # Simple: Use server t-levels, run until stopped
-python3 ecm-wrapper.py --auto-work
+python3 ecm_client.py
 
 # Batch: Process 10 assignments
-python3 ecm-wrapper.py --auto-work --work-count 10
+python3 ecm_client.py --work-count 10
 
 # Custom params with multiprocess
-python3 ecm-wrapper.py --auto-work --tlevel 35 --multiprocess --workers 8
+python3 ecm_client.py --tlevel 35 --multiprocess --workers 8
 ```
 
 ### Decoupled Two-Stage ECM (2025-11)
@@ -212,18 +215,18 @@ Stage 2 (CPU):
 **Usage examples:**
 ```bash
 # GPU worker: Run stage 1 only, upload residues
-python3 ecm-wrapper.py --auto-work --stage1-only \
+python3 ecm_client.py --stage1-only \
   --b1 110000000 --curves 3000 --gpu
 
 # CPU worker: Process stage 2 from residue pool
-python3 ecm-wrapper.py --auto-work --stage2-work \
+python3 ecm_client.py --stage2-work \
   --b2 11000000000000 --stage2-workers 8
 
 # With work limits and filtering
-python3 ecm-wrapper.py --auto-work --stage1-only \
+python3 ecm_client.py --stage1-only \
   --b1 26e7 --curves 1000 --work-count 10 --min-digits 70
 
-python3 ecm-wrapper.py --auto-work --stage2-work \
+python3 ecm_client.py --stage2-work \
   --b2 4e11 --max-digits 90 --priority 5
 ```
 
@@ -263,15 +266,15 @@ New `colab_setup.ipynb` notebook for running ECM client in Google Colab:
 ### Key Components
 
 #### Client Components
-- **ECMWrapper** (client/ecm-wrapper.py:14): GMP-ECM execution with multiple modes
+- **ECMWrapper** (client/ecm_wrapper.py:14): GMP-ECM execution with multiple modes
   - Standard mode, two-stage GPU/CPU, multiprocess, t-level targeting
   - Curve-by-curve control and two-stage processing
   - Multiple factor handling with automatic deduplication
-- **YAFUWrapper** (client/yafu-wrapper.py:8): YAFU multi-method factorization coordination
+- **YAFUWrapper** (client/yafu_wrapper.py:8): YAFU multi-method factorization coordination
   - ECM, P-1, P+1, SIQS, NFS, and automatic mode selection
   - Thread pool configuration
-- **CADOWrapper** (client/cado-wrapper.py): Number Field Sieve for large numbers
-- **AliquotWrapper** (client/aliquot-wrapper.py): Aliquot sequence calculator with FactorDB integration
+- **CADOWrapper** (client/cado_wrapper.py): Number Field Sieve for large numbers
+- **AliquotWrapper** (client/aliquot_wrapper.py): Aliquot sequence calculator with FactorDB integration
 - **BaseWrapper** (client/lib/base_wrapper.py:17): Shared base class
   - Configuration loading via ConfigManager
   - API client initialization (supports multiple endpoints)
@@ -395,10 +398,10 @@ config = ECMConfig(
     parametrization=1,   # 1=CPU (Montgomery), 3=GPU (Twisted Edwards)
     threads=1,
     verbose=False,
-    timeout=3600,
     use_gpu=False,       # Auto-sets parametrization=3 if True
     method="ecm"         # 'ecm', 'pm1', 'pp1'
 )
+# Note: timeout removed - ECM can run for extended periods
 
 result = wrapper.run_ecm_v2(config)
 ```
@@ -491,6 +494,33 @@ result.add_factor("123", "3:12345")
 - **Single source of truth**: All methods use `_execute_ecm_primitive()`
 - **Strongly typed returns**: `FactorResult` vs untyped dicts
 - **Easier testing**: Config objects are easy to construct and validate
+
+#### Config Validation (ECMConfigValidation Mixin)
+
+All config classes inherit from `ECMConfigValidation` mixin which provides shared validation:
+- `_validate_composite(composite)` - Ensures composite is non-empty
+- `_validate_b1(b1)` - Ensures B1 is positive
+- `_validate_method(method)` - Validates method is 'ecm', 'pm1', or 'pp1'
+- `_validate_parametrization(param)` - Validates param is 0-3
+
+#### WorkMode Pattern (lib/work_modes.py)
+
+Auto-work mode (`ecm_client.py`) uses a Strategy pattern for different work modes:
+- **StandardAutoWorkMode** - Regular ECM work from server assignments
+- **Stage1ProducerMode** - GPU stage 1 only, uploads residues to server
+- **Stage2ConsumerMode** - Downloads residues from server, runs stage 2
+
+Each mode implements the `WorkMode` abstract base class with template method `run()`:
+```python
+class WorkMode(ABC):
+    def run(self) -> int:
+        while self.should_continue():
+            work = self.request_work()
+            result = self.execute_work(work)
+            self.submit_results(work, result)
+            self.complete_work(work)
+        return self.completed_count
+```
 
 #### T-Level Calculation Details
 
@@ -630,7 +660,7 @@ pylint *.py
 - **GPU format support**: `lib/residue_manager.py` now auto-detects and handles both GPU (single-line) and CPU (multi-line) residue file formats
 - **Format detection**: Checks first 5 lines for `METHOD=ECM; SIGMA=...; ...` pattern to identify GPU format
 
-### FactorDB Integration (aliquot-wrapper.py)
+### FactorDB Integration (aliquot_wrapper.py)
 - **Retry logic**: 3 automatic retries with exponential backoff (1s, 2s) for transient server errors (502, etc.)
 - **Enhanced logging**: All FactorDB operations logged to `client/data/logs/ecm_client.log` with:
   - Success/failure status for each factor submission
@@ -651,7 +681,7 @@ pylint *.py
 - **B1/B2 parameters**: Now accept scientific notation for easier entry of large bounds
   - Examples: `--b1 26e7` (260,000,000), `--b2 4e11` (400,000,000,000)
   - Supports: lowercase/uppercase e (26e7, 26E7), decimals (2.6e8), explicit + sign (26e+7)
-  - Works in: `ecm-wrapper.py`, `yafu-wrapper.py`, `scripts/run_batch_pipeline.py`
+  - Works in: `ecm_wrapper.py`, `yafu_wrapper.py`, `scripts/run_batch_pipeline.py`
 - **Unit tests**: Comprehensive test coverage in `client/tests/test_arg_parser.py` (14 tests, 170 lines)
 
 ### Testing Status Page Improvements (2025-11)
@@ -736,7 +766,7 @@ pylint *.py
 - **XSS protection**: Jinja2 auto-escaping with explicit `esc()` for HTML output
 
 ### Client Structure
-- **Main wrappers**: `client/ecm-wrapper.py`, `client/yafu-wrapper.py`
+- **Main wrappers**: `client/ecm_wrapper.py`, `client/yafu_wrapper.py`
 - **Configuration**: `client/client.yaml` - Binary paths and API settings
 - **Base classes**: `client/lib/base_wrapper.py` - Shared wrapper functionality
 - **Utilities**: `client/lib/` - Implementation modules (parsing, configuration, execution engine)

@@ -13,40 +13,15 @@ import datetime
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from collections import Counter
 
 from lib.base_wrapper import BaseWrapper
 from lib.ecm_math import trial_division, is_probably_prime
 from lib.ecm_config import TLevelConfig
-import importlib.util
-
-# Import cado-wrapper.py
-spec = importlib.util.spec_from_file_location("cado_wrapper", "cado-wrapper.py")
-if spec is None or spec.loader is None:
-    raise ImportError("Failed to load cado-wrapper.py")
-cado_module = importlib.util.module_from_spec(spec)
-sys.modules["cado_wrapper"] = cado_module
-spec.loader.exec_module(cado_module)
-CADOWrapper = cado_module.CADOWrapper
-
-# Import ecm-wrapper.py
-spec = importlib.util.spec_from_file_location("ecm_wrapper", "ecm-wrapper.py")
-if spec is None or spec.loader is None:
-    raise ImportError("Failed to load ecm-wrapper.py")
-ecm_module = importlib.util.module_from_spec(spec)
-sys.modules["ecm_wrapper"] = ecm_module
-spec.loader.exec_module(ecm_module)
-ECMWrapper = ecm_module.ECMWrapper
-
-# Import yafu-wrapper.py
-spec = importlib.util.spec_from_file_location("yafu_wrapper", "yafu-wrapper.py")
-if spec is None or spec.loader is None:
-    raise ImportError("Failed to load yafu-wrapper.py")
-yafu_module = importlib.util.module_from_spec(spec)
-sys.modules["yafu_wrapper"] = yafu_module
-spec.loader.exec_module(yafu_module)
-YAFUWrapper = yafu_module.YAFUWrapper
+from lib.ecm_executor import ECMWrapper
+from cado_wrapper import CADOWrapper
+from yafu_wrapper import YAFUWrapper
 
 
 class AliquotSequence:
@@ -54,7 +29,7 @@ class AliquotSequence:
 
     def __init__(self, start: int):
         self.start = start
-        self.sequence = [start]
+        self.sequence: List[Optional[int]] = [start]
         self.factorizations: Dict[int, Dict[int, int]] = {}
         self.terminated = False
         self.cycle_start: Optional[int] = None
@@ -109,6 +84,7 @@ class AliquotWrapper(BaseWrapper):
             verbose: Enable verbose output from factorization programs
         """
         super().__init__(config_path)
+        self.config_path = config_path  # Store for lazy initialization of sub-wrappers
         self.factorizer_name = factorizer
         self.hybrid_threshold = hybrid_threshold
         self.siqs_threshold = siqs_threshold
@@ -279,6 +255,10 @@ class AliquotWrapper(BaseWrapper):
         # Step 1: Progressive ECM (ALWAYS attempt ECM, regardless of size)
         cofactor_digits = len(str(current_composite))
 
+        # Initialize ecm_factors and ecm_results for both branches
+        ecm_factors: List[str] = []
+        ecm_results: Dict[str, Any] = {}
+
         if self.ecm_program == 'yafu':
             # Use YAFU for ECM with intelligent pretesting
             self.logger.info(f"Running YAFU ECM pretest on C{cofactor_digits}")
@@ -306,35 +286,72 @@ class AliquotWrapper(BaseWrapper):
                     current_composite = 1
         else:
             # Use GMP-ECM's progressive approach with t-level (v2 API)
-            target_t_level = (4.0 / 13.0) * cofactor_digits  # Target: 4/13 of digit length
+            # Keep running ECM until target is reached or cofactor is small enough for SIQS/CADO
+            # Track achieved t-level to carry over when factor found (work done applies to cofactor too)
+            current_t_level = 0.0
 
-            self.logger.info(f"Running progressive GMP-ECM to t{target_t_level:.1f} on C{cofactor_digits}")
+            while current_composite > 1:
+                cofactor_digits = len(str(current_composite))
 
-            config = TLevelConfig(
-                composite=str(current_composite),
-                target_t_level=target_t_level,
-                threads=self.threads if self.threads else 1,
-                verbose=self.verbose
-            )
-            ecm_result = self.ecm.run_tlevel_v2(config)
-
-            # Collect ECM factors (all are guaranteed to be prime)
-            ecm_factors = ecm_result.factors
-            if ecm_factors:
-                self.logger.info(f"Progressive GMP-ECM found {len(ecm_factors)} prime factor(s)")
-                all_factors.extend(ecm_factors)
-
-                # Calculate final cofactor by dividing out found factors
-                cofactor = current_composite
-                for factor in ecm_factors:
-                    cofactor //= int(factor)
-
-                if cofactor > 1:
-                    current_composite = cofactor
-                    self.logger.info(f"Cofactor after GMP-ECM: C{len(str(current_composite))}")
-                else:
-                    # Fully factored
+                # Check if cofactor is prime
+                if is_probably_prime(current_composite):
+                    self.logger.info(f"Cofactor C{cofactor_digits} is prime")
+                    all_factors.append(str(current_composite))
                     current_composite = 1
+                    break
+
+                # Check if small enough for SIQS/CADO (exit ECM loop)
+                if cofactor_digits < self.siqs_threshold:
+                    self.logger.info(f"Cofactor C{cofactor_digits} small enough for SIQS/CADO, exiting ECM")
+                    break
+
+                target_t_level = (4.0 / 13.0) * cofactor_digits  # Target: 4/13 of digit length
+
+                # Skip if we've already reached the target for this size
+                if current_t_level >= target_t_level:
+                    self.logger.info(f"Already at t{current_t_level:.2f} >= target t{target_t_level:.1f}, moving to SIQS/CADO")
+                    break
+
+                self.logger.info(f"Running progressive GMP-ECM to t{target_t_level:.1f} on C{cofactor_digits}")
+
+                config = TLevelConfig(
+                    composite=str(current_composite),
+                    target_t_level=target_t_level,
+                    start_t_level=current_t_level,  # Continue from achieved t-level
+                    threads=self.threads if self.threads else 1,
+                    verbose=self.verbose,
+                    no_submit=True  # Aliquot handles its own submissions
+                )
+                ecm_result = self.ecm.run_tlevel_v2(config)
+
+                # Update achieved t-level (carries over to cofactor if factor found)
+                current_t_level = ecm_result.t_level_achieved
+
+                # Check if ECM was interrupted - propagate to caller
+                if ecm_result.interrupted:
+                    self.logger.info("ECM was interrupted, stopping aliquot factorization")
+                    raise KeyboardInterrupt("ECM interrupted")
+
+                # Collect ECM factors (all are guaranteed to be prime)
+                ecm_factors = ecm_result.factors
+                if ecm_factors:
+                    self.logger.info(f"Progressive GMP-ECM found {len(ecm_factors)} prime factor(s)")
+                    all_factors.extend(ecm_factors)
+
+                    # Calculate final cofactor by dividing out found factors
+                    for factor in ecm_factors:
+                        while current_composite % int(factor) == 0:
+                            current_composite //= int(factor)
+
+                    if current_composite > 1:
+                        self.logger.info(f"Cofactor after GMP-ECM: C{len(str(current_composite))} (continuing from t{current_t_level:.2f})")
+                    else:
+                        # Fully factored
+                        self.logger.info(f"Fully factored by GMP-ECM")
+                else:
+                    # No factors found after reaching target t-level, exit ECM loop
+                    self.logger.info(f"Reached t{target_t_level:.1f} with no factor, moving to SIQS/CADO")
+                    break
 
         # Check if fully factored
         if current_composite == 1:
@@ -823,40 +840,40 @@ def main():
         epilog="""
 Examples:
   # Calculate aliquot sequence starting from 276
-  python3 aliquot-wrapper.py --start 276
+  python3 aliquot_wrapper.py --start 276
 
   # Use pure CADO-NFS for all factorizations
-  python3 aliquot-wrapper.py --start 276 --factorizer cado
+  python3 aliquot_wrapper.py --start 276 --factorizer cado
 
   # Use hybrid mode (ECM + CADO-NFS) for large numbers
-  python3 aliquot-wrapper.py --start 276 --factorizer hybrid
+  python3 aliquot_wrapper.py --start 276 --factorizer hybrid
 
   # Use YAFU for ECM pretesting (faster than GMP-ECM)
-  python3 aliquot-wrapper.py --start 276 --ecm-program yafu
+  python3 aliquot_wrapper.py --start 276 --ecm-program yafu
 
   # Use YAFU SIQS for numbers < 100 digits (default)
-  python3 aliquot-wrapper.py --start 276 --siqs-threshold 100
+  python3 aliquot_wrapper.py --start 276 --siqs-threshold 100
 
   # Calculate with more iterations
-  python3 aliquot-wrapper.py --start 1248 --max-iterations 50
+  python3 aliquot_wrapper.py --start 1248 --max-iterations 50
 
   # Submit results to FactorDB
-  python3 aliquot-wrapper.py --start 138 --factordb
+  python3 aliquot_wrapper.py --start 138 --factordb
 
   # Quiet mode (no factor spam)
-  python3 aliquot-wrapper.py --start 276 --quiet-factors
+  python3 aliquot_wrapper.py --start 276 --quiet-factors
 
   # Resume from FactorDB (fetches last known term automatically)
-  python3 aliquot-wrapper.py --start 276 --resume-factordb --quiet-factors
+  python3 aliquot_wrapper.py --start 276 --resume-factordb --quiet-factors
 
   # Manual resume from specific iteration
-  python3 aliquot-wrapper.py --start 276 --resume-iteration 2157 --resume-composite 175258998...
+  python3 aliquot_wrapper.py --start 276 --resume-iteration 2157 --resume-composite 175258998...
 
   # Use 8 threads/workers for parallel execution
-  python3 aliquot-wrapper.py --start 276 --threads 8 --quiet-factors
+  python3 aliquot_wrapper.py --start 276 --threads 8 --quiet-factors
 
   # Verbose mode (show detailed output from ECM and CADO-NFS)
-  python3 aliquot-wrapper.py --start 276 -v --threads 8
+  python3 aliquot_wrapper.py --start 276 -v --threads 8
 
 Common test sequences:
   276 → 396 → 696 → 1104 → 1872 → 3770 → ... (terminates at 1)
@@ -920,6 +937,12 @@ Common test sequences:
     resume_composite = None
 
     if args.resume_factordb:
+        # Warn if --resume-iteration is also specified (it will be ignored)
+        if args.resume_iteration is not None:
+            print(f"Warning: --resume-iteration is ignored with --resume-factordb (fetches latest term)")
+            print(f"         To resume from a specific iteration, use: --resume-iteration N --resume-composite X")
+            print()
+
         # Fetch last known term from FactorDB
         result = wrapper.fetch_factordb_last_term(args.start)
         if result:
@@ -937,87 +960,103 @@ Common test sequences:
         print(f"Resuming from manual input: iteration {resume_iteration}, {len(str(resume_composite))}-digit composite")
 
     # Initialize sequence appropriately
-    if resume_iteration is not None and resume_composite is not None:
-        # Create sequence starting at resume point
-        seq = AliquotSequence(args.start)
-        # Mark iterations up to resume point as already done
-        for i in range(resume_iteration):
-            seq.sequence.append(None)  # Placeholder for unknown intermediates
-        seq.sequence.append(resume_composite)
+    interrupted = False
+    seq = None
 
-        # Factor the resume composite
-        success, factorization, _ = wrapper.factor_number(resume_composite)
-        if success:
-            seq.factorizations[resume_composite] = factorization
+    try:
+        if resume_iteration is not None and resume_composite is not None:
+            # Create sequence starting at resume point
+            seq = AliquotSequence(args.start)
+            # Mark iterations up to resume point as already done
+            for i in range(resume_iteration):
+                seq.sequence.append(None)  # Placeholder for unknown intermediates
+            seq.sequence.append(resume_composite)
 
-            # Submit the resume composite factorization to FactorDB first
-            # This allows FactorDB to calculate the next term and maintain sequence linkage
-            if args.factordb and factorization:
-                wrapper.submit_to_factordb(resume_composite, factorization)
+            # Factor the resume composite
+            success, factorization, _ = wrapper.factor_number(resume_composite)
+            if success:
+                seq.factorizations[resume_composite] = factorization
 
-            # Continue from this point
-            current = resume_composite
-            for iteration in range(args.max_iterations):
-                next_term = wrapper.calculate_next_term(current, seq.factorizations[current])
-
-                wrapper.logger.info(f"Iteration {resume_iteration + iteration + 1}: {current} → {next_term}")
-                print(f"\nStep {resume_iteration + iteration + 1}:")
-                print(f"  Current: {current}")
-                print(f"  Factorization: {wrapper.format_factorization(seq.factorizations[current])}")
-                print(f"  σ({current}) = {wrapper.calculate_divisor_sum(seq.factorizations[current])}")
-                print(f"  Next term: {next_term}")
-
-                if next_term == 0 or next_term == 1:
-                    seq.add_term(next_term, {1: 1} if next_term == 1 else {})
-                    seq.terminated = True
-                    break
-
-                # Factor next term
-                success, factorization, results = wrapper.factor_number(next_term)
-                if not success:
-                    wrapper.logger.error(f"Failed to factor {next_term}, stopping")
-                    seq.add_term(next_term, {})
-                    break
-
-                # Submit to FactorDB
+                # Submit the resume composite factorization to FactorDB first
+                # This allows FactorDB to calculate the next term and maintain sequence linkage
                 if args.factordb and factorization:
-                    wrapper.submit_to_factordb(next_term, factorization)
+                    wrapper.submit_to_factordb(resume_composite, factorization)
 
-                seq.add_term(next_term, factorization)
+                # Continue from this point
+                current = resume_composite
+                for iteration in range(args.max_iterations):
+                    next_term = wrapper.calculate_next_term(current, seq.factorizations[current])
 
-                terminated, reason = seq.check_termination()
-                if terminated:
-                    wrapper.logger.info(f"Sequence {reason}")
-                    print(f"\n  Status: {reason}")
-                    break
+                    wrapper.logger.info(f"Iteration {resume_iteration + iteration + 1}: {current} → {next_term}")
+                    print(f"\nStep {resume_iteration + iteration + 1}:")
+                    print(f"  Current: {current}")
+                    print(f"  Factorization: {wrapper.format_factorization(seq.factorizations[current])}")
+                    print(f"  σ({current}) = {wrapper.calculate_divisor_sum(seq.factorizations[current])}")
+                    print(f"  Next term: {next_term}")
 
-                current = next_term
+                    if next_term == 0 or next_term == 1:
+                        seq.add_term(next_term, {1: 1} if next_term == 1 else {})
+                        seq.terminated = True
+                        break
+
+                    # Factor next term
+                    success, factorization, results = wrapper.factor_number(next_term)
+                    if not success:
+                        wrapper.logger.error(f"Failed to factor {next_term}, stopping")
+                        seq.add_term(next_term, {})
+                        break
+
+                    # Submit to FactorDB
+                    if args.factordb and factorization:
+                        wrapper.submit_to_factordb(next_term, factorization)
+
+                    seq.add_term(next_term, factorization)
+
+                    terminated, reason = seq.check_termination()
+                    if terminated:
+                        wrapper.logger.info(f"Sequence {reason}")
+                        print(f"\n  Status: {reason}")
+                        break
+
+                    current = next_term
+            else:
+                print("Failed to factor resume composite")
+                wrapper.cleanup_temp_files()
+                sys.exit(1)
         else:
-            print("Failed to factor resume composite")
-            wrapper.cleanup_temp_files()
-            sys.exit(1)
-    else:
-        # Normal computation from start
-        seq = wrapper.compute_sequence(
-            start=args.start,
-            max_iterations=args.max_iterations,
-            submit_to_factordb=args.factordb
-        )
+            # Normal computation from start
+            seq = wrapper.compute_sequence(
+                start=args.start,
+                max_iterations=args.max_iterations,
+                submit_to_factordb=args.factordb
+            )
 
-    # Print summary
-    wrapper.print_summary(seq)
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user (Ctrl+C)")
+        wrapper.logger.info("Aliquot sequence computation interrupted by user")
+        interrupted = True
+        # Create minimal sequence if none exists
+        if seq is None:
+            seq = AliquotSequence(args.start)
 
-    # Save sequence unless disabled
-    if not args.no_save:
-        output_path = Path(args.output) if args.output else None
-        saved_path = wrapper.save_sequence(seq, output_path)
-        print(f"\nSequence saved to: {saved_path}")
+    # Print summary (even if interrupted)
+    if seq is not None:
+        wrapper.print_summary(seq)
+
+        # Save sequence unless disabled
+        if not args.no_save:
+            output_path = Path(args.output) if args.output else None
+            saved_path = wrapper.save_sequence(seq, output_path)
+            print(f"\nSequence saved to: {saved_path}")
 
     # Clean up temporary files created by YAFU/CADO
     wrapper.cleanup_temp_files()
 
-    # Exit with success if sequence completed
-    sys.exit(0 if seq.terminated else 1)
+    # Exit with appropriate code
+    if interrupted:
+        print("\nExiting due to interrupt.")
+        sys.exit(130)  # Standard exit code for Ctrl+C
+    sys.exit(0 if (seq and seq.terminated) else 1)
 
 
 if __name__ == '__main__':

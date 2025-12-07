@@ -725,6 +725,7 @@ class StandardAutoWorkMode(WorkMode):
             target_t_level=target_tlevel,
             threads=workers,
             verbose=self.args.verbose,
+            progress_interval=getattr(self.args, 'progress_interval', 0),
             project=self.args.project,
             no_submit=False,
             work_id=self.current_work_id
@@ -765,7 +766,8 @@ class StandardAutoWorkMode(WorkMode):
                 stage2_device="CPU",
                 stage1_parametrization=param if param else 3,
                 threads=stage2_workers,
-                verbose=self.args.verbose
+                verbose=self.args.verbose,
+                progress_interval=getattr(self.args, 'progress_interval', 0)
             )
             result = self.wrapper.run_two_stage_v2(two_stage_config)
 
@@ -781,7 +783,8 @@ class StandardAutoWorkMode(WorkMode):
                 num_processes=workers,
                 parametrization=param if param else 3,
                 method=self.args.method,
-                verbose=self.args.verbose
+                verbose=self.args.verbose,
+                progress_interval=getattr(self.args, 'progress_interval', 0)
             )
             result = self.wrapper.run_multiprocess_v2(mp_config)
 
@@ -797,7 +800,8 @@ class StandardAutoWorkMode(WorkMode):
                 sigma=int(sigma) if sigma and str(sigma).isdigit() else None,
                 parametrization=param if param else 3,
                 method=self.args.method,
-                verbose=self.args.verbose
+                verbose=self.args.verbose,
+                progress_interval=getattr(self.args, 'progress_interval', 0)
             )
             result = self.wrapper.run_ecm_v2(ecm_config)
 

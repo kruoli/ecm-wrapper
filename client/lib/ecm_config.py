@@ -127,6 +127,7 @@ class MultiprocessConfig(ECMConfigValidation):
 
     # Execution control
     continue_after_factor: bool = False
+    progress_interval: int = 0  # Show progress every N curves (0 = disabled)
 
     def __post_init__(self):
         """Validate and auto-configure."""
@@ -159,6 +160,7 @@ class TLevelConfig(ECMConfigValidation):
     # Execution modes
     workers: int = 1  # Alias for threads (multiprocess support)
     use_two_stage: bool = False
+    progress_interval: int = 0  # Show progress every N curves (0 = disabled)
 
     # API submission
     project: Optional[str] = None

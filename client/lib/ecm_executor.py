@@ -277,7 +277,7 @@ class ECMWrapper(BaseWrapper):
                 target=run_worker_ecm_process,
                 args=(worker_id, config.composite, config.b1, config.b2, worker_curves,
                       config.verbose, config.method, self.config['programs']['gmp_ecm']['path'],
-                      result_queue, stop_event, 0, progress_queue)
+                      result_queue, stop_event, config.progress_interval, progress_queue)
             )
             p.start()
             processes.append(p)
@@ -432,7 +432,8 @@ class ECMWrapper(BaseWrapper):
                         total_curves=curves,
                         num_processes=config.threads,
                         parametrization=config.parametrization,
-                        verbose=config.verbose
+                        verbose=config.verbose,
+                        progress_interval=config.progress_interval
                     ))
                 else:
                     # Single process mode
@@ -442,7 +443,8 @@ class ECMWrapper(BaseWrapper):
                         curves=curves,
                         parametrization=config.parametrization,
                         threads=1,
-                        verbose=config.verbose
+                        verbose=config.verbose,
+                        progress_interval=config.progress_interval
                     ))
 
                 # Check for interruption after execution

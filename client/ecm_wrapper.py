@@ -203,6 +203,7 @@ def main():
             verbose=args.verbose or False,
             workers=args.workers or 1,
             use_two_stage=args.two_stage or False,
+            progress_interval=args.progress_interval or 0,
             project=args.project,
             no_submit=args.no_submit or False
         )
@@ -228,7 +229,8 @@ def main():
             parametrization=args.param or 1,
             method=args.method or 'ecm',
             verbose=args.verbose or False,
-            continue_after_factor=False
+            continue_after_factor=False,
+            progress_interval=args.progress_interval or 0
         )
 
         result = wrapper.run_multiprocess_v2(config)

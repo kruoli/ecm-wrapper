@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Literal, cast
 
 from ...database import get_db
 from ...dependencies import get_work_service
@@ -50,10 +50,11 @@ async def get_work(
             detail="No valid methods specified"
         )
 
-    # Create work request
+    # Create work request - cast methods since we've already validated them
+    validated_methods = cast(List[Literal["ecm", "pm1", "pp1", "qs", "nfs"]], methods)
     work_request = WorkRequest(
         client_id=client_id,
-        methods=methods,
+        methods=validated_methods,
         max_digits=max_digits,
         min_digits=min_digits
     )

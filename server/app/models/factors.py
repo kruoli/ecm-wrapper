@@ -1,22 +1,28 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Boolean, BigInteger, UniqueConstraint
-from sqlalchemy.orm import relationship
+from typing import Optional, TYPE_CHECKING
+from sqlalchemy import String, Text, ForeignKey, Boolean, BigInteger, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from .composites import Composite
+    from .attempts import ECMAttempt
+
 
 class Factor(Base, TimestampMixin):
     __tablename__ = "factors"
 
-    id = Column(Integer, primary_key=True, index=True)
-    composite_id = Column(Integer, ForeignKey("composites.id"), nullable=False)
-    factor = Column(Text, nullable=False)  # Store as string for arbitrary precision
-    is_prime = Column(Boolean, default=None, nullable=True)  # NULL until primality tested
-    found_by_attempt_id = Column(Integer, ForeignKey("ecm_attempts.id"), nullable=True)
-    sigma = Column(Text, nullable=True)  # Sigma value that found this factor (ECM only) - Text to support large param 0 values
-    group_order = Column(Text, nullable=True)  # Elliptic curve group order (ECM only)
-    group_order_factorization = Column(Text, nullable=True)  # Factorization of group order
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    composite_id: Mapped[int] = mapped_column(ForeignKey("composites.id"), nullable=False)
+    factor: Mapped[str] = mapped_column(Text, nullable=False)  # Store as string for arbitrary precision
+    is_prime: Mapped[Optional[bool]] = mapped_column(Boolean, default=None, nullable=True)  # NULL until primality tested
+    found_by_attempt_id: Mapped[Optional[int]] = mapped_column(ForeignKey("ecm_attempts.id"), nullable=True)
+    sigma: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Sigma value that found this factor (ECM only) - Text to support large param 0 values
+    group_order: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Elliptic curve group order (ECM only)
+    group_order_factorization: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Factorization of group order
 
     # Relationships
-    composite = relationship("Composite")
-    attempt = relationship("ECMAttempt")
+    composite: Mapped["Composite"] = relationship("Composite")
+    attempt: Mapped[Optional["ECMAttempt"]] = relationship("ECMAttempt")
 
     # Ensure no duplicate factors per composite
     __table_args__ = (

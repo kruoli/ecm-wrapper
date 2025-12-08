@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from typing import Tuple
+from typing import Tuple, Literal
 import logging
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -79,13 +79,15 @@ async def submit_result(
                 raise ValueError(f"Invalid parametrization {parametrization}. Must be 0, 1, 2, or 3.")
 
             # Generate work hash for duplicate detection
+            # Convert sigma to int for hash generation (it can be a large number string)
+            sigma_int = int(sigma) if sigma is not None else None
             work_hash = ECMAttempt.generate_work_hash(
                 result_request.composite,
                 result_request.method,
                 result_request.parameters.b1,
                 result_request.parameters.b2,
                 parametrization,
-                sigma,
+                sigma_int,
                 result_request.parameters.curves
             )
 
@@ -124,7 +126,7 @@ async def submit_result(
             db.refresh(attempt)
 
             # Handle factor discovery - support both single and multiple factors
-            factor_status = "no_factor"
+            factor_status: Literal["new_factor", "known_factor", "no_factor", "duplicate"] = "no_factor"
             factors_to_process = []
 
             # Collect factors from new or legacy format
@@ -206,8 +208,10 @@ async def submit_result(
                             parsed_sigma = int(sigma_str)
 
                     # Add factor to database (with parametrization for group order calculation)
+                    # Convert sigma to string for storage (supports large param 0 values)
+                    sigma_for_storage = str(parsed_sigma) if parsed_sigma is not None else None
                     factor, factor_created = FactorService.add_factor(
-                        db, composite.id, factor_str, attempt.id, parsed_sigma, parametrization
+                        db, composite.id, factor_str, attempt.id, sigma_for_storage, parametrization
                     )
 
                     if factor_created:

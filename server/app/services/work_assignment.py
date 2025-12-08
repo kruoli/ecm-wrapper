@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, func, desc
-from typing import Optional, Dict, Any, List, Tuple, Sequence
+from typing import Optional, Dict, Any, List, Tuple, Sequence, Literal, cast
 from datetime import datetime, timedelta
 import uuid
 import logging
@@ -223,10 +223,12 @@ class WorkAssignmentService:
             db, composite, work_request.client_id, method, parameters
         )
 
+        # Cast method to Literal type since it's already validated
+        typed_method = cast(Literal["ecm", "pm1", "pp1", "qs", "nfs"], method)
         return WorkResponse(
             work_id=work_assignment.id,
             composite=composite.number,
-            method=method,
+            method=typed_method,
             parameters=parameters,
             estimated_time_minutes=work_assignment.estimated_time_minutes,
             expires_at=work_assignment.expires_at
@@ -269,7 +271,7 @@ class WorkAssignmentService:
             WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
         ).subquery()
 
-        query = query.filter(~Composite.id.in_(active_work_composites))
+        query = query.filter(~Composite.id.in_(active_work_composites))  # type: ignore[arg-type]
 
         # Order by priority: smaller numbers first, then by creation time
         composite = query.order_by(

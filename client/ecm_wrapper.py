@@ -20,7 +20,7 @@ from typing import Optional
 
 from lib.ecm_executor import ECMWrapper
 from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig
-from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_stage2_workers_default
+from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_stage2_workers_default, parse_int_with_scientific
 from lib.stage1_helpers import submit_stage1_complete_workflow
 from lib.results_builder import results_for_stage1
 from lib.user_output import UserOutput
@@ -49,6 +49,25 @@ def main():
 
     # Get stage2 workers default from config
     stage2_workers = args.stage2_workers if args.stage2_workers else get_stage2_workers_default(wrapper.config)
+
+    # Resolve B1 from args or config based on method
+    # This provides a sensible default when --b1 is not specified
+    # Config values may be strings with scientific notation (e.g., "25e9")
+    def get_b1_from_config(key: str, default: int) -> int:
+        val = wrapper.config['programs']['gmp_ecm'].get(key, default)
+        if isinstance(val, str):
+            return parse_int_with_scientific(val)
+        return val
+
+    method = args.method or 'ecm'
+    if args.b1:
+        b1 = args.b1
+    elif method == 'pm1':
+        b1 = get_b1_from_config('pm1_b1', 2900000000)
+    elif method == 'pp1':
+        b1 = get_b1_from_config('pp1_b1', 110000000)
+    else:
+        b1 = get_b1_from_config('default_b1', 110000000)
 
     # Detect mode and execute
     result = None
@@ -109,7 +128,7 @@ def main():
         output.mode_header("Stage 1 Only Mode", {
             "Save to": save_path,
             "Composite": args.composite,
-            "B1": args.b1,
+            "B1": b1,
             "Curves": args.curves or 1
         })
         if args.upload:
@@ -119,7 +138,7 @@ def main():
         param = args.param or (3 if use_gpu else 1)
         config = ECMConfig(
             composite=args.composite,
-            b1=args.b1,
+            b1=b1,
             b2=0,  # Stage 1 only
             curves=args.curves or 1,
             sigma=args.sigma,
@@ -130,7 +149,7 @@ def main():
             use_gpu=use_gpu,
             gpu_device=gpu_device,
             gpu_curves=gpu_curves,
-            method=args.method or 'ecm',
+            method=method,
             progress_interval=args.progress_interval or 0
         )
 
@@ -156,7 +175,7 @@ def main():
                                    for i, f in enumerate(result.factors)]
 
                     # Build results dict for submission
-                    results = (results_for_stage1(args.composite, args.b1, result.curves_run, param)
+                    results = (results_for_stage1(args.composite, b1, result.curves_run, param)
                         .with_curves(result.curves_run, result.curves_run)
                         .with_factors(all_factors)
                         .with_execution_time(result.execution_time)
@@ -215,13 +234,13 @@ def main():
         output.mode_header("Multiprocess Mode", {
             "Workers": args.workers or "auto",
             "Composite": args.composite,
-            "B1": args.b1,
+            "B1": b1,
             "B2": args.b2 or "default"
         })
 
         config = MultiprocessConfig(
             composite=args.composite,
-            b1=args.b1,
+            b1=b1,
             b2=args.b2,
             total_curves=args.curves or 1000,
             curves_per_process=100,
@@ -241,13 +260,13 @@ def main():
         output.mode_header("Two-stage Mode", {
             "Pipeline": "GPU stage 1 + CPU stage 2",
             "Composite": args.composite,
-            "B1": args.b1,
+            "B1": b1,
             "B2": args.b2 if args.b2 is not None else "default"
         })
 
         config = TwoStageConfig(
             composite=args.composite,
-            b1=args.b1,
+            b1=b1,
             b2=args.b2,
             stage1_curves=args.curves or 100,  # Use --curves for stage 1
             stage2_curves_per_residue=1000,     # Default for stage 2
@@ -270,16 +289,17 @@ def main():
 
     # Standard Mode
     else:
+        # B1 and method already resolved at top of function
         output.mode_header("Standard ECM Mode", {
             "Composite": args.composite,
-            "B1": args.b1,
+            "B1": b1,
             "B2": args.b2 if args.b2 is not None else "default",
             "Curves": args.curves or 1
         })
 
         config = ECMConfig(
             composite=args.composite,
-            b1=args.b1,
+            b1=b1,
             b2=args.b2,
             curves=args.curves or 1,
             sigma=args.sigma,
@@ -290,7 +310,7 @@ def main():
             use_gpu=use_gpu,
             gpu_device=gpu_device,
             gpu_curves=gpu_curves,
-            method=args.method or 'ecm',
+            method=method,
             progress_interval=args.progress_interval or 0
         )
 
@@ -298,10 +318,11 @@ def main():
 
     # Submit results if available
     if result and not args.no_submit:
-        results_dict = result.to_dict(args.composite, args.method or 'ecm')
+        results_dict = result.to_dict(args.composite, method)
 
         # Add ECM parameters that aren't in FactorResult
-        results_dict['b1'] = args.b1
+        # b1 and method resolved at top of function for all modes
+        results_dict['b1'] = b1
         results_dict['b2'] = args.b2
         results_dict['curves_requested'] = args.curves
         results_dict['parametrization'] = args.param or (3 if getattr(args, 'gpu', False) else 1)
@@ -313,10 +334,10 @@ def main():
         # Submit via API
         if result.success and result.factors:
             output.info(f"\nSubmitting {len(result.factors)} factor(s) to API...")
-            wrapper.submit_result(results_dict, args.project, f"gmp-ecm-{args.method}")
+            wrapper.submit_result(results_dict, args.project, f"gmp-ecm-{method}")
         elif result.curves_run > 0:
             output.info(f"\nSubmitting {result.curves_run} curves (no factors) to API...")
-            wrapper.submit_result(results_dict, args.project, f"gmp-ecm-{args.method}")
+            wrapper.submit_result(results_dict, args.project, f"gmp-ecm-{method}")
 
     # Print summary
     if result:

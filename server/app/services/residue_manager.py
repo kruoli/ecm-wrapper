@@ -78,6 +78,11 @@ class ResidueManager:
             if not all([param_match, b1_match, n_match]):
                 raise ValueError("GPU format residue file missing required fields (PARAM, B1, or N)")
 
+            # Assertions for type narrowing after the above check
+            assert n_match is not None
+            assert b1_match is not None
+            assert param_match is not None
+
             composite = n_match.group(1)
             b1 = int(b1_match.group(1))
             parametrization = int(param_match.group(1))

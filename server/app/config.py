@@ -1,7 +1,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 from pydantic import Field, validator
 from pydantic_settings import BaseSettings
@@ -71,19 +71,19 @@ class Settings(BaseSettings):
 
     # Security
     secret_key: str = Field(
-        default_factory=lambda: (
+        default_factory=lambda: cast(str, (
             (read_secret_file(secret_file) if (secret_file := os.getenv("SECRET_KEY_FILE")) else None)
             or os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
-        ),
+        )),
         min_length=16,
         description="Secret key for cryptographic operations"
     )
 
     admin_api_key: str = Field(
-        default_factory=lambda: (
+        default_factory=lambda: cast(str, (
             (read_secret_file(api_key_file) if (api_key_file := os.getenv("ADMIN_API_KEY_FILE")) else None)
             or os.getenv("ADMIN_API_KEY", "dev-admin-key-change-in-production")
-        ),
+        )),
         min_length=16,
         description="API key for admin endpoints"
     )

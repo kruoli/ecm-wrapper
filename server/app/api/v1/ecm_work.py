@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
-from typing import Optional
+from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 import uuid
 import logging
@@ -75,7 +75,7 @@ async def get_ecm_work(
         ).count()
 
         if active_work_count >= settings.max_work_items_per_client:
-            response_data = {
+            response_data: Dict[str, Any] = {
                 "work_id": None,
                 "composite_id": None,
                 "composite": None,
@@ -115,7 +115,7 @@ async def get_ecm_work(
             WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
         ).subquery()
 
-        query = query.filter(~Composite.id.in_(active_work_composites))
+        query = query.filter(~Composite.id.in_(active_work_composites))  # type: ignore[arg-type]
 
         # Exclude composites with pending residues (stage 1 done, stage 2 not yet completed)
         # This prevents duplicate stage 1 work when residues are waiting to be processed
@@ -123,7 +123,7 @@ async def get_ecm_work(
             ECMResidue.status.in_(['available', 'claimed'])
         ).subquery()
 
-        query = query.filter(~Composite.id.in_(pending_residue_composites))
+        query = query.filter(~Composite.id.in_(pending_residue_composites))  # type: ignore[arg-type]
 
         # Apply sorting strategy based on work_type
         if work_type == "progressive":
@@ -161,9 +161,10 @@ async def get_ecm_work(
         ).all()
 
         # Calculate suggested ECM parameters using t-level targeting
+        # Note: target_t_level is guaranteed non-None by the filter above
         try:
             suggestion = t_level_calc.suggest_next_ecm_parameters(
-                composite.target_t_level,
+                composite.target_t_level or 0.0,  # Default to 0 if None (shouldn't happen due to filter)
                 composite.current_t_level,
                 composite.digit_length
             )

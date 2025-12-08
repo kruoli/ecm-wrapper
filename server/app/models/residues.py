@@ -1,7 +1,12 @@
-from sqlalchemy import Column, Integer, String, BigInteger, DateTime, ForeignKey, Index
-from sqlalchemy.orm import relationship
 from datetime import datetime, timedelta
+from typing import Optional, TYPE_CHECKING
+from sqlalchemy import String, BigInteger, DateTime, ForeignKey, Index
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from .composites import Composite
+    from .attempts import ECMAttempt
 
 
 class ECMResidue(Base, TimestampMixin):
@@ -17,42 +22,42 @@ class ECMResidue(Base, TimestampMixin):
     """
     __tablename__ = "ecm_residues"
 
-    id = Column(Integer, primary_key=True, index=True)
-    composite_id = Column(Integer, ForeignKey("composites.id"), nullable=False)
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    composite_id: Mapped[int] = mapped_column(ForeignKey("composites.id"), nullable=False)
 
     # Who uploaded this residue
-    client_id = Column(String(255), nullable=False, index=True)
+    client_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
 
     # Link to the original stage 1 ECM attempt
     # This will be marked as superseded when stage 2 completes
-    stage1_attempt_id = Column(Integer, ForeignKey("ecm_attempts.id"), nullable=True)
+    stage1_attempt_id: Mapped[Optional[int]] = mapped_column(ForeignKey("ecm_attempts.id"), nullable=True)
 
     # ECM parameters (parsed from residue file)
-    b1 = Column(BigInteger, nullable=False)
-    parametrization = Column(Integer, nullable=False)  # 0, 1, 2, or 3
-    curve_count = Column(Integer, nullable=False)
+    b1: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    parametrization: Mapped[int] = mapped_column(nullable=False)  # 0, 1, 2, or 3
+    curve_count: Mapped[int] = mapped_column(nullable=False)
 
     # File storage info
-    storage_path = Column(String(512), nullable=False, unique=True)  # Filesystem path
-    file_size_bytes = Column(Integer, nullable=False)
-    checksum = Column(String(64), nullable=False)  # SHA-256 of file content
+    storage_path: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)  # Filesystem path
+    file_size_bytes: Mapped[int] = mapped_column(nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)  # SHA-256 of file content
 
     # Lifecycle status
     # available: ready for stage 2 work
     # claimed: assigned to a client for stage 2
     # completed: stage 2 finished, file deleted
     # expired: unclaimed too long, cleaned up
-    status = Column(String(20), default='available', nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default='available', nullable=False)
 
     # Timing
-    expires_at = Column(DateTime, nullable=False)  # Auto-cleanup if not consumed
-    claimed_at = Column(DateTime, nullable=True)
-    claimed_by = Column(String(255), nullable=True)  # Client ID of stage 2 worker
-    completed_at = Column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)  # Auto-cleanup if not consumed
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    claimed_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # Client ID of stage 2 worker
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Relationships
-    composite = relationship("Composite")
-    stage1_attempt = relationship("ECMAttempt", foreign_keys=[stage1_attempt_id])
+    composite: Mapped["Composite"] = relationship("Composite")
+    stage1_attempt: Mapped[Optional["ECMAttempt"]] = relationship("ECMAttempt", foreign_keys=[stage1_attempt_id])
 
     @classmethod
     def default_expiry(cls) -> datetime:

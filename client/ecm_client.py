@@ -14,6 +14,7 @@ import sys
 
 from lib.ecm_executor import ECMWrapper
 from lib.work_modes import WorkLoopContext, get_work_mode
+from lib.arg_parser import parse_int_with_scientific
 
 
 def create_client_parser():
@@ -54,10 +55,10 @@ Examples:
     # Execution parameters (override server defaults)
     parser.add_argument('--tlevel', type=float,
                        help='Target t-level (overrides server t-level)')
-    parser.add_argument('--b1', type=int,
-                       help='B1 parameter (overrides server default)')
-    parser.add_argument('--b2', type=int,
-                       help='B2 parameter (overrides server default, -1 for GMP-ECM default)')
+    parser.add_argument('--b1', type=parse_int_with_scientific,
+                       help='B1 parameter (overrides server default, supports scientific notation e.g., 52e6)')
+    parser.add_argument('--b2', type=parse_int_with_scientific,
+                       help='B2 parameter (overrides server default, -1 for GMP-ECM default, supports scientific notation)')
     parser.add_argument('--b2-multiplier', type=float,
                        help='Dynamic B2 = B1 * multiplier (for stage2-only mode)')
     parser.add_argument('--curves', type=int,

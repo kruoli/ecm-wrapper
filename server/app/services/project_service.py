@@ -45,7 +45,7 @@ class ProjectService:
     def get_project_by_identifier(
         db: Session,
         identifier: Union[int, str]
-    ) -> Project:
+    ) -> Optional[Project]:
         """
         Get project by ID or name.
 

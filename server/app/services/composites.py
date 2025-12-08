@@ -951,7 +951,7 @@ class CompositeService:
 
         return breakdown
 
-    def get_milestone_groups(self, db: Session) -> Dict[int, Dict[str, list]]:
+    def get_milestone_groups(self, db: Session) -> Dict[int, Dict[str, Any]]:
         """
         Group composites by t-level milestones (t30, t35, t40, etc.).
 

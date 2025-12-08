@@ -3,7 +3,7 @@ Common database query patterns to reduce duplication across routes.
 Centralizes frequently-used queries for composites, work assignments, and related entities.
 """
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Any, List
 
 from sqlalchemy import and_, desc, func, distinct
 from sqlalchemy.orm import Session
@@ -83,9 +83,9 @@ def get_composites_by_completion(
 
     query = db.query(Composite)
 
-    filters = [Composite.target_t_level.isnot(None)]
+    filters: List[Any] = [Composite.target_t_level.isnot(None)]
     if not include_factored:
-        filters.append(~Composite.is_fully_factored)
+        filters.append(Composite.is_fully_factored == False)
 
     composites = query.filter(and_(*filters)).all()
 

@@ -56,14 +56,14 @@ async def get_project_by_name(
     ).filter(
         and_(
             ProjectComposite.project_id == project.id,
-            not Composite.is_fully_factored
+            Composite.is_fully_factored == False  # SQLAlchemy comparison, not Python 'not'
         )
     ).count()
 
     factored = total_composites - unfactored
 
     return ProjectStats(
-        project=project,
+        project=ProjectResponse.model_validate(project),
         total_composites=total_composites,
         unfactored_composites=unfactored,
         factored_composites=factored
@@ -103,14 +103,14 @@ async def get_project_by_id(
     ).filter(
         and_(
             ProjectComposite.project_id == project_id,
-            not Composite.is_fully_factored
+            Composite.is_fully_factored == False  # SQLAlchemy comparison, not Python 'not'
         )
     ).count()
 
     factored = total_composites - unfactored
 
     return ProjectStats(
-        project=project,
+        project=ProjectResponse.model_validate(project),
         total_composites=total_composites,
         unfactored_composites=unfactored,
         factored_composites=factored

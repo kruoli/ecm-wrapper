@@ -1,51 +1,56 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Float, BigInteger, DateTime, Index
-from sqlalchemy.orm import relationship
-from typing import Optional
+from datetime import datetime
+from typing import Optional, TYPE_CHECKING
+from sqlalchemy import String, Text, ForeignKey, Float, BigInteger, DateTime, Index
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base, TimestampMixin
 import hashlib
+
+if TYPE_CHECKING:
+    from .composites import Composite
+
 
 class ECMAttempt(Base, TimestampMixin):
     __tablename__ = "ecm_attempts"
 
-    id = Column(Integer, primary_key=True, index=True)
-    composite_id = Column(Integer, ForeignKey("composites.id"), nullable=False)
-    client_id = Column(String(255), nullable=False, index=True)
-    client_ip = Column(String(45), nullable=True, index=True)  # IPv4 or IPv6
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    composite_id: Mapped[int] = mapped_column(ForeignKey("composites.id"), nullable=False)
+    client_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    client_ip: Mapped[Optional[str]] = mapped_column(String(45), nullable=True, index=True)  # IPv4 or IPv6
 
     # Method and parameters
-    method = Column(String(50), nullable=False)  # 'ecm', 'pm1', 'pp1', 'qs', 'nfs'
-    b1 = Column(BigInteger, nullable=False)
-    b2 = Column(BigInteger, nullable=True)  # Optional stage 2
-    parametrization = Column(Integer, nullable=True)  # ECM parametrization type (0, 1, 2, or 3)
-    curves_requested = Column(Integer, nullable=False)
-    curves_completed = Column(Integer, nullable=False)
+    method: Mapped[str] = mapped_column(String(50), nullable=False)  # 'ecm', 'pm1', 'pp1', 'qs', 'nfs'
+    b1: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    b2: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)  # Optional stage 2
+    parametrization: Mapped[Optional[int]] = mapped_column(nullable=True)  # ECM parametrization type (0, 1, 2, or 3)
+    curves_requested: Mapped[int] = mapped_column(nullable=False)
+    curves_completed: Mapped[int] = mapped_column(nullable=False)
 
     # Duplicate detection hash
-    work_hash = Column(String(64), nullable=True, index=True, unique=True)  # SHA-256 hash
+    work_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True, unique=True)  # SHA-256 hash
 
     # Results
-    factor_found = Column(Text, nullable=True)  # NULL if no factor found
-    execution_time_seconds = Column(Float, nullable=True)
+    factor_found: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # NULL if no factor found
+    execution_time_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # Program info
-    program = Column(String(50), nullable=False)  # 'gmp-ecm', 'yafu', etc
-    program_version = Column(String(50), nullable=True)
+    program: Mapped[str] = mapped_column(String(50), nullable=False)  # 'gmp-ecm', 'yafu', etc
+    program_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     # Status and metadata
-    status = Column(String(20), default='completed', nullable=False)  # 'running', 'completed', 'failed', 'timeout'
-    raw_output = Column(Text, nullable=True)  # Store full output for debugging
+    status: Mapped[str] = mapped_column(String(20), default='completed', nullable=False)  # 'running', 'completed', 'failed', 'timeout'
+    raw_output: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Store full output for debugging
 
     # Work assignment fields
-    assigned_at = Column(DateTime, nullable=True)
-    started_at = Column(DateTime, nullable=True)
+    assigned_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Stage supersession tracking (for decoupled two-stage ECM)
     # When stage 2 completes, it supersedes the stage 1 attempt
-    superseded_by = Column(Integer, ForeignKey("ecm_attempts.id"), nullable=True)
+    superseded_by: Mapped[Optional[int]] = mapped_column(ForeignKey("ecm_attempts.id"), nullable=True)
 
     # Relationships
-    composite = relationship("Composite")
-    superseding_attempt = relationship("ECMAttempt", remote_side=[id], uselist=False)
+    composite: Mapped["Composite"] = relationship("Composite")
+    superseding_attempt: Mapped[Optional["ECMAttempt"]] = relationship("ECMAttempt", remote_side=[id], uselist=False)
 
     @classmethod
     def generate_work_hash(cls, composite: str, method: str, b1: int, b2: Optional[int] = None,

@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Literal, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy.orm import Session
@@ -45,6 +45,7 @@ async def get_composite_stats(
     factors_list = [f.factor for f in factors]
 
     # Determine status
+    status: Literal["composite", "prime", "fully_factored"]
     if comp.is_prime:
         status = "prime"
     elif comp.is_fully_factored:
@@ -96,6 +97,7 @@ async def get_composite_stats(
         target_t_level=comp.target_t_level,
         current_t_level=comp.current_t_level,
         priority=comp.priority,
+        is_active=comp.is_active,
         status=status,
         factors_found=factors_list,
         ecm_work=ecm_work,
@@ -178,11 +180,11 @@ async def get_top_composites_by_progress(
     # Build base query
     query = db.query(Composite)
 
-    # Base filters
-    filters = [Composite.target_t_level.isnot(None)]
+    # Base filters - use Any to allow mixed SQLAlchemy expression types
+    filters: List[Any] = [Composite.target_t_level.isnot(None)]
 
     if not include_factored:
-        filters.append(~Composite.is_fully_factored)
+        filters.append(Composite.is_fully_factored == False)
 
     if min_priority is not None:
         filters.append(Composite.priority >= min_priority)

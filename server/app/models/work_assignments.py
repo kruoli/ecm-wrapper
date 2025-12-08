@@ -1,39 +1,43 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Text, Index, BigInteger
-from sqlalchemy.orm import relationship
-from typing import Optional
-from .base import Base, TimestampMixin
 from datetime import datetime, timedelta
+from typing import Optional, TYPE_CHECKING
+from sqlalchemy import String, ForeignKey, DateTime, Text, Index, BigInteger
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from .base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from .composites import Composite
+
 
 class WorkAssignment(Base, TimestampMixin):
     __tablename__ = "work_assignments"
 
-    id = Column(String(64), primary_key=True)  # UUID for work assignment
-    composite_id = Column(Integer, ForeignKey("composites.id"), nullable=False)
-    client_id = Column(String(255), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # UUID for work assignment
+    composite_id: Mapped[int] = mapped_column(ForeignKey("composites.id"), nullable=False)
+    client_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
 
     # Work details
-    method = Column(String(50), nullable=False)  # 'ecm', 'pm1', 'pp1'
-    b1 = Column(BigInteger, nullable=False)
-    b2 = Column(BigInteger, nullable=True)
-    curves_requested = Column(Integer, nullable=False)
+    method: Mapped[str] = mapped_column(String(50), nullable=False)  # 'ecm', 'pm1', 'pp1'
+    b1: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    b2: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    curves_requested: Mapped[int] = mapped_column(nullable=False)
 
     # Status tracking
-    status = Column(String(20), default='assigned', nullable=False)  # 'assigned', 'claimed', 'running', 'completed', 'failed', 'timeout'
-    priority = Column(Integer, default=0, nullable=False, index=True)  # Higher = more priority
+    status: Mapped[str] = mapped_column(String(20), default='assigned', nullable=False)  # 'assigned', 'claimed', 'running', 'completed', 'failed', 'timeout'
+    priority: Mapped[int] = mapped_column(default=0, nullable=False, index=True)  # Higher = more priority
 
     # Timing
-    assigned_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    claimed_at = Column(DateTime, nullable=True)
-    expires_at = Column(DateTime, nullable=False)
-    completed_at = Column(DateTime, nullable=True)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Progress tracking
-    curves_completed = Column(Integer, default=0, nullable=False)
-    progress_message = Column(Text, nullable=True)
-    last_progress_at = Column(DateTime, nullable=True)
+    curves_completed: Mapped[int] = mapped_column(default=0, nullable=False)
+    progress_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_progress_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Relationships
-    composite = relationship("Composite")
+    composite: Mapped["Composite"] = relationship("Composite")
 
     @property
     def is_expired(self) -> bool:

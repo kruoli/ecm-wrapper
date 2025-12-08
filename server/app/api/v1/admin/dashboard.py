@@ -75,7 +75,7 @@ async def get_admin_summary(
     composites_with_target = db.query(Composite).filter(
         and_(
             Composite.target_t_level.isnot(None),
-            not Composite.is_fully_factored
+            Composite.is_fully_factored == False  # SQLAlchemy comparison, not Python 'not'
         )
     ).count()
 

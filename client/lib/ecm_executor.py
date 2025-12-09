@@ -312,27 +312,32 @@ class ECMWrapper(BaseWrapper):
         total_curves_completed = 0
         completed_workers = 0
 
-        while completed_workers < len(processes):
-            try:
-                result = result_queue.get(timeout=0.5)
-                total_curves_completed += result['curves_completed']
+        try:
+            while completed_workers < len(processes):
+                try:
+                    result = result_queue.get(timeout=0.5)
+                    total_curves_completed += result['curves_completed']
 
-                if result['factor_found']:
-                    all_factors.append(result['factor_found'])
-                    all_sigmas.append(result.get('sigma_found'))
-                    self.logger.info(f"Worker {result['worker_id']} found factor: {result['factor_found']}")
-                    stop_event.set()  # Signal workers to stop on factor found
+                    if result['factor_found']:
+                        all_factors.append(result['factor_found'])
+                        all_sigmas.append(result.get('sigma_found'))
+                        self.logger.info(f"Worker {result['worker_id']} found factor: {result['factor_found']}")
+                        stop_event.set()  # Signal workers to stop on factor found
 
-                # Collect raw output from each worker
-                if 'raw_output' in result:
-                    all_raw_outputs.append(f"=== Worker {result['worker_id']} ===\n{result['raw_output']}")
+                    # Collect raw output from each worker
+                    if 'raw_output' in result:
+                        all_raw_outputs.append(f"=== Worker {result['worker_id']} ===\n{result['raw_output']}")
 
-                completed_workers += 1
-            except:
-                # Check if processes are still alive
-                if not any(p.is_alive() for p in processes):
-                    break
-                continue
+                    completed_workers += 1
+                except Exception:
+                    # Check if processes are still alive (Queue.Empty or other errors)
+                    if not any(p.is_alive() for p in processes):
+                        break
+                    continue
+        except KeyboardInterrupt:
+            self.logger.info("Multiprocess ECM interrupted by user")
+            self.interrupted = True
+            stop_event.set()  # Signal workers to stop
 
         # Wait for all processes to finish
         for p in processes:
@@ -354,6 +359,7 @@ class ECMWrapper(BaseWrapper):
         result.execution_time = time.time() - start_time
         result.success = len(result.factors) > 0
         result.raw_output = '\n\n'.join(all_raw_outputs) if all_raw_outputs else None
+        result.interrupted = self.interrupted  # Signal if execution was interrupted
 
         return result
 

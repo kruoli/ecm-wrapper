@@ -723,6 +723,7 @@ class StandardAutoWorkMode(WorkMode):
         config = TLevelConfig(
             composite=composite,
             target_t_level=target_tlevel,
+            start_t_level=start_tlevel,
             threads=workers,
             verbose=self.args.verbose,
             progress_interval=getattr(self.args, 'progress_interval', 0),

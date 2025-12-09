@@ -64,6 +64,28 @@ class APIClient:
                 response.raise_for_status()
                 self.logger.info(f"{operation_name} succeeded")
                 return response
+            except requests.exceptions.HTTPError as e:
+                # Don't retry on 404 - resource doesn't exist
+                if e.response is not None and e.response.status_code == 404:
+                    self.logger.warning(f"{operation_name} failed: resource not found (404)")
+                    return None
+                # Fall through to retry logic for other HTTP errors
+                if attempt < self.retry_attempts:
+                    delay = 2 ** attempt
+                    self.logger.warning(
+                        f"{operation_name} failed (attempt {attempt}/{self.retry_attempts}): {e}. "
+                        f"Retrying in {delay}s..."
+                    )
+                    try:
+                        time.sleep(delay)
+                    except KeyboardInterrupt:
+                        self.logger.info(f"{operation_name} interrupted during retry wait")
+                        return None
+                else:
+                    self.logger.error(
+                        f"{operation_name} failed after {self.retry_attempts} attempts: {e}"
+                    )
+                    return None
             except requests.RequestException as e:
                 if attempt < self.retry_attempts:
                     delay = 2 ** attempt
@@ -71,7 +93,11 @@ class APIClient:
                         f"{operation_name} failed (attempt {attempt}/{self.retry_attempts}): {e}. "
                         f"Retrying in {delay}s..."
                     )
-                    time.sleep(delay)
+                    try:
+                        time.sleep(delay)
+                    except KeyboardInterrupt:
+                        self.logger.info(f"{operation_name} interrupted during retry wait")
+                        return None
                 else:
                     self.logger.error(
                         f"{operation_name} failed after {self.retry_attempts} attempts: {e}"

@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+
+{% block title %}Recent Factors - ECM Dashboard{% endblock %}
+
+{% block extra_head %}
+<script>
+    function applyFilters() {
+        const clientId = document.getElementById('client-filter').value;
+        const minDigits = document.getElementById('min-digits').value;
+        const maxDigits = document.getElementById('max-digits').value;
+
+        let url = '/api/v1/dashboard/factors?';
+        if (clientId) url += `client_id=${encodeURIComponent(clientId)}&`;
+        if (minDigits) url += `min_digits=${minDigits}&`;
+        if (maxDigits) url += `max_digits=${maxDigits}&`;
+
+        window.location.href = url.slice(0, -1);  // Remove trailing & or ?
+    }
+</script>
+{% endblock %}
+
+{% block body %}
+<h1>Discovered Factors</h1>
+
+<div style="margin-bottom: 20px; padding: 12px; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+    <a href="/api/v1/dashboard/" class="btn btn-secondary" style="margin-right: 10px;">
+        &larr; Back to Dashboard
+    </a>
+    <a href="/api/v1/dashboard/curves" class="btn" style="margin-right: 10px;">
+        View Curves
+    </a>
+    <a href="/api/v1/dashboard/leaderboard" class="btn">
+        Leaderboard
+    </a>
+</div>
+
+<div class="section" style="margin-bottom: 20px;">
+    <div class="section-header">Filters</div>
+    <div class="section-content">
+        <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: center;">
+            <div>
+                <label for="client-filter" style="font-weight: 600;">Found by Client:</label>
+                <select id="client-filter" style="padding: 6px 10px; border-radius: 4px; border: 1px solid #ddd;">
+                    <option value="">All Clients</option>
+                    {% for client in clients %}
+                    <option value="{{ client }}" {% if client_id == client %}selected{% endif %}>{{ esc(client) }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="min-digits" style="font-weight: 600;">Min Digits:</label>
+                <input type="number" id="min-digits" min="1" max="1000" value="{{ min_digits or '' }}" placeholder="Any"
+                       style="padding: 6px 10px; border-radius: 4px; border: 1px solid #ddd; width: 80px;">
+            </div>
+            <div>
+                <label for="max-digits" style="font-weight: 600;">Max Digits:</label>
+                <input type="number" id="max-digits" min="1" max="1000" value="{{ max_digits or '' }}" placeholder="Any"
+                       style="padding: 6px 10px; border-radius: 4px; border: 1px solid #ddd; width: 80px;">
+            </div>
+            <button onclick="applyFilters()" class="btn btn-primary">Apply Filters</button>
+            {% if client_id or min_digits or max_digits %}
+            <a href="/api/v1/dashboard/factors" class="btn btn-secondary">Clear Filters</a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="stats-grid" style="margin-bottom: 20px;">
+    <div class="stat-card">
+        <div class="stat-number">{{ total }}</div>
+        <div class="stat-label">Factors Found</div>
+    </div>
+</div>
+
+<div class="section">
+    <div class="section-header">
+        All Discovered Factors
+        {% if client_id %}<span style="font-weight: normal; color: #666;"> - Found by: {{ esc(client_id) }}</span>{% endif %}
+        {% if min_digits or max_digits %}
+        <span style="font-weight: normal; color: #666;">
+            - Size: {% if min_digits %}{{ min_digits }}{% else %}any{% endif %} to {% if max_digits %}{{ max_digits }}{% else %}any{% endif %} digits
+        </span>
+        {% endif %}
+    </div>
+    <div class="section-content">
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Factor</th>
+                        <th>Bits</th>
+                        <th>Digits</th>
+                        <th>Composite</th>
+                        <th>Found By</th>
+                        <th>Method</th>
+                        <th>Sigma</th>
+                        <th>Group Order</th>
+                        <th>Discovered</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for factor in factors %}
+                    {% set comp = db.query(Composite).filter(Composite.id == factor.composite_id).first() %}
+                    {% set attempt = db.query(ECMAttempt).filter(ECMAttempt.id == factor.found_by_attempt_id).first() %}
+                    {% set comp_display = (comp.number[:35] + '...') if (comp and comp.number|length > 35) else (comp.number if comp else 'Unknown') %}
+                    {% set method = attempt.method if attempt else 'Unknown' %}
+                    {% set param = attempt.parametrization if attempt and attempt.parametrization is not none else '' %}
+                    {% set client = attempt.client_id if attempt else 'Unknown' %}
+                    {% set factor_digits = factor.factor|length %}
+                    {% set factor_bits = (factor_digits * 3.322)|int if factor_digits > 0 else 0 %}
+                    <tr>
+                        <td class="factor number" style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">
+                            <span title="{{ factor.factor }}">{{ factor.factor }}</span>
+                        </td>
+                        <td>{{ factor_bits }}</td>
+                        <td><strong>{{ factor_digits }}</strong></td>
+                        <td class="number">
+                            {% if comp %}
+                            <a href="/api/v1/dashboard/composites/{{ comp.id }}/details" style="color: inherit; text-decoration: none;">
+                                {{ esc(comp_display) }}
+                            </a>
+                            {% else %}
+                            {{ comp_display }}
+                            {% endif %}
+                        </td>
+                        <td>{{ esc(client) }}</td>
+                        <td>{{ method }}</td>
+                        <td class="number">
+                            {% if factor.sigma is not none and param %}
+                                {{ param }}:{{ factor.sigma }}
+                            {% elif factor.sigma is not none %}
+                                {{ factor.sigma }}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
+                        <td class="number" style="font-size: 0.85em; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">
+                            {% if factor.group_order %}
+                                <span title="{{ factor.group_order_factorization if factor.group_order_factorization else factor.group_order }}">
+                                    {{ (factor.group_order[:25] + '...') if factor.group_order|length > 25 else factor.group_order }}
+                                </span>
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
+                        <td class="small-text">{{ factor.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        {% if total_pages > 1 %}
+        <div style="margin-top: 20px; display: flex; justify-content: center; gap: 10px; align-items: center;">
+            {% if has_prev %}
+            <a href="/api/v1/dashboard/factors?offset={{ offset - limit }}&limit={{ limit }}{% if client_id %}&client_id={{ client_id }}{% endif %}{% if min_digits %}&min_digits={{ min_digits }}{% endif %}{% if max_digits %}&max_digits={{ max_digits }}{% endif %}" class="btn">&laquo; Previous</a>
+            {% endif %}
+            <span>Page {{ page }} of {{ total_pages }}</span>
+            {% if has_next %}
+            <a href="/api/v1/dashboard/factors?offset={{ offset + limit }}&limit={{ limit }}{% if client_id %}&client_id={{ client_id }}{% endif %}{% if min_digits %}&min_digits={{ min_digits }}{% endif %}{% if max_digits %}&max_digits={{ max_digits }}{% endif %}" class="btn">Next &raquo;</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

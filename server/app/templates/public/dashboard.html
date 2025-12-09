@@ -33,10 +33,20 @@
 <h1>ECM Distributed Factorization Dashboard</h1>
 
 <div style="margin-bottom: 20px; padding: 12px; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-    <a href="/api/v1/dashboard/testing-status" class="btn btn-primary" style="margin-right: 10px;">
-        📊 Testing Status by T-Level
-    </a>
-    <span style="color: #666; font-size: 0.9em;">View progress toward t-level milestones and method coverage</span>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+        <a href="/api/v1/dashboard/testing-status" class="btn btn-primary">
+            Testing Status
+        </a>
+        <a href="/api/v1/dashboard/curves" class="btn">
+            All Curves
+        </a>
+        <a href="/api/v1/dashboard/factors" class="btn">
+            All Factors
+        </a>
+        <a href="/api/v1/dashboard/leaderboard" class="btn">
+            Leaderboard
+        </a>
+    </div>
 </div>
 
 <div style="margin-bottom: 20px; padding: 15px; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
@@ -80,7 +90,10 @@
 </div>
 
 <div class="section">
-    <div class="section-header">Recent Factorization Attempts (Aggregated by Composite)</div>
+    <div class="section-header">
+        Recent Factorization Attempts (Aggregated by Composite)
+        <a href="/api/v1/dashboard/curves" style="float: right; font-size: 0.85em; font-weight: normal;">View All Curves &rarr;</a>
+    </div>
     <div class="section-content">
         <p style="margin-bottom: 15px; color: #666; font-style: italic;">
             Click any row to expand and see individual curve batches
@@ -180,7 +193,10 @@
 </div>
 
 <div class="section">
-    <div class="section-header">All Factors Found</div>
+    <div class="section-header">
+        Recent Factors Found
+        <a href="/api/v1/dashboard/factors" style="float: right; font-size: 0.85em; font-weight: normal;">View All {{ total_factors }} Factors &rarr;</a>
+    </div>
     <div class="section-content">
         <div class="table-wrapper">
             <table>

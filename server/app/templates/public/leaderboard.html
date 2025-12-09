@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+
+{% block title %}Leaderboard - ECM Dashboard{% endblock %}
+
+{% block extra_head %}
+<style>
+    .leaderboard-table th:first-child,
+    .leaderboard-table td:first-child {
+        width: 50px;
+        text-align: center;
+        font-weight: bold;
+    }
+    .rank-1 { color: #FFD700; font-size: 1.3em; }
+    .rank-2 { color: #C0C0C0; font-size: 1.2em; }
+    .rank-3 { color: #CD7F32; font-size: 1.1em; }
+    .activity-bar {
+        height: 100px;
+        display: flex;
+        align-items: flex-end;
+        gap: 4px;
+        padding: 10px 0;
+    }
+    .activity-bar .bar {
+        flex: 1;
+        background: #3498db;
+        min-width: 20px;
+        border-radius: 4px 4px 0 0;
+        position: relative;
+    }
+    .activity-bar .bar:hover {
+        opacity: 0.8;
+    }
+    .activity-bar .bar .tooltip {
+        display: none;
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #333;
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 0.75em;
+        white-space: nowrap;
+    }
+    .activity-bar .bar:hover .tooltip {
+        display: block;
+    }
+</style>
+{% endblock %}
+
+{% block body %}
+<h1>Contributor Leaderboard</h1>
+
+<div style="margin-bottom: 20px; padding: 12px; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+    <a href="/api/v1/dashboard/" class="btn btn-secondary" style="margin-right: 10px;">
+        &larr; Back to Dashboard
+    </a>
+    <a href="/api/v1/dashboard/curves" class="btn" style="margin-right: 10px;">
+        View Curves
+    </a>
+    <a href="/api/v1/dashboard/factors" class="btn">
+        View Factors
+    </a>
+</div>
+
+<div class="section" style="margin-bottom: 20px;">
+    <div class="section-header">Time Period</div>
+    <div class="section-content">
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <a href="/api/v1/dashboard/leaderboard?days=7" class="btn {% if days == 7 %}btn-primary{% else %}btn-secondary{% endif %}">Last 7 Days</a>
+            <a href="/api/v1/dashboard/leaderboard?days=30" class="btn {% if days == 30 %}btn-primary{% else %}btn-secondary{% endif %}">Last 30 Days</a>
+            <a href="/api/v1/dashboard/leaderboard?days=90" class="btn {% if days == 90 %}btn-primary{% else %}btn-secondary{% endif %}">Last 90 Days</a>
+            <a href="/api/v1/dashboard/leaderboard?days=365" class="btn {% if days == 365 %}btn-primary{% else %}btn-secondary{% endif %}">Last Year</a>
+        </div>
+    </div>
+</div>
+
+<div class="stats-grid" style="margin-bottom: 30px;">
+    <div class="stat-card">
+        <div class="stat-number">{{ "{:,}".format(total_curves_period|int) }}</div>
+        <div class="stat-label">Total Curves ({{ days }} days)</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ total_factors_period }}</div>
+        <div class="stat-label">Factors Found ({{ days }} days)</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ active_clients }}</div>
+        <div class="stat-label">Active Contributors</div>
+    </div>
+</div>
+
+<!-- Activity Chart -->
+<div class="section" style="margin-bottom: 30px;">
+    <div class="section-header">Daily Activity (Last 14 Days)</div>
+    <div class="section-content">
+        <div style="display: flex; gap: 20px;">
+            <div style="flex: 1;">
+                <h4 style="margin-bottom: 10px; color: #3498db;">Curves Run</h4>
+                {% set max_curves = daily_activity|map(attribute='curves')|max or 1 %}
+                <div class="activity-bar">
+                    {% for day in daily_activity %}
+                    <div class="bar" style="height: {{ (day.curves / max_curves * 100)|int }}%; background: #3498db;">
+                        <div class="tooltip">{{ day.date }}<br/>{{ "{:,}".format(day.curves) }} curves</div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.75em; color: #666;">
+                    <span>{{ daily_activity[0].date if daily_activity else '' }}</span>
+                    <span>{{ daily_activity[-1].date if daily_activity else '' }}</span>
+                </div>
+            </div>
+            <div style="flex: 1;">
+                <h4 style="margin-bottom: 10px; color: #2ecc71;">Factors Found</h4>
+                {% set max_factors = daily_activity|map(attribute='factors')|max or 1 %}
+                <div class="activity-bar">
+                    {% for day in daily_activity %}
+                    <div class="bar" style="height: {{ (day.factors / max_factors * 100)|int if day.factors > 0 else 5 }}%; background: #2ecc71;">
+                        <div class="tooltip">{{ day.date }}<br/>{{ day.factors }} factor{{ 's' if day.factors != 1 else '' }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.75em; color: #666;">
+                    <span>{{ daily_activity[0].date if daily_activity else '' }}</span>
+                    <span>{{ daily_activity[-1].date if daily_activity else '' }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px;">
+    <!-- Top by Curves -->
+    <div class="section">
+        <div class="section-header">Top Contributors by Curves</div>
+        <div class="section-content">
+            {% if top_by_curves %}
+            <div class="table-wrapper">
+                <table class="leaderboard-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Client</th>
+                            <th>Total Curves</th>
+                            <th>Batches</th>
+                            <th>Last Active</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in top_by_curves %}
+                        <tr>
+                            <td>
+                                {% if loop.index == 1 %}
+                                <span class="rank-1">1</span>
+                                {% elif loop.index == 2 %}
+                                <span class="rank-2">2</span>
+                                {% elif loop.index == 3 %}
+                                <span class="rank-3">3</span>
+                                {% else %}
+                                {{ loop.index }}
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="/api/v1/dashboard/curves?client_id={{ row[0] }}" style="color: inherit;">
+                                    {{ esc(row[0]) }}
+                                </a>
+                            </td>
+                            <td><strong>{{ "{:,}".format(row[1]|int) }}</strong></td>
+                            <td>{{ "{:,}".format(row[2]) }}</td>
+                            <td class="small-text">{{ row[3].strftime('%Y-%m-%d %H:%M') if row[3] else 'Unknown' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p style="color: #666;">No curve data for this period.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Top by Factors -->
+    <div class="section">
+        <div class="section-header">Top Contributors by Factors Found</div>
+        <div class="section-content">
+            {% if top_by_factors %}
+            <div class="table-wrapper">
+                <table class="leaderboard-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Client</th>
+                            <th>Factors Found</th>
+                            <th>Last Factor</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in top_by_factors %}
+                        <tr>
+                            <td>
+                                {% if loop.index == 1 %}
+                                <span class="rank-1">1</span>
+                                {% elif loop.index == 2 %}
+                                <span class="rank-2">2</span>
+                                {% elif loop.index == 3 %}
+                                <span class="rank-3">3</span>
+                                {% else %}
+                                {{ loop.index }}
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="/api/v1/dashboard/factors?client_id={{ row[0] }}" style="color: inherit;">
+                                    {{ esc(row[0]) }}
+                                </a>
+                            </td>
+                            <td><strong>{{ row[1] }}</strong></td>
+                            <td class="small-text">{{ row[2].strftime('%Y-%m-%d %H:%M') if row[2] else 'Unknown' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p style="color: #666;">No factors found during this period.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, func, case
+from sqlalchemy import desc, func, case, distinct
 from typing import List, Optional
+from datetime import datetime, timedelta
 
 from ...database import get_db
 from ...dependencies import get_composite_service
@@ -33,8 +34,8 @@ async def dashboard(
     # Get recent attempts (aggregated by composite), filtered by priority
     attempts = get_aggregated_attempts(db, limit=50, priority=priority)
 
-    # Get all factors (no priority filter - show all)
-    factors = db.query(Factor).order_by(desc(Factor.created_at)).all()
+    # Get recent factors (limited for main page)
+    factors = db.query(Factor).order_by(desc(Factor.created_at)).limit(25).all()
 
     # Build summary stats (filtered by priority if specified)
     stats_query = db.query(Composite)
@@ -298,4 +299,230 @@ async def get_composite_details_public(
         "method_breakdown": method_breakdown,
         "db": db,
         "Factor": Factor
+    })
+
+
+@router.get("/curves", response_class=HTMLResponse)
+async def recent_curves(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200, description="Results per page"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    client_id: Optional[str] = Query(None, description="Filter by client ID"),
+    group_by_composite: bool = Query(True, description="Group curves by composite")
+):
+    """
+    Public page showing recent ECM curves with filtering and pagination.
+    """
+    if group_by_composite:
+        # Get aggregated attempts
+        attempts = get_aggregated_attempts(db, limit=limit)
+
+        # Filter by client if specified (filter the individual attempts)
+        if client_id:
+            filtered_attempts = []
+            for agg in attempts:
+                client_attempts = [a for a in agg['attempts'] if a.client_id == client_id]
+                if client_attempts:
+                    # Recalculate aggregates for filtered attempts
+                    total_curves = sum(a.curves_completed or 0 for a in client_attempts)
+                    total_time = sum(a.execution_time_seconds or 0 for a in client_attempts)
+                    filtered_attempts.append({
+                        **agg,
+                        'attempts': client_attempts,
+                        'attempt_count': len(client_attempts),
+                        'total_curves': total_curves,
+                        'total_time': total_time,
+                    })
+            attempts = filtered_attempts
+
+        total = len(attempts)
+    else:
+        # Get individual attempts
+        query = db.query(ECMAttempt).filter(ECMAttempt.superseded_by.is_(None))
+
+        if client_id:
+            query = query.filter(ECMAttempt.client_id == client_id)
+
+        total = query.count()
+        attempts = query.order_by(desc(ECMAttempt.created_at)).offset(offset).limit(limit).all()
+
+    # Get list of active clients for filter dropdown
+    clients_rows: list[tuple[str | None]] = db.query(distinct(ECMAttempt.client_id)).filter(
+        ECMAttempt.client_id.isnot(None)
+    ).order_by(ECMAttempt.client_id).limit(100).all()
+    clients: list[str] = [c[0] for c in clients_rows if c[0]]
+
+    # Pagination metadata
+    page = (offset // limit) + 1 if limit > 0 else 1
+    total_pages = (total + limit - 1) // limit if limit > 0 else 1
+
+    return templates.TemplateResponse("public/recent_curves.html", {
+        "request": request,
+        "attempts": attempts,
+        "group_by_composite": group_by_composite,
+        "total": total,
+        "page": page,
+        "total_pages": total_pages,
+        "limit": limit,
+        "offset": offset,
+        "has_prev": offset > 0,
+        "has_next": offset + limit < total,
+        "client_id": client_id,
+        "clients": clients,
+        "db": db,
+        "Composite": Composite,
+        "Factor": Factor
+    })
+
+
+@router.get("/factors", response_class=HTMLResponse)
+async def recent_factors(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200, description="Results per page"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    client_id: Optional[str] = Query(None, description="Filter by client who found factor"),
+    min_digits: Optional[int] = Query(None, ge=1, description="Minimum factor digits"),
+    max_digits: Optional[int] = Query(None, ge=1, description="Maximum factor digits")
+):
+    """
+    Public page showing discovered factors with filtering and pagination.
+    """
+    # Build query
+    query = db.query(Factor)
+
+    # Filter by client who found the factor (via the attempt)
+    if client_id:
+        query = query.join(ECMAttempt, Factor.found_by_attempt_id == ECMAttempt.id).filter(
+            ECMAttempt.client_id == client_id
+        )
+
+    # Apply digit filters using length of factor string
+    if min_digits:
+        query = query.filter(func.length(Factor.factor) >= min_digits)
+    if max_digits:
+        query = query.filter(func.length(Factor.factor) <= max_digits)
+
+    total = query.count()
+    factors = query.order_by(desc(Factor.created_at)).offset(offset).limit(limit).all()
+
+    # Get list of clients who have found factors for filter dropdown
+    clients_rows: list[tuple[str | None]] = db.query(distinct(ECMAttempt.client_id)).join(
+        Factor, Factor.found_by_attempt_id == ECMAttempt.id
+    ).filter(ECMAttempt.client_id.isnot(None)).order_by(ECMAttempt.client_id).limit(100).all()
+    clients: list[str] = [c[0] for c in clients_rows if c[0]]
+
+    # Pagination metadata
+    page = (offset // limit) + 1 if limit > 0 else 1
+    total_pages = (total + limit - 1) // limit if limit > 0 else 1
+
+    return templates.TemplateResponse("public/recent_factors.html", {
+        "request": request,
+        "factors": factors,
+        "total": total,
+        "page": page,
+        "total_pages": total_pages,
+        "limit": limit,
+        "offset": offset,
+        "has_prev": offset > 0,
+        "has_next": offset + limit < total,
+        "client_id": client_id,
+        "min_digits": min_digits,
+        "max_digits": max_digits,
+        "clients": clients,
+        "db": db,
+        "Composite": Composite,
+        "ECMAttempt": ECMAttempt
+    })
+
+
+@router.get("/leaderboard", response_class=HTMLResponse)
+async def leaderboard(
+    request: Request,
+    db: Session = Depends(get_db),
+    days: int = Query(30, ge=1, le=365, description="Days to look back")
+):
+    """
+    Public leaderboard showing top contributors by curves and factors.
+    """
+    since = datetime.utcnow() - timedelta(days=days)
+
+    # Top contributors by curves
+    top_by_curves = db.query(
+        ECMAttempt.client_id,
+        func.sum(ECMAttempt.curves_completed).label('total_curves'),
+        func.count(ECMAttempt.id).label('attempt_count'),
+        func.max(ECMAttempt.created_at).label('last_active')
+    ).filter(
+        ECMAttempt.created_at >= since,
+        ECMAttempt.client_id.isnot(None),
+        ECMAttempt.superseded_by.is_(None)
+    ).group_by(ECMAttempt.client_id).order_by(
+        desc('total_curves')
+    ).limit(25).all()
+
+    # Top contributors by factors found
+    top_by_factors = db.query(
+        ECMAttempt.client_id,
+        func.count(Factor.id).label('factor_count'),
+        func.max(Factor.created_at).label('last_factor')
+    ).join(
+        Factor, Factor.found_by_attempt_id == ECMAttempt.id
+    ).filter(
+        Factor.created_at >= since,
+        ECMAttempt.client_id.isnot(None)
+    ).group_by(ECMAttempt.client_id).order_by(
+        desc('factor_count')
+    ).limit(25).all()
+
+    # Recent activity stats
+    total_curves_period = db.query(func.sum(ECMAttempt.curves_completed)).filter(
+        ECMAttempt.created_at >= since,
+        ECMAttempt.superseded_by.is_(None)
+    ).scalar() or 0
+
+    total_factors_period = db.query(func.count(Factor.id)).filter(
+        Factor.created_at >= since
+    ).scalar() or 0
+
+    active_clients = db.query(func.count(distinct(ECMAttempt.client_id))).filter(
+        ECMAttempt.created_at >= since,
+        ECMAttempt.superseded_by.is_(None)
+    ).scalar() or 0
+
+    # Activity by day (last 14 days for chart)
+    daily_activity = []
+    for i in range(min(14, days)):
+        day_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=i)
+        day_end = day_start + timedelta(days=1)
+
+        day_curves = db.query(func.sum(ECMAttempt.curves_completed)).filter(
+            ECMAttempt.created_at >= day_start,
+            ECMAttempt.created_at < day_end,
+            ECMAttempt.superseded_by.is_(None)
+        ).scalar() or 0
+
+        day_factors = db.query(func.count(Factor.id)).filter(
+            Factor.created_at >= day_start,
+            Factor.created_at < day_end
+        ).scalar() or 0
+
+        daily_activity.append({
+            'date': day_start.strftime('%Y-%m-%d'),
+            'curves': int(day_curves),
+            'factors': int(day_factors)
+        })
+
+    daily_activity.reverse()  # Oldest first for chart
+
+    return templates.TemplateResponse("public/leaderboard.html", {
+        "request": request,
+        "top_by_curves": top_by_curves,
+        "top_by_factors": top_by_factors,
+        "total_curves_period": total_curves_period,
+        "total_factors_period": total_factors_period,
+        "active_clients": active_clients,
+        "daily_activity": daily_activity,
+        "days": days
     })

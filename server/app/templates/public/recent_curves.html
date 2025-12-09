@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+
+{% block title %}Recent Curves - ECM Dashboard{% endblock %}
+
+{% block extra_head %}
+<script>
+    function toggleExpand(compositeId) {
+        const icon = document.getElementById(`expand-icon-${compositeId}`);
+        const detailRows = document.querySelectorAll(`tr[id^="detail-${compositeId}-"]`);
+        const isExpanded = detailRows[0] && detailRows[0].style.display !== 'none';
+
+        detailRows.forEach(row => {
+            row.style.display = isExpanded ? 'none' : 'table-row';
+        });
+        icon.textContent = isExpanded ? '>' : 'v';
+    }
+
+    function applyFilters() {
+        const clientId = document.getElementById('client-filter').value;
+        const groupBy = document.getElementById('group-filter').checked;
+
+        let url = '/api/v1/dashboard/curves?';
+        if (clientId) url += `client_id=${encodeURIComponent(clientId)}&`;
+        url += `group_by_composite=${groupBy}`;
+
+        window.location.href = url;
+    }
+</script>
+{% endblock %}
+
+{% block body %}
+<h1>Recent ECM Curves</h1>
+
+<div style="margin-bottom: 20px; padding: 12px; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+    <a href="/api/v1/dashboard/" class="btn btn-secondary" style="margin-right: 10px;">
+        &larr; Back to Dashboard
+    </a>
+    <a href="/api/v1/dashboard/factors" class="btn" style="margin-right: 10px;">
+        View Factors
+    </a>
+    <a href="/api/v1/dashboard/leaderboard" class="btn">
+        Leaderboard
+    </a>
+</div>
+
+<div class="section" style="margin-bottom: 20px;">
+    <div class="section-header">Filters</div>
+    <div class="section-content">
+        <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: center;">
+            <div>
+                <label for="client-filter" style="font-weight: 600;">Client:</label>
+                <select id="client-filter" style="padding: 6px 10px; border-radius: 4px; border: 1px solid #ddd;">
+                    <option value="">All Clients</option>
+                    {% for client in clients %}
+                    <option value="{{ client }}" {% if client_id == client %}selected{% endif %}>{{ esc(client) }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label style="font-weight: 600;">
+                    <input type="checkbox" id="group-filter" {% if group_by_composite %}checked{% endif %}>
+                    Group by Composite
+                </label>
+            </div>
+            <button onclick="applyFilters()" class="btn btn-primary">Apply Filters</button>
+            {% if client_id or not group_by_composite %}
+            <a href="/api/v1/dashboard/curves" class="btn btn-secondary">Clear Filters</a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="stats-grid" style="margin-bottom: 20px;">
+    <div class="stat-card">
+        <div class="stat-number">{{ total }}</div>
+        <div class="stat-label">{% if group_by_composite %}Composites{% else %}Curve Batches{% endif %}</div>
+    </div>
+</div>
+
+<div class="section">
+    <div class="section-header">
+        {% if group_by_composite %}Curves Aggregated by Composite{% else %}Individual Curve Batches{% endif %}
+        {% if client_id %}<span style="font-weight: normal; color: #666;"> - Filtered by: {{ esc(client_id) }}</span>{% endif %}
+    </div>
+    <div class="section-content">
+        {% if group_by_composite %}
+        <p style="margin-bottom: 15px; color: #666; font-style: italic;">
+            Click any row to expand and see individual curve batches
+        </p>
+        {% endif %}
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        {% if group_by_composite %}
+                        <th></th>
+                        <th>Composite</th>
+                        <th>Digits</th>
+                        <th>T-Level Progress</th>
+                        <th>Batches</th>
+                        <th>Total Curves</th>
+                        <th>Factors Found</th>
+                        <th>First/Last Attempt</th>
+                        <th>Total Time</th>
+                        {% else %}
+                        <th>Composite</th>
+                        <th>Client</th>
+                        <th>Method</th>
+                        <th>B1/B2</th>
+                        <th>Curves</th>
+                        <th>Factor Found</th>
+                        <th>Time</th>
+                        <th>Date</th>
+                        {% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if group_by_composite %}
+                    {% for agg in attempts %}
+                    {% set comp = agg.composite %}
+                    {% set comp_display = (comp.number[:30] + '...') if comp.number|length > 30 else comp.number %}
+                    {% set t_data = calc_t_progress(comp.current_t_level, comp.target_t_level) %}
+                    {% set comp_digits = comp.current_composite|length if comp.current_composite else 0 %}
+                    <tr class="composite-row" onclick="toggleExpand({{ comp.id }})" style="cursor: pointer; background: #f8f9fa;">
+                        <td style="width: 30px; text-align: center;">
+                            <span id="expand-icon-{{ comp.id }}" style="font-size: 1.2em;">></span>
+                        </td>
+                        <td class="number">
+                            <a href="/api/v1/dashboard/composites/{{ comp.id }}/details" style="color: inherit; text-decoration: none;" onclick="event.stopPropagation();">
+                                <strong>{{ esc(comp_display) }}</strong>
+                            </a>
+                        </td>
+                        <td>{{ comp_digits }}</td>
+                        <td>
+                            {% if t_data and t_data.target_t > 0 %}
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <div class="progress" style="width: 80px;">
+                                    <div class="progress-bar" style="width: {{ [t_data.progress_pct, 100]|min }}%; background-color: {{ t_data.progress_color }}"></div>
+                                </div>
+                                <span class="small-text" style="font-weight: bold; color: {{ t_data.progress_color }}">
+                                    t{{ t_data.current_t|round(1) }}/t{{ t_data.target_t|round(1) }}
+                                </span>
+                            </div>
+                            {% else %}
+                            <span style="color: #999;">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td><strong>{{ agg.attempt_count }}</strong></td>
+                        <td><strong>{{ "{:,}".format(agg.total_curves) }}</strong></td>
+                        <td>
+                            {% if agg.factors %}
+                            <span class="factor" style="font-weight: bold;">{{ agg.factors|length }} factor{{ 's' if agg.factors|length > 1 else '' }}</span>
+                            {% else %}
+                            None
+                            {% endif %}
+                        </td>
+                        <td class="small-text">
+                            {{ agg.earliest_attempt.strftime('%Y-%m-%d %H:%M') }}<br/>
+                            {{ agg.latest_attempt.strftime('%Y-%m-%d %H:%M') }}
+                        </td>
+                        <td>{{ (agg.total_time|round(1)) }}s</td>
+                    </tr>
+                    {% for attempt in agg.attempts %}
+                    <tr id="detail-{{ comp.id }}-{{ attempt.id }}" class="detail-row" style="display: none; background: #fff;">
+                        <td></td>
+                        <td colspan="2" class="small-text" style="padding-left: 30px;">
+                            {{ attempt.method.upper() }} - B1={{ "{:,}".format(attempt.b1) }}{% if attempt.b2 %}, B2={{ "{:,}".format(attempt.b2) }}{% endif %}
+                            <br/><span style="color: #666;">{{ esc(attempt.client_id or 'Unknown') }}</span>
+                        </td>
+                        <td></td>
+                        <td class="small-text">1 batch</td>
+                        <td class="small-text">{{ attempt.curves_completed }} curves</td>
+                        <td>
+                            {% if attempt.factor_found %}
+                            <span class="factor small-text">{{ attempt.factor_found[:20] }}{{ '...' if attempt.factor_found|length > 20 else '' }}</span>
+                            {% else %}
+                            <span class="small-text">None</span>
+                            {% endif %}
+                        </td>
+                        <td class="small-text">{{ attempt.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td class="small-text">{{ (attempt.execution_time_seconds|round(1)) if attempt.execution_time_seconds else 'N/A' }}s</td>
+                    </tr>
+                    {% endfor %}
+                    {% endfor %}
+                    {% else %}
+                    {% for attempt in attempts %}
+                    {% set comp = db.query(Composite).filter(Composite.id == attempt.composite_id).first() %}
+                    {% set comp_display = (comp.number[:25] + '...') if (comp and comp.number|length > 25) else (comp.number if comp else 'Unknown') %}
+                    <tr>
+                        <td class="number">
+                            {% if comp %}
+                            <a href="/api/v1/dashboard/composites/{{ comp.id }}/details" style="color: inherit;">
+                                {{ esc(comp_display) }}
+                            </a>
+                            {% else %}
+                            {{ comp_display }}
+                            {% endif %}
+                        </td>
+                        <td>{{ esc(attempt.client_id or 'Unknown') }}</td>
+                        <td>{{ attempt.method.upper() }}</td>
+                        <td class="small-text">B1={{ "{:,}".format(attempt.b1) }}{% if attempt.b2 %}<br/>B2={{ "{:,}".format(attempt.b2) }}{% endif %}</td>
+                        <td>{{ attempt.curves_completed }}</td>
+                        <td>
+                            {% if attempt.factor_found %}
+                            <span class="factor">{{ attempt.factor_found[:15] }}...</span>
+                            {% else %}
+                            None
+                            {% endif %}
+                        </td>
+                        <td>{{ (attempt.execution_time_seconds|round(1)) if attempt.execution_time_seconds else 'N/A' }}s</td>
+                        <td class="small-text">{{ attempt.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        {% if total_pages > 1 %}
+        <div style="margin-top: 20px; display: flex; justify-content: center; gap: 10px; align-items: center;">
+            {% if has_prev %}
+            <a href="/api/v1/dashboard/curves?offset={{ offset - limit }}&limit={{ limit }}{% if client_id %}&client_id={{ client_id }}{% endif %}&group_by_composite={{ group_by_composite }}" class="btn">&laquo; Previous</a>
+            {% endif %}
+            <span>Page {{ page }} of {{ total_pages }}</span>
+            {% if has_next %}
+            <a href="/api/v1/dashboard/curves?offset={{ offset + limit }}&limit={{ limit }}{% if client_id %}&client_id={{ client_id }}{% endif %}&group_by_composite={{ group_by_composite }}" class="btn">Next &raquo;</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

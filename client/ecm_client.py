@@ -133,8 +133,8 @@ def main():
     # Initialize wrapper
     wrapper = ECMWrapper('client.yaml')
 
-    # Get client ID from config
-    client_id = wrapper.config['client']['username']
+    # Get client ID from wrapper (uses same format as abandon_work: username-cpu_name)
+    client_id = wrapper.client_id
 
     # Determine work count limit
     work_count_limit = args.work_count if hasattr(args, 'work_count') and args.work_count else None

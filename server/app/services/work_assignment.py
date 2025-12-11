@@ -57,13 +57,17 @@ class ECMParameterDecision:
             )
             composite.target_t_level = target_t
 
-        # Calculate current t-level from attempts
+        # Calculate current t-level from attempts (work in this system)
         current_t = self.t_level_calc.get_current_t_level_from_attempts(previous_attempts)
         composite.current_t_level = current_t
 
-        # Get suggestions based on t-level targeting
+        # Use effective_t_level (prior + current) for work assignment decisions
+        # This accounts for work done before the composite was imported
+        effective_t = composite.effective_t_level
+
+        # Get suggestions based on t-level targeting using effective t-level
         suggestion = self.t_level_calc.suggest_next_ecm_parameters(
-            composite.target_t_level, current_t, composite.digit_length
+            composite.target_t_level, effective_t, composite.digit_length
         )
 
         if suggestion['status'] == 'target_reached':
@@ -301,19 +305,30 @@ class WorkAssignmentService:
             try:
                 b1, b2, curves = self.param_engine.get_ecm_parameters_with_t_level(composite, previous_attempts)
 
-                # Log t-level progress
+                # Log t-level progress (using effective_t_level which includes prior work)
                 target_t = composite.target_t_level or 0.0
                 current_t = composite.current_t_level or 0.0
-                logger.info(f"ECM work for composite {composite.id}: "
-                           f"t{current_t:.1f} → t{target_t:.1f} "
-                           f"(B1={b1:,}, {curves} curves)")
+                prior_t = composite.prior_t_level or 0.0
+                effective_t = composite.effective_t_level
+
+                if prior_t > 0:
+                    logger.info(f"ECM work for composite {composite.id}: "
+                               f"t{effective_t:.1f} → t{target_t:.1f} "
+                               f"(prior: t{prior_t:.1f}, verified: t{current_t:.1f}) "
+                               f"(B1={b1:,}, {curves} curves)")
+                else:
+                    logger.info(f"ECM work for composite {composite.id}: "
+                               f"t{current_t:.1f} → t{target_t:.1f} "
+                               f"(B1={b1:,}, {curves} curves)")
 
                 return 'ecm', {
                     'b1': b1,
                     'b2': b2,
                     'curves': curves,
                     'target_t_level': target_t,
-                    'current_t_level': current_t
+                    'current_t_level': current_t,
+                    'prior_t_level': prior_t,
+                    'effective_t_level': effective_t
                 }
             except Exception as e:
                 logger.warning(f"T-level calculation failed for composite {composite.id}: {e}")

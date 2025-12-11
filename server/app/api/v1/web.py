@@ -153,21 +153,21 @@ async def testing_status(
     # Calculate status for each composite
     composite_data = []
     for comp in composites:
-        # Determine status category
-        t = comp.current_t_level if comp.current_t_level is not None else 0
-        if t == 0:
+        # Use effective_t_level (prior + current) for status determination
+        effective_t = comp.effective_t_level
+        if effective_t == 0:
             status = "not_started"
             status_label = "Not Started"
             status_color = "red"
-        elif t < 30:
+        elif effective_t < 30:
             status = "initial"
             status_label = "Initial"
             status_color = "yellow"
-        elif t < 40:
+        elif effective_t < 40:
             status = "standard"
             status_label = "Standard"
             status_color = "orange"
-        elif t < 50:
+        elif effective_t < 50:
             status = "advanced"
             status_label = "Advanced"
             status_color = "blue"
@@ -182,16 +182,17 @@ async def testing_status(
         pm1_count = counts['pm1_count']
         pp1_count = counts['pp1_count']
 
-        # Calculate progress percentage safely
-        current_t = comp.current_t_level if comp.current_t_level is not None else 0
+        # Calculate progress percentage using effective_t_level
         target_t = comp.target_t_level if comp.target_t_level is not None else 0
-        progress_pct = (current_t / target_t * 100) if target_t > 0 else 0
+        progress_pct = (effective_t / target_t * 100) if target_t > 0 else 0
 
         composite_data.append({
             'id': comp.id,
             'digit_length': comp.digit_length,
             'priority': comp.priority,
             'current_t_level': comp.current_t_level,
+            'prior_t_level': comp.prior_t_level,
+            'effective_t_level': effective_t,
             'target_t_level': comp.target_t_level,
             'progress_pct': progress_pct,
             'status': status,

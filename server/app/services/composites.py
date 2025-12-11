@@ -52,7 +52,8 @@ class CompositeService:
         is_prime: Optional[bool] = None,
         is_fully_factored: Optional[bool] = None,
         priority: Optional[int] = None,
-        is_active: Optional[bool] = None
+        is_active: Optional[bool] = None,
+        prior_t_level: Optional[float] = None
     ) -> Tuple[Composite, bool, bool]:
         """
         Get existing composite or create new one with full metadata support.
@@ -70,6 +71,7 @@ class CompositeService:
             is_fully_factored: Whether number is fully factored
             priority: Priority level
             is_active: Whether composite is available for work assignment (defaults to False for new composites)
+            prior_t_level: T-level from work done before import (immutable once set)
 
         Returns:
             Tuple of (Composite, created, updated)
@@ -123,6 +125,15 @@ class CompositeService:
                 existing.is_active = is_active
                 updated = True
 
+            # prior_t_level is only set if currently NULL (immutable once set)
+            if prior_t_level is not None and existing.prior_t_level is None:
+                existing.prior_t_level = prior_t_level
+                updated = True
+                logger.info(
+                    "Set prior_t_level=%.1f for composite %s",
+                    prior_t_level, existing.id
+                )
+
             if updated:
                 db.flush()  # Make changes visible within transaction
                 db.refresh(existing)
@@ -170,7 +181,8 @@ class CompositeService:
             is_prime=is_prime if is_prime is not None else False,
             is_fully_factored=is_fully_factored if is_fully_factored is not None else False,
             priority=priority if priority is not None else 0,
-            is_active=is_active if is_active is not None else False  # Default to inactive for manual review
+            is_active=is_active if is_active is not None else False,  # Default to inactive for manual review
+            prior_t_level=prior_t_level  # T-level from work done before import
         )
 
         db.add(composite)
@@ -642,7 +654,9 @@ class CompositeService:
                         snfs_difficulty=item.get('snfs_difficulty'),
                         is_prime=item.get('is_prime'),
                         is_fully_factored=item.get('is_fully_factored'),
-                        priority=item.get('priority', default_priority)
+                        priority=item.get('priority', default_priority),
+                        is_active=item.get('is_active'),
+                        prior_t_level=item.get('prior_t_level')
                     )
 
                     if created:
@@ -741,6 +755,8 @@ class CompositeService:
                 'snfs_difficulty': composite.snfs_difficulty,
                 'target_t_level': composite.target_t_level,
                 'current_t_level': composite.current_t_level,
+                'prior_t_level': composite.prior_t_level,
+                'effective_t_level': composite.effective_t_level,
                 'priority': composite.priority,
                 'is_prime': composite.is_prime,
                 'is_fully_factored': composite.is_fully_factored,

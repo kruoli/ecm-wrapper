@@ -320,7 +320,10 @@ def main():
         result = wrapper.run_ecm_v2(config)
 
     # Submit results if available
-    if result and not args.no_submit:
+    # Note: T-level mode and two-stage mode handle their own submissions internally,
+    # so we skip post-execution submission for those modes to avoid double submission
+    mode_handles_own_submission = args.tlevel or args.two_stage
+    if result and not args.no_submit and not mode_handles_own_submission:
         results_dict = result.to_dict(args.composite, method)
 
         # Add ECM parameters that aren't in FactorResult

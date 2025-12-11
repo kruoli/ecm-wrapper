@@ -315,8 +315,11 @@
                                     <div class="progress-bar" style="width: {{ [comp.progress_pct, 100]|min }}%; background-color: {{ '#28a745' if comp.progress_pct >= 100 else '#ffc107' if comp.progress_pct >= 50 else '#dc3545' }}"></div>
                                 </div>
                                 <span class="small-text" style="font-weight: bold;">
-                                    t{{ (comp.current_t_level or 0)|round(1) }}/t{{ (comp.target_t_level or 0)|round(1) }}
+                                    t{{ (comp.effective_t_level or 0)|round(1) }}/t{{ (comp.target_t_level or 0)|round(1) }}
                                 </span>
+                                {% if comp.prior_t_level %}
+                                <span class="small-text" style="color: #666;" title="Prior: t{{ comp.prior_t_level|round(1) }} + Verified: t{{ (comp.current_t_level or 0)|round(1) }}">ⓘ</span>
+                                {% endif %}
                             </div>
                         </td>
                         <td data-value="{{ comp.methods_used }}">

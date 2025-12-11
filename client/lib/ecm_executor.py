@@ -470,9 +470,25 @@ class ECMWrapper(BaseWrapper):
 
                 self.logger.info(f"Running {curves} curves at B1={b1} (targeting t{step_target:.1f}, currently at t{current_t_level:.2f})")
 
-                # Run this batch (use multiprocess if workers > 1)
-                if config.threads > 1:
-                    # Multiprocess mode
+                # Run this batch based on execution mode
+                if config.use_two_stage:
+                    # Two-stage mode: GPU stage 1 + CPU stage 2
+                    self.logger.info(f"Using two-stage mode (GPU stage 1 + CPU stage 2) with {config.threads} workers")
+                    step_result = self.run_two_stage_v2(TwoStageConfig(
+                        composite=config.composite,
+                        b1=b1,
+                        b2=None,  # Use default B2 (B1 * 100)
+                        stage1_curves=curves,
+                        stage1_parametrization=3,  # GPU uses twisted Edwards
+                        stage2_parametrization=1,  # CPU uses Montgomery
+                        threads=config.threads,
+                        verbose=config.verbose,
+                        progress_interval=config.progress_interval,
+                        project=config.project,
+                        no_submit=True  # T-level mode handles its own submissions
+                    ))
+                elif config.threads > 1:
+                    # Multiprocess mode (CPU only)
                     self.logger.info(f"Using multiprocess mode with {config.threads} workers")
                     step_result = self.run_multiprocess_v2(MultiprocessConfig(
                         composite=config.composite,
@@ -510,7 +526,10 @@ class ECMWrapper(BaseWrapper):
                 total_curves += step_result.curves_run
 
                 # Track curve history for t-level calculation (format: "curves@b1,p=parametrization")
-                curve_history.append(f"{step_result.curves_run}@{b1},p={config.parametrization}")
+                # Two-stage mode uses GPU (p=3) for stage 1, but the full curve credit is for the combined run
+                # For t-level calculation purposes, two-stage effectively uses p=3 parametrization
+                effective_param = 3 if config.use_two_stage else config.parametrization
+                curve_history.append(f"{step_result.curves_run}@{b1},p={effective_param}")
 
                 # Submit this batch's results if enabled
                 if not config.no_submit and step_result.curves_run > 0:
@@ -523,7 +542,8 @@ class ECMWrapper(BaseWrapper):
                         'composite': config.composite,
                         'method': 'ecm',
                         'b1': b1,
-                        'b2': None  # T-level mode uses default B2
+                        'b2': None,  # T-level mode uses default B2
+                        'parametrization': effective_param
                     }
                     if config.work_id:
                         step_results['work_id'] = config.work_id

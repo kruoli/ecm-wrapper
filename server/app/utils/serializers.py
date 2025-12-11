@@ -31,6 +31,8 @@ def serialize_composite(composite, include_full_number: bool = False) -> Dict[st
         "is_prime": composite.is_prime,
         "is_fully_factored": composite.is_fully_factored,
         "current_t_level": composite.current_t_level,
+        "prior_t_level": composite.prior_t_level,
+        "effective_t_level": composite.effective_t_level,
         "target_t_level": composite.target_t_level,
         "has_snfs_form": composite.has_snfs_form,
         "snfs_difficulty": composite.snfs_difficulty,

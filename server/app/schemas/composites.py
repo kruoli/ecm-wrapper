@@ -27,7 +27,13 @@ class CompositeStats(BaseModel):
     )
     target_t_level: Optional[float] = Field(..., description="Target t-level")
     current_t_level: Optional[float] = Field(
-        ..., description="Current t-level achieved"
+        ..., description="Current t-level achieved in this system"
+    )
+    prior_t_level: Optional[float] = Field(
+        None, description="T-level from work done before import (immutable)"
+    )
+    effective_t_level: float = Field(
+        ..., description="Combined t-level (prior + current)"
     )
     priority: int = Field(..., description="Priority level")
     is_active: bool = Field(..., description="Whether composite is available for work assignment")
@@ -51,6 +57,8 @@ class CompositeResponse(BaseModel):
     snfs_difficulty: Optional[int]
     target_t_level: Optional[float]
     current_t_level: Optional[float]
+    prior_t_level: Optional[float]
+    effective_t_level: float
     priority: int
     is_prime: Optional[bool]
     is_fully_factored: bool
@@ -82,6 +90,9 @@ class CompositeInput(BaseModel):
     )
     is_active: bool = Field(
         False, description="Whether composite is available for work assignment (defaults to False for manual review)"
+    )
+    prior_t_level: Optional[float] = Field(
+        None, description="T-level from work done before import (e.g., from factordb or previous campaigns)"
     )
 
 class BulkCompositeRequest(BaseModel):
@@ -126,7 +137,9 @@ class CompositeBatchStatus(BaseModel):
     """Schema for individual composite status in batch response"""
     number: str = Field(..., description="The composite number")
     target_t_level: Optional[float] = Field(None, description="Target t-level")
-    current_t_level: Optional[float] = Field(None, description="Current t-level achieved")
+    current_t_level: Optional[float] = Field(None, description="Current t-level achieved in this system")
+    prior_t_level: Optional[float] = Field(None, description="T-level from work done before import")
+    effective_t_level: Optional[float] = Field(None, description="Combined t-level (prior + current)")
     digit_length: Optional[int] = Field(None, description="Decimal digit length")
     has_snfs_form: Optional[bool] = Field(None, description="Whether number has SNFS form")
     snfs_difficulty: Optional[int] = Field(None, description="GNFS-equivalent digit count for SNFS")
@@ -147,9 +160,11 @@ class CompositeProgressItem(BaseModel):
         None, description="GNFS-equivalent digit count for SNFS"
     )
     target_t_level: Optional[float] = Field(None, description="Target t-level")
-    current_t_level: Optional[float] = Field(None, description="Current t-level achieved")
+    current_t_level: Optional[float] = Field(None, description="Current t-level achieved in this system")
+    prior_t_level: Optional[float] = Field(None, description="T-level from work done before import")
+    effective_t_level: float = Field(..., description="Combined t-level (prior + current)")
     completion_pct: float = Field(
-        ..., description="ECM completion percentage (current / target * 100)"
+        ..., description="ECM completion percentage (effective / target * 100)"
     )
     priority: int = Field(..., description="Priority level")
     is_fully_factored: bool = Field(..., description="Whether fully factored")

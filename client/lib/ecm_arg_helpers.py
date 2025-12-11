@@ -58,12 +58,14 @@ def resolve_param(args: argparse.Namespace, use_gpu: bool) -> int:
     return 3 if use_gpu else 1
 
 
-def resolve_stage2_workers(args: argparse.Namespace, config: Dict[str, Any]) -> int:
+def resolve_workers(args: argparse.Namespace, config: Dict[str, Any]) -> int:
     """
-    Resolve stage2 worker count from arguments with config default.
+    Resolve worker count from arguments with config default.
+
+    Used for both multiprocess workers and stage2 threads.
 
     Priority:
-    1. Command-line argument (if not default value of 4)
+    1. Command-line --workers argument (if set and > 0)
     2. Config file setting
     3. Fallback to 4
 
@@ -72,24 +74,32 @@ def resolve_stage2_workers(args: argparse.Namespace, config: Dict[str, Any]) -> 
         config: Configuration dictionary
 
     Returns:
-        Number of stage2 workers to use
+        Number of workers to use
     """
-    # Check if explicitly set via command line (not the default 4)
-    if hasattr(args, 'stage2_workers') and args.stage2_workers != 4:
-        return args.stage2_workers
+    # Check if explicitly set via command line
+    if hasattr(args, 'workers') and args.workers and args.workers > 0:
+        return args.workers
 
     # Otherwise use config default
-    return get_stage2_workers_default(config)
+    return get_workers_default(config)
 
 
-def get_stage2_workers_default(config: Dict[str, Any]) -> int:
+# Backward compatibility alias
+resolve_stage2_workers = resolve_workers
+
+
+def get_workers_default(config: Dict[str, Any]) -> int:
     """
-    Get default stage2 worker count from config.
+    Get default worker count from config.
 
     Args:
         config: Configuration dictionary
 
     Returns:
-        Default number of stage2 workers (from config or 4)
+        Default number of workers (from config or 4)
     """
-    return config.get('execution', {}).get('stage2_workers', 4)
+    return config.get('execution', {}).get('workers', 4)
+
+
+# Backward compatibility alias
+get_stage2_workers_default = get_workers_default

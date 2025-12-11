@@ -192,8 +192,8 @@ Examples:
   # Factor a composite number
   python3 cado_wrapper.py --composite 1191913975959397481605242916777
 
-  # Use specific number of threads
-  python3 cado_wrapper.py --composite 1191913975959397481605242916777 --threads 8
+  # Use specific number of workers
+  python3 cado_wrapper.py --composite 1191913975959397481605242916777 --workers 8
 
   # Show CADO-NFS output in real-time
   python3 cado_wrapper.py --composite 1191913975959397481605242916777 -v
@@ -205,8 +205,8 @@ Examples:
 
     parser.add_argument('--composite', type=str, required=True,
                        help='Composite number to factor')
-    parser.add_argument('--threads', type=int,
-                       help='Number of threads (default: from config)')
+    parser.add_argument('--workers', type=int,
+                       help='Number of parallel workers (default: from config)')
     parser.add_argument('--config', type=str, default='client.yaml',
                        help='Configuration file path (default: client.yaml)')
     parser.add_argument('--project', type=str,
@@ -223,7 +223,7 @@ Examples:
     # Run CADO-NFS
     results = wrapper.run_cado_nfs(
         composite=args.composite,
-        threads=args.threads,
+        threads=args.workers,
         verbose=args.verbose
     )
 

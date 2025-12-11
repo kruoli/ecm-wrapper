@@ -20,7 +20,7 @@ from typing import Optional
 
 from lib.ecm_executor import ECMWrapper
 from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig
-from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_stage2_workers_default, parse_int_with_scientific
+from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_workers_default, parse_int_with_scientific
 from lib.stage1_helpers import submit_stage1_complete_workflow
 from lib.results_builder import results_for_stage1
 from lib.user_output import UserOutput
@@ -47,8 +47,8 @@ def main():
     # Resolve GPU settings from args + config (uses existing helper)
     use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(args, wrapper.config)
 
-    # Get stage2 workers default from config
-    stage2_workers = args.stage2_workers if args.stage2_workers else get_stage2_workers_default(wrapper.config)
+    # Get workers default from config
+    workers = args.workers if args.workers else get_workers_default(wrapper.config)
 
     # Resolve B1 from args or config based on method
     # This provides a sensible default when --b1 is not specified
@@ -88,7 +88,7 @@ def main():
             "Residue": args.stage2_only,
             "Composite": args.composite,
             "B2": args.b2,
-            "Threads": stage2_workers
+            "Workers": workers
         })
 
         # Parse residue file for B1
@@ -103,7 +103,7 @@ def main():
             residue_file=residue_path,
             b1=b1,
             b2=args.b2,
-            workers=stage2_workers,
+            workers=workers,
             verbose=args.verbose or False
         )
 
@@ -123,7 +123,10 @@ def main():
             sys.exit(1)
 
         import time
-        save_path = args.save_residues or f"data/residues/residue_{hash(args.composite) % 100000}_{int(time.time())}.txt"
+        from pathlib import Path
+        residue_dir = Path("data/residues")
+        residue_dir.mkdir(parents=True, exist_ok=True)
+        save_path = args.save_residues or str(residue_dir / f"residue_{hash(args.composite) % 100000}_{int(time.time())}.txt")
 
         output.mode_header("Stage 1 Only Mode", {
             "Save to": save_path,
@@ -274,7 +277,7 @@ def main():
             stage2_device="CPU",
             stage1_parametrization=args.param or 3,
             stage2_parametrization=1,
-            threads=stage2_workers,
+            threads=workers,
             verbose=args.verbose or False,
             save_residues=args.save_residues,
             gpu_device=gpu_device,

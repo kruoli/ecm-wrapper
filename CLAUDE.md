@@ -43,7 +43,7 @@ python3 client/ecm_client.py --min-digits 60 --max-digits 80       # Filter by s
 
 # Decoupled two-stage mode - separate GPU and CPU workers
 python3 client/ecm_client.py --stage1-only --b1 110000000 --curves 3000 --gpu  # GPU producer
-python3 client/ecm_client.py --stage2-work --b2 11000000000000 --stage2-workers 8  # CPU consumer
+python3 client/ecm_client.py --stage2-only --b2 11000000000000 --workers 8  # CPU consumer
 
 # Run batch processing scripts
 cd client/scripts/
@@ -186,7 +186,7 @@ GPU and CPU workers can now run stage 1 and stage 2 **independently** for maximu
 - **Automatic supersession**: Stage 2 completion supersedes Stage 1 attempt for accurate t-level accounting
 
 **Implementation:**
-- **Client flags**: `--stage1-only` and `--stage2-work` (both require `--auto-work`)
+- **Client flags**: `--stage1-only` and `--stage2-only`
 - **Server endpoints** (`server/app/api/v1/residues.py`):
   - `POST /residues/upload` - Upload stage 1 residue file
   - `GET /residues/work` - Request stage 2 work
@@ -219,14 +219,14 @@ python3 ecm_client.py --stage1-only \
   --b1 110000000 --curves 3000 --gpu
 
 # CPU worker: Process stage 2 from residue pool
-python3 ecm_client.py --stage2-work \
-  --b2 11000000000000 --stage2-workers 8
+python3 ecm_client.py --stage2-only \
+  --b2 11000000000000 --workers 8
 
 # With work limits and filtering
 python3 ecm_client.py --stage1-only \
   --b1 26e7 --curves 1000 --work-count 10 --min-digits 70
 
-python3 ecm_client.py --stage2-work \
+python3 ecm_client.py --stage2-only \
   --b2 4e11 --max-digits 90 --priority 5
 ```
 

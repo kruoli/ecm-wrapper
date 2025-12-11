@@ -95,12 +95,10 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     # Advanced modes
     parser.add_argument('--two-stage', action='store_true',
                        help='Use two-stage mode: GPU stage 1 + multi-threaded CPU stage 2')
-    parser.add_argument('--stage2-workers', type=int, default=4,
-                       help='Number of CPU workers for stage 2 (default: 4)')
     parser.add_argument('--multiprocess', action='store_true',
                        help='Use multi-process mode: parallel full ECM cycles (CPU-optimized)')
     parser.add_argument('--workers', type=int, default=0,
-                       help='Number of worker processes (default: CPU count)')
+                       help='Number of parallel workers (processes for multiprocess, threads for stage2; default: CPU count)')
 
     # Residue file handling
     parser.add_argument('--save-residues', type=str, help='Save stage 1 residues with specified filename in configured residue_dir')
@@ -305,19 +303,25 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
     return errors
 
 
-def get_stage2_workers_default(config: Dict[str, Any]) -> int:
+def get_workers_default(config: Dict[str, Any]) -> int:
     """
-    Get default stage2_workers value from config.
+    Get default workers value from config.
+
+    Used for both multiprocess workers and stage2 threads.
 
     Args:
         config: Configuration dictionary
 
     Returns:
-        Default number of stage2 workers
+        Default number of workers
     """
     if config and 'programs' in config and 'gmp_ecm' in config['programs']:
-        return config['programs']['gmp_ecm'].get('stage2_workers', 4)
+        return config['programs']['gmp_ecm'].get('workers', 4)
     return 4
+
+
+# Backward compatibility alias
+get_stage2_workers_default = get_workers_default
 
 
 def get_method_defaults(config: Dict[str, Any], method: str) -> tuple[int, Optional[int]]:

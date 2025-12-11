@@ -93,7 +93,7 @@ python3 ecm_client.py --b1 50000 --b2 5000000 --curves 100
 python3 ecm_client.py --stage1-only --b1 110000000 --curves 3000
 
 # CPU stage 2 only (download residues from server)
-python3 ecm_client.py --stage2-only --b2 11000000000000 --stage2-workers 8
+python3 ecm_client.py --stage2-only --b2 11000000000000 --workers 8
 ```
 
 ### `ecm_wrapper.py` - Local/Manual ECM Factorization
@@ -288,19 +288,19 @@ pytest tests/test_api_client.py -v        # Test API client
 # Stage 1 on GPU, Stage 2 on 8 CPU cores
 python3 ecm_wrapper.py --composite "123...456" \
   --two-stage --curves 10000 --b1 50000 --b2 12500000 \
-  --stage2-workers 8 --gpu-device 0
+  --workers 8 --gpu-device 0
 
 # Using scientific notation for large bounds
 python3 ecm_wrapper.py --composite "123...456" \
   --two-stage --curves 10000 --b1 26e7 --b2 4e11 \
-  --stage2-workers 8 --gpu-device 0
+  --workers 8 --gpu-device 0
 ```
 
 ### Resume from Residue File
 ```bash
 # Run Stage 2 only on existing residues
 python3 ecm_wrapper.py --stage2-only residue_file.txt \
-  --b1 50000 --b2 12500000 --stage2-workers 8
+  --b1 50000 --b2 12500000 --workers 8
 ```
 
 ### Multiprocess ECM

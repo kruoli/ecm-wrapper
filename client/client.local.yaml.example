@@ -29,7 +29,7 @@ programs:
     path: /home/user/ecm-master/ecm  # Full path to your ECM binary
     gpu_enabled: true
     gpu_device: 0
-    stage2_workers: 16  # Adjust based on your CPU cores
+    workers: 16  # Adjust based on your CPU cores
 
   yafu:
     path: /home/user/yafu/yafu  # Full path to your YAFU binary

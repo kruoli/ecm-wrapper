@@ -9,6 +9,7 @@ Design note: multiprocessing requires pickleable functions, so we provide both:
 - A class-based implementation (testable, maintainable)
 - A thin global function wrapper (for multiprocessing compatibility)
 """
+import signal
 from typing import Optional, Dict, Any
 from .parsing_utils import parse_ecm_output, ECMPatterns
 from .subprocess_utils import execute_subprocess
@@ -190,8 +191,27 @@ def run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optional
 
     This thin wrapper allows ECMWorkerProcess to be used with multiprocessing
     by providing a pickleable top-level function.
+
+    Workers ignore SIGINT - they only respond to stop_event from the parent process.
+    This prevents ugly tracebacks when the user presses Ctrl+C.
     """
-    worker = ECMWorkerProcess(worker_id, composite, b1, b2, curves, verbose, method, ecm_path,
-                            progress_interval, progress_queue)
-    result = worker.execute(stop_event)
-    result_queue.put(result)
+    # Ignore SIGINT in worker processes - parent handles it via stop_event
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    try:
+        worker = ECMWorkerProcess(worker_id, composite, b1, b2, curves, verbose, method, ecm_path,
+                                progress_interval, progress_queue)
+        result = worker.execute(stop_event)
+        result_queue.put(result)
+    except Exception as e:
+        # If anything goes wrong, try to report it
+        try:
+            result_queue.put({
+                'worker_id': worker_id,
+                'factor_found': None,
+                'sigma_found': None,
+                'curves_completed': 0,
+                'raw_output': f"Worker {worker_id} error: {e}"
+            })
+        except Exception:
+            pass  # Queue may be broken during shutdown

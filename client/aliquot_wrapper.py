@@ -870,10 +870,10 @@ Examples:
   python3 aliquot_wrapper.py --start 276 --resume-iteration 2157 --resume-composite 175258998...
 
   # Use 8 threads/workers for parallel execution
-  python3 aliquot_wrapper.py --start 276 --threads 8 --quiet-factors
+  python3 aliquot_wrapper.py --start 276 --workers 8 --quiet-factors
 
   # Verbose mode (show detailed output from ECM and CADO-NFS)
-  python3 aliquot_wrapper.py --start 276 -v --threads 8
+  python3 aliquot_wrapper.py --start 276 -v --workers 8
 
 Common test sequences:
   276 → 396 → 696 → 1104 → 1872 → 3770 → ... (terminates at 1)
@@ -910,8 +910,8 @@ Common test sequences:
                        help='Resume from specific iteration with composite given via --resume-composite')
     parser.add_argument('--resume-composite', type=str,
                        help='Composite number to resume from (use with --resume-iteration)')
-    parser.add_argument('--threads', type=int,
-                       help='Number of threads/workers for parallel execution (ECM: multiprocess workers, YAFU/CADO: threads)')
+    parser.add_argument('--workers', type=int,
+                       help='Number of parallel workers (ECM: multiprocess workers, YAFU/CADO: threads)')
     parser.add_argument('-v', '--verbose', action='store_true',
                        help='Enable verbose output from factorization programs (ECM, CADO-NFS)')
 
@@ -920,7 +920,7 @@ Common test sequences:
     # Initialize wrapper with selected factorizer
     wrapper = AliquotWrapper(args.config, factorizer=args.factorizer, hybrid_threshold=args.hybrid_threshold,
                             siqs_threshold=args.siqs_threshold, ecm_program=args.ecm_program,
-                            threads=args.threads, verbose=args.verbose)
+                            threads=args.workers, verbose=args.verbose)
 
     # Override factor logging config if requested
     if args.quiet_factors:

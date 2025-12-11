@@ -36,7 +36,7 @@ Examples:
   python3 ecm_client.py --stage1-only --b1 110000000 --curves 3000
 
   # Stage 2 only - download and process residues
-  python3 ecm_client.py --stage2-only --b2 11000000000000 --stage2-workers 8
+  python3 ecm_client.py --stage2-only --b2 11000000000000 --workers 8
 """
     )
 
@@ -70,7 +70,7 @@ Examples:
     parser.add_argument('--multiprocess', action='store_true',
                        help='Use multiprocess parallelization')
     parser.add_argument('--workers', type=int,
-                       help='Number of worker processes (default: CPU count)')
+                       help='Number of parallel workers (processes for multiprocess, threads for stage2)')
     parser.add_argument('--two-stage', action='store_true',
                        help='Use two-stage GPU+CPU mode')
 
@@ -80,10 +80,6 @@ Examples:
                             help='Stage 1 only: upload residue to server')
     stage_group.add_argument('--stage2-only', action='store_true',
                             help='Stage 2 only: download residue from server')
-
-    # Stage 2 specific
-    parser.add_argument('--stage2-workers', type=int,
-                       help='Number of worker threads for stage 2')
 
     # GPU/compute
     parser.add_argument('--gpu', action='store_true',

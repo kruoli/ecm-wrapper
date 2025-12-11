@@ -10,6 +10,7 @@ This service provides comprehensive composite management including:
 """
 
 import logging
+from datetime import datetime
 from typing import Optional, Tuple, Dict, Any, List, Union, cast
 
 from sqlalchemy.orm import Session
@@ -918,8 +919,12 @@ class CompositeService:
             factors_by_attempt = {f.found_by_attempt_id: f for f in factors_query}
 
         for method in ['ecm', 'pm1', 'pp1']:
-            # Use ALL attempts for display
-            method_all_attempts = [a for a in all_attempts if a.method == method]
+            # Use ALL attempts for display, sorted by date descending (most recent first)
+            method_all_attempts = sorted(
+                [a for a in all_attempts if a.method == method],
+                key=lambda a: a.created_at or datetime.min,
+                reverse=True
+            )
             # Use active attempts for statistics
             method_active_attempts = [a for a in active_attempts if a.method == method]
 

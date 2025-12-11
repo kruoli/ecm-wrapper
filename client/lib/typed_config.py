@@ -86,7 +86,7 @@ class GMPECMConfig:
     gpu_enabled: bool = False
     gpu_device: int = 0
     gpu_curves: Optional[int] = None
-    stage2_workers: int = 8
+    workers: int = 8  # Parallel workers (multiprocess ECM, stage2 threads)
     pm1_b1: int = 2900000000
     pm1_b2: int = 1000000000000000
     pp1_b1: int = 110000000
@@ -188,7 +188,7 @@ class AppConfig:
                     'gpu_enabled': self.programs.gmp_ecm.gpu_enabled,
                     'gpu_device': self.programs.gmp_ecm.gpu_device,
                     'gpu_curves': self.programs.gmp_ecm.gpu_curves,
-                    'stage2_workers': self.programs.gmp_ecm.stage2_workers,
+                    'workers': self.programs.gmp_ecm.workers,
                     'pm1_b1': self.programs.gmp_ecm.pm1_b1,
                     'pm1_b2': self.programs.gmp_ecm.pm1_b2,
                     'pp1_b1': self.programs.gmp_ecm.pp1_b1,
@@ -313,7 +313,7 @@ class TypedConfigLoader:
             gpu_enabled=raw.get('gpu_enabled', False),
             gpu_device=raw.get('gpu_device', 0),
             gpu_curves=raw.get('gpu_curves'),
-            stage2_workers=raw.get('stage2_workers', 8),
+            workers=raw.get('workers', raw.get('stage2_workers', 8)),  # Backward compat
             pm1_b1=raw.get('pm1_b1', 2900000000),
             pm1_b2=raw.get('pm1_b2', 1000000000000000),
             pp1_b1=raw.get('pp1_b1', 110000000),

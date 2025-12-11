@@ -337,13 +337,32 @@ class ECMWrapper(BaseWrapper):
         except KeyboardInterrupt:
             self.logger.info("Multiprocess ECM interrupted by user")
             self.interrupted = True
-            stop_event.set()  # Signal workers to stop
+            try:
+                stop_event.set()  # Signal workers to stop
+            except Exception:
+                pass  # Manager connection may be broken
 
         # Wait for all processes to finish
         for p in processes:
-            p.join(timeout=5)
+            try:
+                p.join(timeout=2)
+            except Exception:
+                pass
             if p.is_alive():
                 p.terminate()
+                try:
+                    p.join(timeout=1)
+                except Exception:
+                    pass
+
+        # Shutdown the manager
+        try:
+            manager.shutdown()
+        except Exception:
+            pass
+
+        if self.interrupted:
+            print(f"\nMultiprocess ECM stopped. Completed {total_curves_completed} curves before interrupt.")
 
         # Build FactorResult with recursive factoring of any composite factors
         result = FactorResult()

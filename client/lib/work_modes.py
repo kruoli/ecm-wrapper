@@ -16,10 +16,11 @@ The base class provides the work loop template that all modes share.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import Any, Optional, Dict, TYPE_CHECKING
 import argparse
+import signal
 import time
 
 from .ecm_config import (
@@ -30,8 +31,8 @@ from .stage1_helpers import submit_stage1_complete_workflow
 from .error_helpers import check_work_limit_reached
 from .cleanup_helpers import handle_shutdown
 from .results_builder import results_for_stage1
-from .arg_parser import resolve_gpu_settings, resolve_worker_count, get_stage2_workers_default
-from .ecm_arg_helpers import parse_sigma_arg, resolve_param, resolve_stage2_workers
+from .arg_parser import resolve_gpu_settings, resolve_worker_count, get_workers_default
+from .ecm_arg_helpers import parse_sigma_arg, resolve_param, resolve_workers
 
 if TYPE_CHECKING:
     from .ecm_executor import ECMWrapper
@@ -53,6 +54,7 @@ class WorkLoopContext:
     client_id: str
     args: argparse.Namespace
     work_count_limit: Optional[int] = None
+    finish_after_current: bool = field(default=False, init=False)
 
     def __post_init__(self):
         """Ensure API clients are initialized."""
@@ -94,6 +96,10 @@ class WorkMode(ABC):
         self.current_residue_id: Optional[int] = None
         self.completed_count: int = 0
         self.consecutive_failures: int = 0
+
+        # Graceful shutdown state
+        self._first_interrupt_received: bool = False
+        self._original_sigint_handler: Any = None
 
     @abstractmethod
     def request_work(self) -> Optional[Dict[str, Any]]:
@@ -185,6 +191,35 @@ class WorkMode(ABC):
         self.completed_count += 1
         self.consecutive_failures = 0
 
+    def _setup_signal_handler(self) -> None:
+        """
+        Install signal handler for graceful shutdown.
+
+        First Ctrl+C: Set finish_after_current flag (complete current work, then exit)
+        Second Ctrl+C: Raise KeyboardInterrupt for immediate abort
+        """
+        def handler(signum, frame):
+            if not self._first_interrupt_received:
+                # First interrupt: graceful shutdown
+                self._first_interrupt_received = True
+                self.ctx.finish_after_current = True
+                print("\n")
+                print("=" * 60)
+                print("Finishing current work unit, then exiting...")
+                print("Press Ctrl+C again to abort immediately")
+                print("=" * 60)
+            else:
+                # Second interrupt: immediate abort
+                raise KeyboardInterrupt()
+
+        self._original_sigint_handler = signal.signal(signal.SIGINT, handler)
+
+    def _restore_signal_handler(self) -> None:
+        """Restore original signal handler."""
+        if self._original_sigint_handler is not None:
+            signal.signal(signal.SIGINT, self._original_sigint_handler)
+            self._original_sigint_handler = None
+
     def should_continue(self) -> bool:
         """
         Check if work loop should continue.
@@ -192,7 +227,11 @@ class WorkMode(ABC):
         Returns:
             True to continue, False to exit loop
         """
-        # Check for interruption
+        # Check for graceful shutdown request (first Ctrl+C)
+        if self.ctx.finish_after_current:
+            return False
+
+        # Check for hard interruption
         if self.wrapper.interrupted:
             return False
 
@@ -213,6 +252,7 @@ class WorkMode(ABC):
             Number of work assignments completed
         """
         self._print_startup_banner()
+        self._setup_signal_handler()
 
         try:
             while self.should_continue():
@@ -228,7 +268,7 @@ class WorkMode(ABC):
                     # Execute factorization
                     result = self.execute_work(work)
 
-                    # Check for interruption during execution
+                    # Check for hard interruption during execution
                     if self.wrapper.interrupted:
                         self.logger.info(f"{self.mode_name} interrupted by user, cleaning up...")
                         self.cleanup_on_failure(work, KeyboardInterrupt())
@@ -268,8 +308,15 @@ class WorkMode(ABC):
                     if check_work_limit_reached(self.completed_count, self.ctx.work_count_limit):
                         break
 
+            # Check if we exited due to graceful shutdown
+            if self.ctx.finish_after_current:
+                self._handle_graceful_exit()
+
         except KeyboardInterrupt:
             self._handle_keyboard_interrupt()
+
+        finally:
+            self._restore_signal_handler()
 
         return self.completed_count
 
@@ -280,12 +327,21 @@ class WorkMode(ABC):
             print(f"{self.mode_name} - will process {self.ctx.work_count_limit} assignment(s)")
         else:
             print(f"{self.mode_name} - requesting work from server")
-            print("Press Ctrl+C to stop")
+        print("Ctrl+C once: finish current work, then exit")
+        print("Ctrl+C twice: abort immediately")
         print("=" * 60)
         print()
 
+    def _handle_graceful_exit(self) -> None:
+        """Handle graceful exit after completing current work."""
+        print()
+        print("=" * 60)
+        print(f"{self.mode_name} - graceful shutdown complete")
+        print(f"Completed {self.completed_count} assignment(s)")
+        print("=" * 60)
+
     def _handle_keyboard_interrupt(self) -> None:
-        """Handle Ctrl+C gracefully."""
+        """Handle immediate abort (second Ctrl+C)."""
         self.cleanup_on_shutdown()
         handle_shutdown(
             wrapper=self.wrapper,
@@ -531,18 +587,18 @@ class Stage2ConsumerMode(WorkMode):
 
         print(f"Downloaded {self.local_residue_file.stat().st_size} bytes")
 
-        # Get stage2 workers
-        stage2_workers = getattr(self.args, 'stage2_workers', None) or \
-                        get_stage2_workers_default(self.wrapper.config)
+        # Get workers count
+        workers = getattr(self.args, 'workers', None) or \
+                  get_workers_default(self.wrapper.config)
 
         # Run stage 2
-        print(f"Running stage 2 with {stage2_workers} workers...")
+        print(f"Running stage 2 with {workers} workers...")
         executor = self.Stage2Executor(
             self.wrapper,
             self.local_residue_file,
             work['b1'],
             self._b2,
-            stage2_workers,
+            workers,
             self.args.verbose
         )
 
@@ -756,7 +812,7 @@ class StandardAutoWorkMode(WorkMode):
 
         if self.args.two_stage and self.args.method == 'ecm':
             print(f"Mode: two-stage GPU+CPU (B1={b1}, B2={b2}, curves={curves})")
-            stage2_workers = resolve_stage2_workers(self.args, self.wrapper.config)
+            workers = resolve_workers(self.args, self.wrapper.config)
 
             two_stage_config = TwoStageConfig(
                 composite=composite,
@@ -766,7 +822,7 @@ class StandardAutoWorkMode(WorkMode):
                 stage1_device="GPU" if use_gpu else "CPU",
                 stage2_device="CPU",
                 stage1_parametrization=param if param else 3,
-                threads=stage2_workers,
+                threads=workers,
                 verbose=self.args.verbose,
                 progress_interval=getattr(self.args, 'progress_interval', 0)
             )

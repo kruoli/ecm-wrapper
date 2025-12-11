@@ -40,7 +40,7 @@ python3 scripts/run_batch_pipeline.py --numbers-file data/numbers.txt --b1 16000
 python3 scripts/run_batch_pipeline.py --gpu-device 0 --gpu-curves 256 --b1 160000000
 
 # More CPU workers for stage 2
-python3 scripts/run_batch_pipeline.py --stage2-workers 8 --b1 160000000
+python3 scripts/run_batch_pipeline.py --workers 8 --b1 160000000
 ```
 
 ### Options
@@ -49,7 +49,7 @@ python3 scripts/run_batch_pipeline.py --stage2-workers 8 --b1 160000000
 - `--b1 N`: B1 bound for stage 1 (default: 160000000)
 - `--b2 N`: B2 bound for stage 2 (default: from config, use 0 to skip stage 2)
 - `--curves N`: Number of curves per number (default: 1, which is 3072 curves on GPU)
-- `--stage2-workers N`: Number of CPU workers for stage 2 (default: 4)
+- `--workers N`: Number of parallel workers for stage 2 (default: 4)
 - `--gpu-device N`: GPU device ID to use
 - `--gpu-curves N`: GPU curves per kernel launch
 - `--no-gpu`: Use CPU for stage 1 instead of GPU
@@ -80,7 +80,7 @@ python3 scripts/run_batch_pipeline.py \
   --b1 160000000 \
   --b2 17088933822400000 \
   --curves 100 \
-  --stage2-workers 4 \
+  --workers 4 \
   --project MyProject \
   --verbose
 ```

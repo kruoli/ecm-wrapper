@@ -40,7 +40,7 @@ programs:
     gpu_enabled: false
     gpu_device: 0
     gpu_curves: null
-    stage2_workers: 8
+    workers: 8  # Parallel workers (multiprocess ECM, stage2 threads)
     pm1_b1: 2900000000
     pm1_b2: 1000000000000000
     pp1_b1: 110000000

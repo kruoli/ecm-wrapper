@@ -315,13 +315,13 @@ async def recent_curves(
     Public page showing recent ECM curves with filtering and pagination.
     """
     if group_by_composite:
-        # Get aggregated attempts
-        attempts = get_aggregated_attempts(db, limit=limit)
+        # Get aggregated attempts - fetch all for proper pagination
+        all_aggregated = get_aggregated_attempts(db, limit=500)  # Higher limit for aggregation
 
         # Filter by client if specified (filter the individual attempts)
         if client_id:
             filtered_attempts = []
-            for agg in attempts:
+            for agg in all_aggregated:
                 client_attempts = [a for a in agg['attempts'] if a.client_id == client_id]
                 if client_attempts:
                     # Recalculate aggregates for filtered attempts
@@ -334,9 +334,11 @@ async def recent_curves(
                         'total_curves': total_curves,
                         'total_time': total_time,
                     })
-            attempts = filtered_attempts
+            all_aggregated = filtered_attempts
 
-        total = len(attempts)
+        # Apply pagination to aggregated results
+        total = len(all_aggregated)
+        attempts = all_aggregated[offset:offset + limit]
     else:
         # Get individual attempts
         query = db.query(ECMAttempt).filter(ECMAttempt.superseded_by.is_(None))
@@ -348,10 +350,10 @@ async def recent_curves(
         attempts = query.order_by(desc(ECMAttempt.created_at)).offset(offset).limit(limit).all()
 
     # Get list of active clients for filter dropdown
-    clients_rows: list[tuple[str | None]] = db.query(distinct(ECMAttempt.client_id)).filter(
+    clients_rows = db.query(distinct(ECMAttempt.client_id)).filter(
         ECMAttempt.client_id.isnot(None)
     ).order_by(ECMAttempt.client_id).limit(100).all()
-    clients: list[str] = [c[0] for c in clients_rows if c[0]]
+    clients: List[str] = [c[0] for c in clients_rows if c[0]]
 
     # Pagination metadata
     page = (offset // limit) + 1 if limit > 0 else 1
@@ -408,10 +410,10 @@ async def recent_factors(
     factors = query.order_by(desc(Factor.created_at)).offset(offset).limit(limit).all()
 
     # Get list of clients who have found factors for filter dropdown
-    clients_rows: list[tuple[str | None]] = db.query(distinct(ECMAttempt.client_id)).join(
+    clients_rows = db.query(distinct(ECMAttempt.client_id)).join(
         Factor, Factor.found_by_attempt_id == ECMAttempt.id
     ).filter(ECMAttempt.client_id.isnot(None)).order_by(ECMAttempt.client_id).limit(100).all()
-    clients: list[str] = [c[0] for c in clients_rows if c[0]]
+    clients: List[str] = [c[0] for c in clients_rows if c[0]]
 
     # Pagination metadata
     page = (offset // limit) + 1 if limit > 0 else 1

@@ -343,8 +343,8 @@ def main():
                        help='B2 bound for stage 2 (supports scientific notation, e.g., 4e11, 0 to skip stage 2)')
     parser.add_argument('--curves', type=int, default=1,
                        help='Number of curves per number (default: 1, which is 3072 curves on GPU)')
-    parser.add_argument('--stage2-workers', type=int, default=4,
-                       help='Number of CPU workers for stage 2')
+    parser.add_argument('--workers', type=int, default=4,
+                       help='Number of parallel workers for stage 2')
     parser.add_argument('--gpu-device', type=int, default=None,
                        help='GPU device to use')
     parser.add_argument('--gpu-curves', type=int, default=None,
@@ -393,7 +393,7 @@ def main():
 
     logger.info(f"Pipeline configuration:")
     logger.info(f"  Stage 1: {'GPU' if use_gpu else 'CPU'} (B1={b1}, {curves} curves per number)")
-    logger.info(f"  Stage 2: {args.stage2_workers} CPU workers (B2={b2})")
+    logger.info(f"  Stage 2: {args.workers} CPU workers (B2={b2})")
     logger.info(f"  Submit results: {not args.no_submit}")
 
     # Create stats tracker
@@ -409,7 +409,7 @@ def main():
     # Start CPU thread first (it will block waiting for work)
     cpu_thread = threading.Thread(
         target=cpu_worker,
-        args=(wrapper, b1, b2, args.stage2_workers, residue_queue, stats,
+        args=(wrapper, b1, b2, args.workers, residue_queue, stats,
               args.verbose, args.project, args.no_submit,
               args.continue_after_factor, args.progress_interval, shutdown_event, logger),
         name="CPU-Stage2"

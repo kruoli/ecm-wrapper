@@ -759,6 +759,9 @@ pylint *.py
 ### Security Features
 - **Admin authentication**: All admin endpoints require API key via `X-Admin-Key` header
 - **Timing attack protection**: Constant-time key comparison using `secrets.compare_digest()`
+- **Submission validation**: Only composites already in database can receive ECM results (prevents accidental pollution)
+  - Returns 404 with helpful error message for unregistered composites
+  - Users must use `--no-submit` flag for local testing
 - **File upload limits**: 10 MB maximum file size on bulk upload endpoints
 - **Input validation**: UTF-8 encoding validation, Pydantic schema validation
 - **Error sanitization**: Generic error messages to clients, detailed logging server-side

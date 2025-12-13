@@ -19,11 +19,12 @@ from pathlib import Path
 from typing import Optional
 
 from lib.ecm_executor import ECMWrapper
-from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig
+from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
 from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_workers_default, parse_int_with_scientific
 from lib.stage1_helpers import submit_stage1_complete_workflow
 from lib.results_builder import results_for_stage1
 from lib.user_output import UserOutput
+from lib.ecm_math import calculate_target_tlevel, is_probably_prime
 
 
 def main():
@@ -98,7 +99,6 @@ def main():
             output.warning("Could not parse B1 from residue file, using 0")
 
         # Run stage 2 using multithread executor
-        from lib.ecm_config import FactorResult
         factor, all_factors, curves_completed, exec_time, sigma = wrapper._run_stage2_multithread(
             residue_file=residue_path,
             b1=b1,
@@ -208,29 +208,105 @@ def main():
             if args.upload:
                 args.no_submit = True  # Prevent double submission
 
-    # T-level Mode
-    elif args.tlevel:
-        output.mode_header("T-level Mode", {
-            "Target": f"t{args.tlevel}",
-            "Composite": args.composite
-        })
+    # T-level Mode (including progressive factorization when --tlevel given without value)
+    elif args.tlevel is not None:
+        # Determine if we're in progressive mode (auto t-level calculation)
+        is_progressive = args.tlevel < 0  # -1.0 sentinel means auto-calculate
 
-        config = TLevelConfig(
-            composite=args.composite,
-            target_t_level=args.tlevel,
-            start_t_level=args.start_tlevel or 0.0,
-            b1_strategy='optimal',
-            parametrization=args.param or (3 if args.two_stage else 1),
-            threads=args.workers or 1,
-            verbose=args.verbose or False,
-            workers=args.workers or 1,
-            use_two_stage=args.two_stage or False,
-            progress_interval=args.progress_interval or 0,
-            project=args.project,
-            no_submit=args.no_submit or False
-        )
+        # Current state for progressive factorization
+        current_composite = args.composite
+        current_t_level = args.start_tlevel or 0.0
+        all_factors = []
 
-        result = wrapper.run_tlevel_v2(config)
+        # Progressive factorization loop
+        while True:
+            digit_length = len(current_composite)
+
+            # Calculate or use explicit target t-level
+            if is_progressive:
+                target_t_level = calculate_target_tlevel(digit_length)
+            else:
+                target_t_level = args.tlevel
+
+            # Skip if we've already exceeded the target
+            if current_t_level >= target_t_level:
+                output.info(f"Already at t{current_t_level:.2f} >= target t{target_t_level:.1f}")
+                break
+
+            mode_name = "Progressive T-level Mode" if is_progressive else "T-level Mode"
+            output.mode_header(mode_name, {
+                "Target": f"t{target_t_level:.1f}",
+                "Current": f"t{current_t_level:.2f}" if current_t_level > 0 else "t0",
+                "Composite": f"C{digit_length} ({current_composite[:20]}...)" if len(current_composite) > 25 else f"C{digit_length}"
+            })
+
+            config = TLevelConfig(
+                composite=current_composite,
+                target_t_level=target_t_level,
+                start_t_level=current_t_level,
+                b1_strategy='optimal',
+                parametrization=args.param or (3 if args.two_stage else 1),
+                threads=args.workers or 1,
+                verbose=args.verbose or False,
+                workers=args.workers or 1,
+                use_two_stage=args.two_stage or False,
+                progress_interval=args.progress_interval or 0,
+                project=args.project,
+                no_submit=args.no_submit or False
+            )
+
+            result = wrapper.run_tlevel_v2(config)
+
+            # Collect factors
+            if result.factors:
+                all_factors.extend(result.factors)
+                output.success(f"Found {len(result.factors)} factor(s): {', '.join(result.factors[:3])}{'...' if len(result.factors) > 3 else ''}")
+
+                # Update composite by dividing out factors
+                composite_int = int(current_composite)
+                for factor in result.factors:
+                    factor_int = int(factor)
+                    while composite_int % factor_int == 0:
+                        composite_int //= factor_int
+
+                # Check if fully factored
+                if composite_int == 1:
+                    output.success("Fully factored!")
+                    break
+
+                # Check if remaining cofactor is prime
+                if is_probably_prime(composite_int):
+                    output.success(f"Cofactor C{len(str(composite_int))} is prime - factorization complete!")
+                    all_factors.append(str(composite_int))
+                    break
+
+                # Continue with cofactor in progressive mode
+                if is_progressive:
+                    current_composite = str(composite_int)
+                    # T-level achieved carries over to cofactor
+                    current_t_level = result.t_level_achieved if result.t_level_achieved else 0.0
+                    output.info(f"Continuing with cofactor C{len(current_composite)} from t{current_t_level:.2f}")
+                else:
+                    # Explicit t-level mode: stop after finding factors
+                    break
+            else:
+                # No factors found - we've reached the target t-level
+                if is_progressive:
+                    output.info(f"Reached t{target_t_level:.1f} with no factor found")
+                break
+
+            # Check for interrupt
+            if result.interrupted:
+                output.warning("Interrupted by user")
+                break
+
+        # Build final result with all collected factors
+        if all_factors:
+            # Create aggregate result
+            result = FactorResult()
+            for f in all_factors:
+                result.add_factor(f, None)
+            result.success = True
 
     # Multiprocess Mode
     elif args.multiprocess:

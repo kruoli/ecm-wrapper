@@ -320,3 +320,25 @@ def get_optimal_b1_for_tlevel(target_tlevel: float) -> Tuple[int, int]:
 
     # For t-levels beyond table, return highest entry
     return OPTIMAL_B1_TABLE[-1][1], OPTIMAL_B1_TABLE[-1][2]
+
+
+def calculate_target_tlevel(digit_length: int) -> float:
+    """
+    Calculate target t-level for a composite based on its digit length.
+
+    Uses the 4/13 rule: target t-level is 4/13 of the composite's digit length.
+    This provides a reasonable balance between ECM effort and probability of success.
+
+    Args:
+        digit_length: Number of digits in the composite
+
+    Returns:
+        Target t-level (float)
+
+    Example:
+        >>> calculate_target_tlevel(65)  # 65-digit composite
+        20.0  # Target t20
+        >>> calculate_target_tlevel(100)  # 100-digit composite
+        30.769...  # Target ~t31
+    """
+    return (4.0 / 13.0) * digit_length

@@ -52,7 +52,8 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     parser.add_argument('--b2', type=parse_int_with_scientific, help='B2 bound (supports scientific notation, e.g., 4e11). Use -1 for GMP-ECM default, 0 for stage 1 only')
     parser.add_argument('--b2-multiplier', type=float, help='Dynamic B2 calculation: B2 = B1 * multiplier (e.g., 1000 for B2=1000*B1). Overridden by explicit --b2')
     parser.add_argument('--curves', '-c', type=int, help='Number of curves')
-    parser.add_argument('--tlevel', '-t', type=float, help='Target t-level (alternative to --curves, runs ECM iteratively)')
+    parser.add_argument('--tlevel', '-t', type=float, nargs='?', const=-1.0,
+                       help='Target t-level. If specified without a value, auto-calculates as 4/13 of digit length and runs progressively until factored.')
     parser.add_argument('--start-tlevel', type=float, help='Starting t-level (for resuming, requires --tlevel)')
     parser.add_argument('--project', '-p', help='Project name')
     parser.add_argument('--no-submit', action='store_true', help='Do not submit to API')
@@ -225,20 +226,21 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
         errors['priority'] = "--priority only valid in --auto-work mode"
 
     # T-level mode validation
-    if hasattr(args, 'tlevel') and args.tlevel:
+    if hasattr(args, 'tlevel') and args.tlevel is not None:
         if args.curves:
             errors['curves'] = "Cannot specify both --tlevel and --curves. Choose one."
 
-        # Validate start-tlevel
+        # Validate start-tlevel (only meaningful when explicit t-level given)
         if hasattr(args, 'start_tlevel') and args.start_tlevel is not None:
             if args.start_tlevel < 0:
                 errors['start_tlevel'] = "--start-tlevel must be non-negative"
-            elif args.start_tlevel >= args.tlevel:
+            # Only check start < target when explicit t-level given (not auto mode)
+            elif args.tlevel > 0 and args.start_tlevel >= args.tlevel:
                 errors['start_tlevel'] = f"--start-tlevel ({args.start_tlevel}) must be less than --tlevel ({args.tlevel})"
 
     # Validate start-tlevel requires tlevel
     if hasattr(args, 'start_tlevel') and args.start_tlevel is not None:
-        if not hasattr(args, 'tlevel') or not args.tlevel:
+        if not hasattr(args, 'tlevel') or args.tlevel is None:
             errors['start_tlevel'] = "--start-tlevel requires --tlevel to be specified"
         if not args.composite:
             errors['composite'] = "T-level mode requires composite number. Use --composite argument."

@@ -5,6 +5,7 @@ import sys
 import signal
 import threading
 import hashlib
+import queue
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple, Union, Callable
 from lib.base_wrapper import BaseWrapper
@@ -382,6 +383,269 @@ class ECMWrapper(BaseWrapper):
 
         return result
 
+    def _run_tlevel_pipelined(self, config: TLevelConfig) -> FactorResult:
+        """
+        Execute T-level targeting in pipelined mode (GPU + CPU running concurrently).
+
+        GPU thread produces residues, CPU thread consumes and processes them.
+        Stops early when factor found to avoid wasted computation.
+
+        Args:
+            config: T-level configuration object with use_two_stage=True
+
+        Returns:
+            FactorResult with discovered factors
+        """
+        from lib.ecm_math import (get_optimal_b1_for_tlevel, calculate_tlevel,
+                                  calculate_curves_to_target_direct, TLEVEL_TRANSITION_CACHE)
+
+        self.logger.info(f"Starting PIPELINED progressive ECM with target t{config.target_t_level:.1f} (GPU+CPU concurrent)")
+        start_time = time.time()
+
+        # Shared state between threads
+        residue_queue = queue.Queue(maxsize=2)  # Small queue for backpressure
+        shutdown_event = threading.Event()
+
+        # Results accumulation (protected by lock)
+        result_lock = threading.Lock()
+        all_factors = []
+        all_sigmas = []
+        total_curves = 0
+        curve_history = []
+
+        # Current t-level tracking
+        current_t_level = config.start_t_level
+
+        # Build step targets
+        step_targets = []
+        t = 20.0
+        while t < config.target_t_level:
+            if t > current_t_level:
+                step_targets.append(t)
+            t += 5.0
+        if config.target_t_level not in step_targets and config.target_t_level > current_t_level:
+            step_targets.append(config.target_t_level)
+
+        def gpu_producer():
+            """GPU thread: Run stage 1 for each batch, put residues in queue"""
+            nonlocal current_t_level
+
+            self.logger.info(f"[GPU Thread] Starting, will process {len(step_targets)} t-level steps")
+
+            for step_target in step_targets:
+                # Check for shutdown (factor found in CPU thread)
+                if shutdown_event.is_set():
+                    self.logger.info("[GPU Thread] Factor found, stopping production")
+                    break
+
+                # Check for user interrupt
+                if self.interrupted:
+                    self.logger.info("[GPU Thread] User interrupt, stopping")
+                    shutdown_event.set()
+                    break
+
+                # Skip if already achieved
+                with result_lock:
+                    if current_t_level >= step_target:
+                        self.logger.info(f"[GPU Thread] Skipping t{step_target:.1f} (already at t{current_t_level:.2f})")
+                        continue
+
+                # Get optimal B1
+                b1, _ = get_optimal_b1_for_tlevel(step_target)
+
+                # Calculate curves needed
+                current_rounded = round(current_t_level)
+                target_rounded = round(step_target)
+                cache_key = (current_rounded, target_rounded, 3)  # Always use p=3 for GPU
+
+                curves = None
+                if cache_key in TLEVEL_TRANSITION_CACHE:
+                    cached_b1, cached_curves = TLEVEL_TRANSITION_CACHE[cache_key]
+                    if cached_b1 == b1:
+                        curves = cached_curves
+                        self.logger.info(f"[GPU Thread] Cached: t{current_rounded} → t{target_rounded} = {curves} curves at B1={b1}, p=3")
+                    else:
+                        curves = calculate_curves_to_target_direct(current_t_level, step_target, b1, 3)
+                else:
+                    curves = calculate_curves_to_target_direct(current_t_level, step_target, b1, 3)
+
+                if curves is None or curves <= 0:
+                    self.logger.warning(f"[GPU Thread] Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, skipping")
+                    continue
+
+                self.logger.info(f"[GPU Thread] Starting stage 1: {curves} curves at B1={b1} (t{current_t_level:.2f} → t{step_target:.1f})")
+
+                # Create residue file
+                residue_file = Path(f"/tmp/tlevel_residue_{int(time.time() * 1000)}.txt")
+
+                # Run stage 1
+                stage1_start = time.time()
+                try:
+                    stage1_success, stage1_factor, actual_curves, stage1_output, all_stage1_factors = self._run_stage1(
+                        composite=config.composite,
+                        b1=b1,
+                        curves=curves,
+                        residue_file=residue_file,
+                        use_gpu=True,
+                        verbose=config.verbose,
+                        gpu_device=None,
+                        gpu_curves=None
+                    )
+                    stage1_time = time.time() - stage1_start
+
+                    # Put work item in queue (blocks if queue is full)
+                    residue_queue.put({
+                        'residue_file': residue_file,
+                        'b1': b1,
+                        'b2': b1 * 100,  # Two-stage uses B1 * 100
+                        'curves': actual_curves,
+                        'stage1_factor': stage1_factor,
+                        'all_factors': all_stage1_factors,
+                        'stage1_time': stage1_time,
+                        'stage1_output': stage1_output,
+                        'step_target': step_target,
+                        'stage1_success': stage1_success
+                    })
+
+                    self.logger.info(f"[GPU Thread] Stage 1 complete in {stage1_time:.1f}s, passed to CPU thread")
+
+                except Exception as e:
+                    self.logger.error(f"[GPU Thread] Error in stage 1: {e}")
+                    continue
+
+            # Send sentinel
+            self.logger.info("[GPU Thread] All batches complete, signaling CPU thread")
+            residue_queue.put(None)
+
+        def cpu_consumer():
+            """CPU thread: Process stage 2 from residue queue"""
+            nonlocal current_t_level, total_curves
+
+            self.logger.info(f"[CPU Thread] Starting with {config.threads} workers")
+
+            while True:
+                # Check for user interrupt
+                if self.interrupted:
+                    self.logger.info("[CPU Thread] User interrupt, draining queue")
+                    shutdown_event.set()
+                    break
+
+                # Get next work item
+                work_item = residue_queue.get()
+
+                # Check for sentinel
+                if work_item is None:
+                    self.logger.info("[CPU Thread] Received stop signal")
+                    residue_queue.task_done()
+                    break
+
+                try:
+                    residue_file = work_item['residue_file']
+                    b1 = work_item['b1']
+                    b2 = work_item['b2']
+                    curves = work_item['curves']
+                    stage1_factor = work_item['stage1_factor']
+                    all_stage1_factors = work_item['all_factors']
+                    stage1_time = work_item['stage1_time']
+                    step_target = work_item['step_target']
+                    stage1_success = work_item['stage1_success']
+
+                    # Handle stage 1 factor
+                    if stage1_factor:
+                        self.logger.info(f"[CPU Thread] Factor found in stage 1: {stage1_factor}")
+                        with result_lock:
+                            all_factors.extend(all_stage1_factors)
+                            all_sigmas.extend([None] * len(all_stage1_factors))
+                            total_curves += curves
+                            # Track with B2=0 (stage 1 only)
+                            curve_history.append(f"{curves}@{b1},0,p=3")
+                            current_t_level = calculate_tlevel(curve_history)
+
+                        # Signal GPU to stop
+                        self.logger.info("[CPU Thread] Stopping GPU production (factor found)")
+                        shutdown_event.set()
+                        residue_queue.task_done()
+                        # Clean up residue file
+                        if residue_file.exists():
+                            residue_file.unlink()
+                        break
+
+                    # Run stage 2
+                    if stage1_success and residue_file.exists():
+                        self.logger.info(f"[CPU Thread] Starting stage 2: {curves} curves at B1={b1}, B2={b2}")
+                        stage2_start = time.time()
+
+                        _, all_stage2_factors, curves_completed, stage2_time, sigma = self._run_stage2_multithread(
+                            residue_file=residue_file,
+                            b1=b1,
+                            b2=b2,
+                            workers=config.threads,
+                            verbose=config.verbose,
+                            progress_interval=config.progress_interval
+                        )
+
+                        self.logger.info(f"[CPU Thread] Stage 2 complete in {stage2_time:.1f}s")
+
+                        # Update results
+                        with result_lock:
+                            if all_stage2_factors:
+                                all_factors.extend(all_stage2_factors)
+                                all_sigmas.extend([sigma] * len(all_stage2_factors))
+                                self.logger.info(f"[CPU Thread] Factor found in stage 2: {all_stage2_factors}")
+                                # Signal GPU to stop
+                                shutdown_event.set()
+
+                            total_curves += curves_completed
+                            # Track with actual B2
+                            curve_history.append(f"{curves_completed}@{b1},{int(b2)},p=3")
+                            current_t_level = calculate_tlevel(curve_history)
+                            self.logger.info(f"[CPU Thread] Current t-level: {current_t_level:.2f}")
+
+                            if all_stage2_factors:
+                                residue_queue.task_done()
+                                # Clean up
+                                if residue_file.exists():
+                                    residue_file.unlink()
+                                break
+                    else:
+                        self.logger.warning(f"[CPU Thread] Stage 1 failed or no residue file")
+
+                    # Clean up residue file
+                    if residue_file.exists():
+                        residue_file.unlink()
+
+                    residue_queue.task_done()
+
+                except Exception as e:
+                    self.logger.error(f"[CPU Thread] Error processing batch: {e}")
+                    residue_queue.task_done()
+                    continue
+
+        # Start both threads
+        gpu_thread = threading.Thread(target=gpu_producer, name="GPU-Stage1")
+        cpu_thread = threading.Thread(target=cpu_consumer, name="CPU-Stage2")
+
+        gpu_thread.start()
+        cpu_thread.start()
+
+        # Wait for completion
+        gpu_thread.join()
+        cpu_thread.join()
+
+        # Build result
+        result = FactorResult()
+        for factor, sigma in zip(all_factors, all_sigmas):
+            result.add_factor(factor, sigma)
+        result.curves_run = total_curves
+        result.execution_time = time.time() - start_time
+        result.success = len(all_factors) > 0
+        result.t_level_achieved = current_t_level
+        result.interrupted = self.interrupted
+
+        self.logger.info(f"Pipelined t-level execution complete: {total_curves} curves, t{current_t_level:.2f} achieved")
+
+        return result
+
     def run_tlevel_v2(self, config: TLevelConfig) -> FactorResult:
         """
         Execute T-level targeting with configuration object.
@@ -402,6 +666,10 @@ class ECMWrapper(BaseWrapper):
             ... )
             >>> result = wrapper.run_tlevel_v2(config)
         """
+        # Use pipelined mode for two-stage (GPU+CPU concurrent)
+        if config.use_two_stage:
+            return self._run_tlevel_pipelined(config)
+
         from lib.ecm_math import (get_optimal_b1_for_tlevel, calculate_tlevel,
                                   calculate_curves_to_target_direct, TLEVEL_TRANSITION_CACHE)
 
@@ -440,6 +708,11 @@ class ECMWrapper(BaseWrapper):
                     self.logger.info("T-level execution interrupted, returning partial results")
                     break
 
+                # Skip this step if we've already surpassed it
+                if current_t_level >= step_target:
+                    self.logger.info(f"Skipping t{step_target:.1f} (already at t{current_t_level:.2f})")
+                    continue
+
                 # Get optimal B1 for this t-level
                 b1, _ = get_optimal_b1_for_tlevel(step_target)
 
@@ -464,9 +737,9 @@ class ECMWrapper(BaseWrapper):
                     curves = calculate_curves_to_target_direct(current_t_level, step_target, b1, config.parametrization)
 
                 if curves is None or curves <= 0:
-                    self.logger.warning(f"Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, using Zimmermann estimate")
-                    # Fallback to Zimmermann table estimate
-                    _, curves = get_optimal_b1_for_tlevel(step_target)
+                    self.logger.warning(f"Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, skipping to next level")
+                    # Skip this target and continue to next one
+                    continue
 
                 self.logger.info(f"Running {curves} curves at B1={b1} (targeting t{step_target:.1f}, currently at t{current_t_level:.2f})")
 
@@ -525,14 +798,28 @@ class ECMWrapper(BaseWrapper):
                 all_sigmas.extend(step_result.sigmas)
                 total_curves += step_result.curves_run
 
-                # Track curve history for t-level calculation (format: "curves@b1,p=parametrization")
+                # Track curve history for t-level calculation (format: "curves@b1,b2,p=parametrization")
                 # Two-stage mode uses GPU (p=3) for stage 1, but the full curve credit is for the combined run
                 # For t-level calculation purposes, two-stage effectively uses p=3 parametrization
                 effective_param = 3 if config.use_two_stage else config.parametrization
-                curve_history.append(f"{step_result.curves_run}@{b1},p={effective_param}")
+
+                # CRITICAL: Calculate actual B2 used for accurate t-level tracking
+                # Two-stage mode uses B1 * 100, which gives ~1.8 t-levels LESS per 100 curves
+                # than GMP's default B2. Must include B2 in curve history to prevent overestimating progress.
+                # Example: 100@11e6,p=3 → t33.9 (wrong!), 100@11e6,11e8,p=3 → t32.2 (correct)
+                if config.use_two_stage:
+                    actual_b2 = b1 * 100
+                    # Format B2 as integer (no decimals) for t-level binary compatibility
+                    curve_history.append(f"{step_result.curves_run}@{b1},{int(actual_b2)},p={effective_param}")
+                else:
+                    # Standard mode: omit B2 to let t-level binary use GMP default
+                    curve_history.append(f"{step_result.curves_run}@{b1},p={effective_param}")
 
                 # Submit this batch's results if enabled
                 if not config.no_submit and step_result.curves_run > 0:
+                    # Calculate B2 for submission (two-stage uses B1*100, else use GMP default)
+                    submission_b2 = (b1 * 100) if config.use_two_stage else None
+
                     step_results = {
                         'success': True,
                         'factors_found': step_result.factors,
@@ -542,7 +829,7 @@ class ECMWrapper(BaseWrapper):
                         'composite': config.composite,
                         'method': 'ecm',
                         'b1': b1,
-                        'b2': None,  # T-level mode uses default B2
+                        'b2': submission_b2,
                         'parametrization': effective_param
                     }
                     if config.work_id:

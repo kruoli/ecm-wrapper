@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from collections import Counter
 
 from lib.base_wrapper import BaseWrapper
-from lib.ecm_math import trial_division, is_probably_prime
+from lib.ecm_math import trial_division, is_probably_prime, calculate_target_tlevel
 from lib.ecm_config import TLevelConfig
 from lib.ecm_executor import ECMWrapper
 from cado_wrapper import CADOWrapper
@@ -71,7 +71,8 @@ class AliquotWrapper(BaseWrapper):
     """Wrapper for computing aliquot sequences using CADO-NFS and ECM."""
 
     def __init__(self, config_path: str, factorizer: str = 'cado', hybrid_threshold: int = 100,
-                 siqs_threshold: int = 100, ecm_program: str = 'gmp-ecm', threads: Optional[int] = None, verbose: bool = False):
+                 siqs_threshold: int = 100, ecm_program: str = 'gmp-ecm', threads: Optional[int] = None,
+                 verbose: bool = False, use_two_stage: bool = False):
         """Initialize aliquot wrapper with specified factorization engine.
 
         Args:
@@ -82,6 +83,7 @@ class AliquotWrapper(BaseWrapper):
             ecm_program: ECM program to use: 'gmp-ecm' or 'yafu' (default: 'gmp-ecm')
             threads: Optional thread/worker count for parallel execution
             verbose: Enable verbose output from factorization programs
+            use_two_stage: Use GPU two-stage mode for ECM (GPU stage 1 + CPU stage 2, default: False)
         """
         super().__init__(config_path)
         self.config_path = config_path  # Store for lazy initialization of sub-wrappers
@@ -91,6 +93,7 @@ class AliquotWrapper(BaseWrapper):
         self.ecm_program = ecm_program
         self.threads = threads
         self.verbose = verbose
+        self.use_two_stage = use_two_stage
 
         # Lazy initialization of factorizers (created on first access)
         self._cado = None
@@ -305,7 +308,7 @@ class AliquotWrapper(BaseWrapper):
                     self.logger.info(f"Cofactor C{cofactor_digits} small enough for SIQS/CADO, exiting ECM")
                     break
 
-                target_t_level = (4.0 / 13.0) * cofactor_digits  # Target: 4/13 of digit length
+                target_t_level = calculate_target_tlevel(cofactor_digits)
 
                 # Skip if we've already reached the target for this size
                 if current_t_level >= target_t_level:
@@ -320,6 +323,7 @@ class AliquotWrapper(BaseWrapper):
                     start_t_level=current_t_level,  # Continue from achieved t-level
                     threads=self.threads if self.threads else 1,
                     verbose=self.verbose,
+                    use_two_stage=self.use_two_stage,  # GPU two-stage mode if enabled
                     no_submit=True  # Aliquot handles its own submissions
                 )
                 ecm_result = self.ecm.run_tlevel_v2(config)
@@ -872,6 +876,10 @@ Examples:
   # Use 8 threads/workers for parallel execution
   python3 aliquot_wrapper.py --start 276 --workers 8 --quiet-factors
 
+  # Use GPU two-stage mode for faster ECM (requires GMP-ECM with GPU support)
+  python3 aliquot_wrapper.py --start 276 --two-stage --workers 8 --quiet-factors
+  python3 aliquot_wrapper.py --start 276 --gpu --workers 8  # alias for --two-stage
+
   # Verbose mode (show detailed output from ECM and CADO-NFS)
   python3 aliquot_wrapper.py --start 276 -v --workers 8
 
@@ -911,16 +919,24 @@ Common test sequences:
     parser.add_argument('--resume-composite', type=str,
                        help='Composite number to resume from (use with --resume-iteration)')
     parser.add_argument('--workers', type=int,
-                       help='Number of parallel workers (ECM: multiprocess workers, YAFU/CADO: threads)')
+                       help='Number of parallel workers (ECM: stage2 threads or multiprocess workers, YAFU/CADO: threads)')
+    parser.add_argument('--two-stage', action='store_true',
+                       help='Use GPU two-stage mode for ECM (GPU stage 1 + CPU stage 2, requires GMP-ECM with GPU support)')
+    parser.add_argument('--gpu', action='store_true',
+                       help='Alias for --two-stage (use GPU acceleration for ECM)')
     parser.add_argument('-v', '--verbose', action='store_true',
                        help='Enable verbose output from factorization programs (ECM, CADO-NFS)')
 
     args = parser.parse_args()
 
+    # Normalize GPU flag to two-stage
+    if args.gpu:
+        args.two_stage = True
+
     # Initialize wrapper with selected factorizer
     wrapper = AliquotWrapper(args.config, factorizer=args.factorizer, hybrid_threshold=args.hybrid_threshold,
                             siqs_threshold=args.siqs_threshold, ecm_program=args.ecm_program,
-                            threads=args.workers, verbose=args.verbose)
+                            threads=args.workers, verbose=args.verbose, use_two_stage=args.two_stage)
 
     # Override factor logging config if requested
     if args.quiet_factors:

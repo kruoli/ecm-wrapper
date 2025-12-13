@@ -153,7 +153,7 @@
                         <td><span class="small-text">{{ work.id[:8] }}...</span></td>
                         <td>{{ esc(work.client_id) }}</td>
                         <td>
-                            <a href="/api/v1/admin/composites/{{ composite.id }}/details" class="number">
+                            <a href="#" onclick="navigateWithAuth('/api/v1/admin/composites/{{ composite.id }}/details'); return false;" class="number">
                                 {{ esc(format_composite(composite.number, 30)) }}
                             </a>
                         </td>

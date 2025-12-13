@@ -233,7 +233,34 @@ function activateSelected() {
 }
 
 function viewDetails(compositeId) {
-    location.href = `/api/v1/admin/composites/${compositeId}/details`;
+    const apiKey = sessionStorage.getItem('admin_api_key');
+    if (!apiKey) {
+        window.location.href = '/api/v1/admin/login';
+        return;
+    }
+
+    // Fetch the details page with auth header
+    fetch(`/api/v1/admin/composites/${compositeId}/details`, {
+        headers: {
+            'X-Admin-Key': apiKey
+        }
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Unauthorized');
+        }
+        return response.text();
+    })
+    .then(html => {
+        document.open();
+        document.write(html);
+        document.close();
+        history.pushState(null, '', `/api/v1/admin/composites/${compositeId}/details`);
+    })
+    .catch(() => {
+        sessionStorage.removeItem('admin_api_key');
+        window.location.href = '/api/v1/admin/login';
+    });
 }
 
 function deleteComposite(compositeId) {

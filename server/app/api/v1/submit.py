@@ -34,21 +34,35 @@ async def submit_result(
 
     This endpoint accepts results from distributed clients running ECM, P±1, and other
     factorization methods. It handles:
-    - Creating/updating composite records
+    - Validating composite exists in database (rejects unknown composites)
     - Recording the factorization attempt
     - Adding newly discovered factors
     - Idempotency for duplicate submissions
     - Factor validation
+
+    Note: Only composites already registered in the database can receive submissions.
+    Use --no-submit flag for local testing.
     """
     with transaction_scope(db, "submit_result"):
         try:
             # Get client IP address for logging
             client_ip = request.client.host if request.client else "unknown"
 
-            # Get or create composite
-            composite, composite_created, _ = composite_service.get_or_create_composite(
-                db, result_request.composite
-            )
+            # SECURITY: Only accept submissions for composites already in the database
+            # This prevents accidental pollution from local testing when users forget --no-submit
+            composite = db.query(Composite).filter(
+                Composite.current_composite == result_request.composite
+            ).first()
+
+            if not composite:
+                logger.warning(
+                    f"Submission rejected from {client_ip}: composite not in database "
+                    f"({result_request.composite[:20]}...)"
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Composite not found in database. Only registered composites can receive submissions. Use --no-submit for local testing."
+                )
 
             # Get parametrization from explicit parameter or parse from sigma string
             parametrization = result_request.parameters.parametrization

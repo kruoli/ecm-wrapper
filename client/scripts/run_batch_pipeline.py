@@ -32,6 +32,7 @@ from lib.arg_parser import parse_int_with_scientific
 from lib.ecm_executor import ECMWrapper
 from lib.result_processor import ResultProcessor
 from lib.results_builder import ResultsBuilder
+from lib.parsing_utils import ECMPatterns
 
 
 class PipelineStats:
@@ -187,6 +188,7 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
 
             # Skip stage 2 if factor found in stage 1
             stage2_time = 0.0
+            stage2_curves_completed = 0  # Initialize here to avoid unbound variable
             actual_b2 = 0 if stage1_factor else b2  # Set b2=0 when factor found in stage 1
 
             if stage1_factor:
@@ -209,12 +211,11 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
                 )
                 stage2_time = time.time() - stage2_start
 
-                # Extract factor, sigma, and curves completed from stage 2
-                stage2_factor = None
-                stage2_sigma = None
-                stage2_curves_completed = 0
-                if stage2_result:
-                    stage2_factor, stage2_sigma, stage2_curves_completed = stage2_result
+                # Extract results from stage 2
+                # Returns: (factor, all_factors, curves_completed, execution_time, sigma)
+                stage2_factor, _, stage2_curves_completed, _, stage2_sigma = stage2_result
+
+                if stage2_factor:
                     logger.info(f"[CPU Thread] [{idx}/{total}] Factor found in stage 2: {stage2_factor}")
                     stats.increment_factors()
                 else:
@@ -263,7 +264,7 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
                 # Extract parametrization from stage 1 output (reuse ecm-wrapper pattern)
                 parametrization = 3  # Default
                 if stage1_output:
-                    sigma_match = ecm_wrapper_module.ECMPatterns.SIGMA_COLON_FORMAT.search(stage1_output)
+                    sigma_match = ECMPatterns.SIGMA_COLON_FORMAT.search(stage1_output)
                     if sigma_match:
                         sigma_str = sigma_match.group(1)
                         if ':' in sigma_str:

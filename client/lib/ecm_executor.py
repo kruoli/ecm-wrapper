@@ -320,9 +320,14 @@ class ECMWrapper(BaseWrapper):
                     total_curves_completed += result['curves_completed']
 
                     if result['factor_found']:
-                        all_factors.append(result['factor_found'])
-                        all_sigmas.append(result.get('sigma_found'))
-                        self.logger.info(f"Worker {result['worker_id']} found factor: {result['factor_found']}")
+                        factor = result['factor_found']
+                        # Deduplicate: multiple workers can find the same factor
+                        if factor not in all_factors:
+                            all_factors.append(factor)
+                            all_sigmas.append(result.get('sigma_found'))
+                            self.logger.info(f"Worker {result['worker_id']} found factor: {factor}")
+                        else:
+                            self.logger.info(f"Worker {result['worker_id']} found same factor: {factor} (already recorded)")
                         stop_event.set()  # Signal workers to stop on factor found
 
                     # Collect raw output from each worker
@@ -411,10 +416,16 @@ class ECMWrapper(BaseWrapper):
         all_factors = []
         all_sigmas = []
         total_curves = 0
-        curve_history = []
+        curve_history = []  # Completed curves (for actual t-level)
 
         # Current t-level tracking
         current_t_level = config.start_t_level
+
+        # Projected t-level tracking (for GPU lookahead)
+        # This tracks what the t-level WILL BE once queued work completes
+        projected_lock = threading.Lock()
+        projected_curve_history = []  # Includes queued but not yet completed curves
+        projected_t_level = config.start_t_level
 
         # Build step targets
         step_targets = []
@@ -428,7 +439,7 @@ class ECMWrapper(BaseWrapper):
 
         def gpu_producer():
             """GPU thread: Run stage 1 for each batch, put residues in queue"""
-            nonlocal current_t_level
+            nonlocal projected_t_level
 
             self.logger.info(f"[GPU Thread] Starting, will process {len(step_targets)} t-level steps")
 
@@ -444,74 +455,107 @@ class ECMWrapper(BaseWrapper):
                     shutdown_event.set()
                     break
 
-                # Skip if already achieved
-                with result_lock:
-                    if current_t_level >= step_target:
-                        self.logger.info(f"[GPU Thread] Skipping t{step_target:.1f} (already at t{current_t_level:.2f})")
-                        continue
+                # Use PROJECTED t-level (includes queued but not completed work)
+                # This prevents over-producing curves when GPU is ahead of CPU
+                with projected_lock:
+                    current_projected = projected_t_level
+
+                # Skip if projected t-level already exceeds target
+                if current_projected >= step_target:
+                    self.logger.info(f"[GPU Thread] Skipping t{step_target:.1f} (projected t{current_projected:.2f} already exceeds)")
+                    continue
 
                 # Get optimal B1
                 b1, _ = get_optimal_b1_for_tlevel(step_target)
 
-                # Calculate curves needed
-                current_rounded = round(current_t_level)
-                target_rounded = round(step_target)
-                cache_key = (current_rounded, target_rounded, 3)  # Always use p=3 for GPU
+                # Calculate B2 based on multiplier (for two-stage mode)
+                b2_for_calculation = int(b1 * config.b2_multiplier)
 
-                curves = None
-                if cache_key in TLEVEL_TRANSITION_CACHE:
-                    cached_b1, cached_curves = TLEVEL_TRANSITION_CACHE[cache_key]
-                    if cached_b1 == b1:
-                        curves = cached_curves
-                        self.logger.info(f"[GPU Thread] Cached: t{current_rounded} → t{target_rounded} = {curves} curves at B1={b1}, p=3")
-                    else:
-                        curves = calculate_curves_to_target_direct(current_t_level, step_target, b1, 3)
-                else:
-                    curves = calculate_curves_to_target_direct(current_t_level, step_target, b1, 3)
+                # Calculate curves needed based on PROJECTED t-level
+                # Always use B2-aware calculation for two-stage mode (cache assumes default B2)
+                curves = calculate_curves_to_target_direct(
+                    current_projected, step_target, b1, 3, b2=b2_for_calculation
+                )
+                if curves:
+                    self.logger.info(f"[GPU Thread] B2-aware: t{current_projected:.2f} → t{step_target:.1f} = {curves} curves at B1={b1}, B2={b2_for_calculation}, p=3")
 
                 if curves is None or curves <= 0:
-                    self.logger.warning(f"[GPU Thread] Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, skipping")
+                    self.logger.warning(f"[GPU Thread] Could not calculate curves for t{current_projected:.3f} → t{step_target:.1f}, skipping")
                     continue
 
-                self.logger.info(f"[GPU Thread] Starting stage 1: {curves} curves at B1={b1} (t{current_t_level:.2f} → t{step_target:.1f})")
+                # Chunk large batches if max_batch_curves is set
+                # This allows the CPU to start processing sooner, potentially finding factors earlier
+                max_batch = config.max_batch_curves
+                remaining_curves = curves
+                batch_num = 0
 
-                # Create residue file
-                residue_file = Path(f"/tmp/tlevel_residue_{int(time.time() * 1000)}.txt")
+                while remaining_curves > 0:
+                    # Check for shutdown between batches
+                    if shutdown_event.is_set() or self.interrupted:
+                        self.logger.info(f"[GPU Thread] Stopping mid-step (shutdown or interrupt)")
+                        break
 
-                # Run stage 1
-                stage1_start = time.time()
-                try:
-                    stage1_success, stage1_factor, actual_curves, stage1_output, all_stage1_factors = self._run_stage1(
-                        composite=config.composite,
-                        b1=b1,
-                        curves=curves,
-                        residue_file=residue_file,
-                        use_gpu=True,
-                        verbose=config.verbose,
-                        gpu_device=None,
-                        gpu_curves=None
-                    )
-                    stage1_time = time.time() - stage1_start
+                    # Determine batch size
+                    batch_curves = min(remaining_curves, max_batch) if max_batch else remaining_curves
+                    batch_num += 1
 
-                    # Put work item in queue (blocks if queue is full)
-                    residue_queue.put({
-                        'residue_file': residue_file,
-                        'b1': b1,
-                        'b2': b1 * 100,  # Two-stage uses B1 * 100
-                        'curves': actual_curves,
-                        'stage1_factor': stage1_factor,
-                        'all_factors': all_stage1_factors,
-                        'stage1_time': stage1_time,
-                        'stage1_output': stage1_output,
-                        'step_target': step_target,
-                        'stage1_success': stage1_success
-                    })
+                    if max_batch and curves > max_batch:
+                        self.logger.info(f"[GPU Thread] Starting stage 1 batch {batch_num}: {batch_curves} curves at B1={b1} (projected t{current_projected:.2f} → t{step_target:.1f}, {remaining_curves} remaining)")
+                    else:
+                        self.logger.info(f"[GPU Thread] Starting stage 1: {batch_curves} curves at B1={b1} (projected t{current_projected:.2f} → t{step_target:.1f})")
 
-                    self.logger.info(f"[GPU Thread] Stage 1 complete in {stage1_time:.1f}s, passed to CPU thread")
+                    # Create residue file
+                    residue_file = Path(f"/tmp/tlevel_residue_{int(time.time() * 1000)}.txt")
 
-                except Exception as e:
-                    self.logger.error(f"[GPU Thread] Error in stage 1: {e}")
-                    continue
+                    # Run stage 1
+                    stage1_start = time.time()
+                    try:
+                        stage1_success, stage1_factor, actual_curves, stage1_output, all_stage1_factors = self._run_stage1(
+                            composite=config.composite,
+                            b1=b1,
+                            curves=batch_curves,
+                            residue_file=residue_file,
+                            use_gpu=True,
+                            verbose=config.verbose,
+                            gpu_device=None,
+                            gpu_curves=None
+                        )
+                        stage1_time = time.time() - stage1_start
+
+                        # Put work item in queue (blocks if queue is full)
+                        b2_for_batch = b1 * 100  # Two-stage uses B1 * 100
+                        residue_queue.put({
+                            'residue_file': residue_file,
+                            'b1': b1,
+                            'b2': b2_for_batch,
+                            'curves': actual_curves,
+                            'stage1_factor': stage1_factor,
+                            'all_factors': all_stage1_factors,
+                            'stage1_time': stage1_time,
+                            'stage1_output': stage1_output,
+                            'step_target': step_target,
+                            'stage1_success': stage1_success
+                        })
+
+                        # Update PROJECTED t-level to account for this queued batch
+                        # This prevents over-producing curves while CPU is still catching up
+                        with projected_lock:
+                            projected_curve_history.append(f"{actual_curves}@{b1},{int(b2_for_batch)},p=3")
+                            projected_t_level = calculate_tlevel(projected_curve_history)
+                            current_projected = projected_t_level  # Update for next iteration's logging
+                            self.logger.info(f"[GPU Thread] Stage 1 batch complete in {stage1_time:.1f}s, projected t-level now {projected_t_level:.2f}")
+
+                        # Decrement remaining
+                        remaining_curves -= actual_curves
+
+                        # If factor found, stop producing
+                        if stage1_factor:
+                            self.logger.info(f"[GPU Thread] Factor found in stage 1, stopping production")
+                            break
+
+                    except Exception as e:
+                        self.logger.error(f"[GPU Thread] Error in stage 1: {e}")
+                        break  # Exit the batch loop on error
 
             # Send sentinel
             self.logger.info("[GPU Thread] All batches complete, signaling CPU thread")

@@ -186,20 +186,65 @@ TLEVEL_TRANSITION_CACHE = {
 }
 
 
+def _query_tlevel_for_curves(curves: int, b1: int, b2: Optional[int], parametrization: int,
+                             base_tlevel: float, tlevel_binary: str) -> float:
+    """
+    Query what t-level N curves at B1,B2,param would achieve starting from base_tlevel.
+
+    Args:
+        curves: Number of curves
+        b1: B1 parameter
+        b2: B2 parameter (None = GMP-ECM default)
+        parametrization: ECM parametrization (0-3)
+        base_tlevel: Starting t-level
+        tlevel_binary: Path to t-level executable
+
+    Returns:
+        Resulting t-level
+    """
+    # Build curve string with explicit B2 if provided
+    if b2 is not None:
+        curve_str = f"{curves}@{b1},{b2},p={parametrization}"
+    else:
+        curve_str = f"{curves}@{b1},p={parametrization}"
+
+    try:
+        # Query t-level with starting work
+        stdout, _ = execute_subprocess_simple(
+            [tlevel_binary, '-w', str(base_tlevel), '-q', curve_str],
+            timeout=10
+        )
+
+        # Parse output: "t40.234"
+        match = re.search(r't([\d.]+)', stdout)
+        if match:
+            return float(match.group(1))
+
+        return base_tlevel  # No change on parse failure
+
+    except (FileNotFoundError, ValueError):
+        return base_tlevel
+
+
 def calculate_curves_to_target_direct(current_tlevel: float, target_tlevel: float,
                                       b1: int, parametrization: int = 1,
+                                      b2: Optional[int] = None,
                                       tlevel_binary: str = 'bin/t-level') -> Optional[int]:
     """
     Use t-level binary to calculate exact curves needed to reach target.
 
-    Calls t-level with -w (current work), -t (target), -b (B1), and -p (param)
-    to get the precise number of curves required.
+    When b2 is None, calls t-level with -w (current work), -t (target), -b (B1),
+    and -p (param) to get the precise number of curves required (assumes default B2).
+
+    When b2 is specified, uses binary search to find the curves needed for the
+    actual B2 value being used (important for two-stage mode with B2 = B1 * 100).
 
     Args:
         current_tlevel: Current t-level (e.g., 19.94)
         target_tlevel: Target t-level (e.g., 20.0)
         b1: B1 parameter for curves
         parametrization: ECM parametrization (0-4, default 1)
+        b2: B2 parameter (None = use default, otherwise use specified value)
         tlevel_binary: Path to t-level executable
 
     Returns:
@@ -213,6 +258,12 @@ def calculate_curves_to_target_direct(current_tlevel: float, target_tlevel: floa
     if current_tlevel >= target_tlevel:
         return None
 
+    # If B2 is specified, use binary search to find correct curve count
+    if b2 is not None:
+        return _calculate_curves_with_b2(current_tlevel, target_tlevel, b1, b2,
+                                         parametrization, tlevel_binary)
+
+    # Default behavior: use t-level suggestion mode (assumes default B2)
     try:
         # Call t-level binary with suggestion options
         stdout, _ = execute_subprocess_simple(
@@ -233,6 +284,67 @@ def calculate_curves_to_target_direct(current_tlevel: float, target_tlevel: floa
     except (FileNotFoundError, ValueError) as e:
         logger.error("Error calculating curves with t-level binary: %s", e)
         return None
+
+
+def _calculate_curves_with_b2(current_tlevel: float, target_tlevel: float,
+                              b1: int, b2: int, parametrization: int,
+                              tlevel_binary: str) -> Optional[int]:
+    """
+    Calculate curves needed using binary search with explicit B2.
+
+    This is needed for two-stage mode where B2 = B1 * 100 (weaker than default).
+
+    Args:
+        current_tlevel: Starting t-level
+        target_tlevel: Target t-level
+        b1: B1 parameter
+        b2: B2 parameter (explicit value)
+        parametrization: ECM parametrization
+        tlevel_binary: Path to t-level executable
+
+    Returns:
+        Number of curves needed
+    """
+    # Get initial estimate from default B2 calculation
+    try:
+        stdout, _ = execute_subprocess_simple(
+            [tlevel_binary, '-w', str(current_tlevel), '-t', str(target_tlevel),
+             '-b', str(b1), '-p', str(parametrization)],
+            timeout=10
+        )
+        match = re.search(r'(\d+)@', stdout)
+        initial_estimate = int(match.group(1)) if match else 100
+    except (FileNotFoundError, ValueError):
+        initial_estimate = 100
+
+    # Binary search to find correct curve count for the actual B2
+    # Start with a range around the initial estimate (weaker B2 needs more curves)
+    low = initial_estimate
+    high = initial_estimate * 3  # Weaker B2 might need up to 3x more curves
+
+    # First, ensure high is actually high enough
+    high_tlevel = _query_tlevel_for_curves(high, b1, b2, parametrization, current_tlevel, tlevel_binary)
+    while high_tlevel < target_tlevel:
+        high *= 2
+        high_tlevel = _query_tlevel_for_curves(high, b1, b2, parametrization, current_tlevel, tlevel_binary)
+        if high > initial_estimate * 10:  # Safety limit
+            logger.warning("Could not find curve count to reach t%.2f with B2=%d", target_tlevel, b2)
+            return high
+
+    # Binary search
+    while high - low > 1:
+        mid = (low + high) // 2
+        mid_tlevel = _query_tlevel_for_curves(mid, b1, b2, parametrization, current_tlevel, tlevel_binary)
+
+        if mid_tlevel >= target_tlevel:
+            high = mid
+        else:
+            low = mid
+
+    # Return high (guaranteed to reach target)
+    logger.debug("B2-aware calculation: %d curves at B1=%d, B2=%d to reach t%.2f",
+                 high, b1, b2, target_tlevel)
+    return high
 
 
 def get_b1_for_digit_length(digits: int) -> int:

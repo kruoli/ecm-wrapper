@@ -651,3 +651,46 @@ class APIClient:
 
         response = self._retry_with_exponential_backoff(f"Release residue {residue_id}", api_call)
         return response is not None
+
+    # ==================== Composite Status Methods ====================
+
+    def get_composite_status(self, composite: str) -> Optional[Dict[str, Any]]:
+        """
+        Query a composite's current status from the server.
+
+        Args:
+            composite: The composite number to query
+
+        Returns:
+            Dictionary with composite info:
+                - composite: Original number
+                - current_composite: Current unfactored portion
+                - digit_length: Number of digits
+                - target_t_level: Target t-level
+                - current_t_level: Current t-level progress
+                - status: 'composite', 'prime', or 'fully_factored'
+                - factors_found: List of known factors
+                - ecm_work: Summary of ECM work done
+            Returns None if composite not found or on error
+        """
+        url = f"{self.api_endpoint}/stats/{composite}"
+
+        try:
+            response = requests.get(url, timeout=self.timeout)
+
+            if response.status_code == 404:
+                self.logger.info(f"Composite not found in server database: {composite[:30]}...")
+                return None
+
+            response.raise_for_status()
+            data = response.json()
+
+            self.logger.info(
+                f"Got status for composite: {data['digit_length']} digits, "
+                f"t-level {data.get('current_t_level', 0):.1f}/{data.get('target_t_level', 0):.1f}"
+            )
+            return data
+
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Failed to get composite status: {e}")
+            return None

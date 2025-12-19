@@ -52,6 +52,8 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     parser.add_argument('--b2', type=parse_int_with_scientific, help='B2 bound (supports scientific notation, e.g., 4e11). Use -1 for GMP-ECM default, 0 for stage 1 only')
     parser.add_argument('--b2-multiplier', type=float, help='Dynamic B2 calculation: B2 = B1 * multiplier (e.g., 1000 for B2=1000*B1). Overridden by explicit --b2')
     parser.add_argument('--curves', '-c', type=int, help='Number of curves')
+    parser.add_argument('--max-batch', type=int,
+                       help='Max curves per GPU batch in two-stage t-level mode (enables chunking for earlier factor discovery)')
     parser.add_argument('--tlevel', '-t', type=float, nargs='?', const=-1.0,
                        help='Target t-level. If specified without a value, auto-calculates as 4/13 of digit length and runs progressively until factored.')
     parser.add_argument('--start-tlevel', type=float, help='Starting t-level (for resuming, requires --tlevel)')

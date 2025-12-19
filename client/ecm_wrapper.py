@@ -251,6 +251,8 @@ def main():
                 workers=args.workers or 1,
                 use_two_stage=args.two_stage or False,
                 progress_interval=args.progress_interval or 0,
+                max_batch_curves=getattr(args, 'max_batch', None),
+                b2_multiplier=getattr(args, 'b2_multiplier', None) or 100.0,
                 project=args.project,
                 no_submit=args.no_submit or False
             )
@@ -405,7 +407,8 @@ def main():
         # Add ECM parameters that aren't in FactorResult
         # b1 and method resolved at top of function for all modes
         results_dict['b1'] = b1
-        results_dict['b2'] = args.b2
+        # Stage1-only mode should always submit b2=0, not None
+        results_dict['b2'] = 0 if getattr(args, 'stage1_only', False) else args.b2
         results_dict['curves_requested'] = args.curves
         results_dict['parametrization'] = args.param or (3 if getattr(args, 'gpu', False) else 1)
 

@@ -161,6 +161,8 @@ class TLevelConfig(ECMConfigValidation):
     workers: int = 1  # Alias for threads (multiprocess support)
     use_two_stage: bool = False
     progress_interval: int = 0  # Show progress every N curves (0 = disabled)
+    max_batch_curves: Optional[int] = None  # Max curves per GPU batch (enables chunking for pipelined mode)
+    b2_multiplier: float = 100.0  # B2 = B1 * multiplier for two-stage mode (default 100)
 
     # API submission
     project: Optional[str] = None

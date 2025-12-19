@@ -4,10 +4,11 @@ ECM Client - Server-coordinated factorization work
 
 This entry point handles all server-coordinated ECM modes:
 - Auto-work with server-provided composites
+- Target a specific composite (--composite flag)
 - Stage 1 only (GPU producer): Upload residues to server
 - Stage 2 only (CPU consumer): Download and process residues from server
 
-All modes get composites from the server - no --composite flag needed.
+The client queries the server for t-level status and runs optimal curves.
 """
 
 import sys
@@ -29,6 +30,12 @@ Examples:
   # Auto-work with server defaults
   python3 ecm_client.py
 
+  # Target a specific composite (server provides t-level info)
+  python3 ecm_client.py --composite "123456789..."
+
+  # Target composite with multiprocess
+  python3 ecm_client.py --composite "123456789..." --multiprocess --workers 8
+
   # Process 10 work items with client-specified B1/B2
   python3 ecm_client.py --work-count 10 --b1 50000 --b2 5000000 --curves 100
 
@@ -39,6 +46,10 @@ Examples:
   python3 ecm_client.py --stage2-only --b2 11000000000000 --workers 8
 """
     )
+
+    # Composite targeting
+    parser.add_argument('--composite', type=str,
+                       help='Target a specific composite (queries server for t-level status)')
 
     # Work filtering
     parser.add_argument('--work-count', type=int,
@@ -63,6 +74,8 @@ Examples:
                        help='Dynamic B2 = B1 * multiplier (for stage2-only mode)')
     parser.add_argument('--curves', type=int,
                        help='Curves per batch')
+    parser.add_argument('--max-batch', type=int,
+                       help='Max curves per GPU batch in two-stage t-level mode (enables chunking for earlier factor discovery)')
     parser.add_argument('--method', choices=['ecm', 'pm1', 'pp1'], default='ecm',
                        help='Factorization method (default: ecm)')
 

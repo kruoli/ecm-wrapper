@@ -118,35 +118,43 @@ def is_probably_prime(n: int, trials: int = 10) -> bool:
     return True
 
 
-def calculate_tlevel(curve_history: List[str], tlevel_binary: str = 'bin/t-level') -> float:
+def calculate_tlevel(curve_history: List[str], tlevel_binary: str = 'bin/t-level',
+                     base_tlevel: float = 0.0) -> float:
     """
     Call t-level binary to calculate current t-level.
 
     Args:
         curve_history: List of curve strings like "100@1000000,p=1"
         tlevel_binary: Path to t-level executable
+        base_tlevel: Starting t-level to add to (uses -w flag)
 
     Returns:
-        Current t-level as float (0.0 on error)
+        Current t-level as float (0.0 on error, or base_tlevel if no curves)
 
     Example:
         >>> history = ["100@50000,p=1", "200@250000,p=1"]
         >>> t = calculate_tlevel(history)
         >>> t > 0
         True
+        >>> # With base t-level
+        >>> t = calculate_tlevel(["100@50000,p=1"], base_tlevel=35.0)
+        >>> t > 35.0
+        True
     """
     if not curve_history:
-        return 0.0
+        return base_tlevel
 
     # Join curve strings with semicolons
     curve_input = ";".join(curve_history)
 
     try:
         # Call t-level binary using unified subprocess utility
-        stdout, _ = execute_subprocess_simple(
-            [tlevel_binary, '-q', curve_input],
-            timeout=10
-        )
+        # Use -w to specify starting work if base_tlevel > 0
+        if base_tlevel > 0:
+            cmd = [tlevel_binary, '-w', str(base_tlevel), '-q', curve_input]
+        else:
+            cmd = [tlevel_binary, '-q', curve_input]
+        stdout, _ = execute_subprocess_simple(cmd, timeout=10)
 
         # Parse output: "t40.234"
         match = re.search(r't([\d.]+)', stdout)

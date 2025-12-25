@@ -497,6 +497,8 @@ class APIClient:
         min_digits: Optional[int] = None,
         max_digits: Optional[int] = None,
         min_priority: Optional[int] = None,
+        min_b1: Optional[int] = None,
+        max_b1: Optional[int] = None,
         claim_timeout_hours: int = 24
     ) -> Optional[Dict[str, Any]]:
         """
@@ -507,6 +509,8 @@ class APIClient:
             min_digits: Minimum composite digit length
             max_digits: Maximum composite digit length
             min_priority: Minimum composite priority
+            min_b1: Minimum B1 bound of residue
+            max_b1: Maximum B1 bound of residue
             claim_timeout_hours: Hours until claim expires
 
         Returns:
@@ -523,6 +527,10 @@ class APIClient:
             params['max_digits'] = max_digits
         if min_priority is not None:
             params['min_priority'] = min_priority
+        if min_b1 is not None:
+            params['min_b1'] = min_b1
+        if max_b1 is not None:
+            params['max_b1'] = max_b1
 
         try:
             response = requests.get(

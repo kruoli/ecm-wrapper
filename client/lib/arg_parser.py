@@ -73,8 +73,6 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     # Decoupled two-stage mode (stage 1 and stage 2 run separately)
     parser.add_argument('--stage1-only', action='store_true',
                        help='Run stage 1 only, submit results and upload residue file to server (GPU producer mode)')
-    parser.add_argument('--stage2-work', action='store_true',
-                       help='Request and process stage 2 work from server residue pool (CPU consumer mode)')
     parser.add_argument('--upload', action='store_true',
                        help='Upload residue file to server after stage 1 (for --stage1-only mode)')
 
@@ -105,7 +103,6 @@ def create_ecm_parser() -> argparse.ArgumentParser:
 
     # Residue file handling
     parser.add_argument('--save-residues', type=str, help='Save stage 1 residues with specified filename in configured residue_dir')
-    parser.add_argument('--resume-residues', type=str, help='Resume from existing residue file (skip stage 1)')
     parser.add_argument('--stage2-only', type=str, help='Run stage 2 only on residue file path')
 
     # Factor handling
@@ -156,8 +153,6 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
 
     # Decoupled two-stage mode validation
     if hasattr(args, 'stage1_only') and args.stage1_only:
-        if hasattr(args, 'stage2_work') and args.stage2_work:
-            errors['mode'] = "Cannot use both --stage1-only and --stage2-work"
         if hasattr(args, 'tlevel') and args.tlevel is not None:
             errors['tlevel'] = "--stage1-only not compatible with --tlevel. Use --b1/--curves instead."
         if args.b2 is not None and args.b2 != 0:
@@ -171,19 +166,6 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
         else:
             if not args.composite:
                 errors['composite'] = "--stage1-only without --auto-work requires --composite to be specified"
-
-    if hasattr(args, 'stage2_work') and args.stage2_work:
-        if hasattr(args, 'stage1_only') and args.stage1_only:
-            errors['mode'] = "Cannot use both --stage1-only and --stage2-work"
-        if not hasattr(args, 'auto_work') or not args.auto_work:
-            errors['auto_work'] = "--stage2-work requires --auto-work mode"
-        if args.composite:
-            errors['composite'] = "--stage2-work gets composites from residue pool. Do not specify --composite."
-        if args.b1 is not None:
-            errors['b1'] = "--stage2-work uses B1 from residue file. Do not specify --b1."
-        if args.curves is not None:
-            errors['curves'] = "--stage2-work uses curves from residue file. Do not specify --curves."
-        # B2 can be specified (client chooses B2), or use server suggestion
 
     # Auto-work mode validation (check first, before other modes)
     if hasattr(args, 'auto_work') and args.auto_work:
@@ -204,9 +186,7 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
                 errors['curves'] = "Two-stage mode: GPU batches curves automatically. Use --curves 1 or omit."
 
         # Multiprocess is allowed (works with t-level mode)
-        # Resume-residues and stage2-only not supported in auto-work
-        if args.resume_residues:
-            errors['resume_residues'] = "Auto-work mode not compatible with --resume-residues"
+        # stage2-only not supported in auto-work
         if args.stage2_only:
             errors['stage2_only'] = "Auto-work mode not compatible with --stage2-only"
 
@@ -248,23 +228,16 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
             errors['composite'] = "T-level mode requires composite number. Use --composite argument."
         if args.b1:
             errors['b1'] = "T-level mode automatically selects B1. Remove --b1 argument."
-        if args.stage2_only or args.resume_residues:
-            errors['mode'] = "T-level mode not compatible with stage2-only or resume-residues modes."
+        if args.stage2_only:
+            errors['mode'] = "T-level mode not compatible with --stage2-only mode."
 
     # Mode compatibility checks
     if args.multiprocess and args.two_stage:
         errors['mode'] = "Cannot use both --multiprocess and --two-stage. Choose one mode."
 
 
-    # Resume residues mode validation (check first, overrides other modes)
-    if args.resume_residues:
-        if args.composite:
-            errors['composite'] = "Resume residues mode - composite number not required (extracted from residue file)"
-        if not args.b2:
-            errors['b2'] = "Resume residues mode requires B2 bound. Use --b2 argument."
-
     # Stage 2 only mode validation
-    elif args.stage2_only:
+    if args.stage2_only:
         if args.composite:
             errors['composite'] = "Stage 2 only mode - composite number not required"
         if not args.b2:
@@ -287,8 +260,8 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
     elif args.multiprocess:
         if not args.composite:
             errors['composite'] = "Multiprocess mode requires composite number. Use --composite argument."
-        if args.save_residues or args.resume_residues:
-            errors['residues'] = "Residue options not applicable in multiprocess mode."
+        if args.save_residues:
+            errors['residues'] = "--save-residues not applicable in multiprocess mode."
 
 
     # Standard mode validation

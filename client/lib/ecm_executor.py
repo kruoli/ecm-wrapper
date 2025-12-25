@@ -510,7 +510,7 @@ class ECMWrapper(BaseWrapper):
                     # Run stage 1
                     stage1_start = time.time()
                     try:
-                        stage1_success, stage1_factor, actual_curves, stage1_output, all_stage1_factors = self._run_stage1(
+                        stage1_success, stage1_factor, _, stage1_output, all_stage1_factors = self._run_stage1(
                             composite=config.composite,
                             b1=b1,
                             curves=batch_curves,
@@ -521,6 +521,16 @@ class ECMWrapper(BaseWrapper):
                             gpu_curves=None
                         )
                         stage1_time = time.time() - stage1_start
+
+                        # Get ACTUAL curve count from residue file (GPU may run more than requested due to batch rounding)
+                        # The ECM output parsing only catches one batch, residue file has the real count
+                        if residue_file.exists():
+                            residue_info = self._parse_residue_file(residue_file)
+                            actual_curves = residue_info.get('curve_count', batch_curves)
+                            if actual_curves != batch_curves:
+                                self.logger.debug(f"[GPU Thread] Residue file has {actual_curves} curves (requested {batch_curves})")
+                        else:
+                            actual_curves = batch_curves  # Fallback if no residue (factor found?)
 
                         # Put work item in queue (blocks if queue is full)
                         b2_for_batch = b1 * 100  # Two-stage uses B1 * 100
@@ -541,7 +551,8 @@ class ECMWrapper(BaseWrapper):
                         # This prevents over-producing curves while CPU is still catching up
                         with projected_lock:
                             projected_curve_history.append(f"{actual_curves}@{b1},{int(b2_for_batch)},p=3")
-                            projected_t_level = calculate_tlevel(projected_curve_history)
+                            # Pass starting t-level so new curves add to base, not start from t0
+                            projected_t_level = calculate_tlevel(projected_curve_history, base_tlevel=config.start_t_level)
                             current_projected = projected_t_level  # Update for next iteration's logging
                             self.logger.info(f"[GPU Thread] Stage 1 batch complete in {stage1_time:.1f}s, projected t-level now {projected_t_level:.2f}")
 
@@ -603,7 +614,7 @@ class ECMWrapper(BaseWrapper):
                             total_curves += curves
                             # Track with B2=0 (stage 1 only)
                             curve_history.append(f"{curves}@{b1},0,p=3")
-                            current_t_level = calculate_tlevel(curve_history)
+                            current_t_level = calculate_tlevel(curve_history, base_tlevel=config.start_t_level)
 
                         # Signal GPU to stop
                         self.logger.info("[CPU Thread] Stopping GPU production (factor found)")
@@ -642,7 +653,7 @@ class ECMWrapper(BaseWrapper):
                             total_curves += curves_completed
                             # Track with actual B2
                             curve_history.append(f"{curves_completed}@{b1},{int(b2)},p=3")
-                            current_t_level = calculate_tlevel(curve_history)
+                            current_t_level = calculate_tlevel(curve_history, base_tlevel=config.start_t_level)
                             self.logger.info(f"[CPU Thread] Current t-level: {current_t_level:.2f}")
 
                             if all_stage2_factors:
@@ -899,7 +910,7 @@ class ECMWrapper(BaseWrapper):
 
                 # Update current t-level after this batch
                 try:
-                    current_t_level = calculate_tlevel(curve_history)
+                    current_t_level = calculate_tlevel(curve_history, base_tlevel=config.start_t_level)
                     self.logger.info(f"Current t-level: {current_t_level:.2f}")
                 except:
                     # If t-level calculation fails, approximate it

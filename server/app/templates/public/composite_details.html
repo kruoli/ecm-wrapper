@@ -81,7 +81,11 @@
     {% set target_t = composite.target_t_level if composite.target_t_level else 0 %}
     {% set progress_pct = (effective_t / target_t * 100) if target_t > 0 else 0 %}
     <div class="card">
-        <h2>T-Level Progress</h2>
+        <h2>T-Level Progress
+            {% if composite.prior_t_level %}
+            <span style="display: inline-block; margin-left: 10px; padding: 3px 8px; background: #17a2b8; color: white; border-radius: 4px; font-size: 0.6em; font-weight: bold; vertical-align: middle;">PRIOR T-LEVEL APPLIED</span>
+            {% endif %}
+        </h2>
         <table>
             {% if composite.prior_t_level %}
             <tr><th>Prior T-Level</th><td>t{{ composite.prior_t_level|round(2) }} <span style="color: #666; font-size: 0.85em;">(imported, no curve data)</span></td></tr>

@@ -226,7 +226,9 @@ class ResidueManager:
         client_id: str,
         min_digits: Optional[int] = None,
         max_digits: Optional[int] = None,
-        min_priority: Optional[int] = None
+        min_priority: Optional[int] = None,
+        min_b1: Optional[int] = None,
+        max_b1: Optional[int] = None
     ) -> Optional[ECMResidue]:
         """
         Find an available residue for stage 2 processing.
@@ -237,6 +239,8 @@ class ResidueManager:
             min_digits: Minimum composite digit size
             max_digits: Maximum composite digit size
             min_priority: Minimum composite priority
+            min_b1: Minimum B1 bound of residue
+            max_b1: Maximum B1 bound of residue
 
         Returns:
             ECMResidue if found, None otherwise
@@ -255,6 +259,10 @@ class ResidueManager:
             query = query.filter(Composite.digit_length <= max_digits)
         if min_priority is not None:
             query = query.filter(Composite.priority >= min_priority)
+        if min_b1 is not None:
+            query = query.filter(ECMResidue.b1 >= min_b1)
+        if max_b1 is not None:
+            query = query.filter(ECMResidue.b1 <= max_b1)
 
         # Prioritize by composite priority (descending), then by creation time (oldest first)
         query = query.order_by(

@@ -525,6 +525,8 @@ class Stage2ConsumerMode(WorkMode):
             min_digits=getattr(self.args, 'min_digits', None),
             max_digits=getattr(self.args, 'max_digits', None),
             min_priority=getattr(self.args, 'priority', None),
+            min_b1=getattr(self.args, 'min_b1', None),
+            max_b1=getattr(self.args, 'max_b1', None),
             claim_timeout_hours=24
         )
 

@@ -133,6 +133,8 @@ async def get_residue_work(
     min_digits: Optional[int] = Query(None, ge=1, description="Minimum composite digit size"),
     max_digits: Optional[int] = Query(None, ge=1, description="Maximum composite digit size"),
     min_priority: Optional[int] = Query(None, description="Minimum composite priority"),
+    min_b1: Optional[int] = Query(None, ge=1, description="Minimum B1 bound of residue"),
+    max_b1: Optional[int] = Query(None, ge=1, description="Maximum B1 bound of residue"),
     claim_timeout_hours: int = Query(24, ge=1, le=168, description="Hours until claim expires"),
     db: Session = Depends(get_db),
     residue_manager: ResidueManager = Depends(get_residue_manager)
@@ -148,6 +150,8 @@ async def get_residue_work(
         min_digits: Minimum composite digit size filter
         max_digits: Maximum composite digit size filter
         min_priority: Minimum composite priority filter
+        min_b1: Minimum B1 bound of residue
+        max_b1: Maximum B1 bound of residue
         claim_timeout_hours: Hours until claim expires
         db: Database session
 
@@ -161,7 +165,9 @@ async def get_residue_work(
             client_id=client_id,
             min_digits=min_digits,
             max_digits=max_digits,
-            min_priority=min_priority
+            min_priority=min_priority,
+            min_b1=min_b1,
+            max_b1=max_b1
         )
 
         if not residue:

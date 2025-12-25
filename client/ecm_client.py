@@ -94,6 +94,12 @@ Examples:
     stage_group.add_argument('--stage2-only', action='store_true',
                             help='Stage 2 only: download residue from server')
 
+    # Stage 2 filtering (for --stage2-only mode)
+    parser.add_argument('--min-b1', type=parse_int_with_scientific,
+                       help='Minimum B1 filter for --stage2-only (supports scientific notation, e.g., 11e6)')
+    parser.add_argument('--max-b1', type=parse_int_with_scientific,
+                       help='Maximum B1 filter for --stage2-only (supports scientific notation, e.g., 26e7)')
+
     # GPU/compute
     parser.add_argument('--gpu', action='store_true',
                        help='Use GPU acceleration')

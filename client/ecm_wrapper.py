@@ -36,8 +36,9 @@ def main():
     # Initialize user output handler
     output = UserOutput()
 
-    # Require --composite for local mode (not needed for auto-work which uses ecm_client.py)
-    if not args.composite:
+    # Require --composite for local mode, except for --stage2-only
+    # (--stage2-only extracts composite from residue file)
+    if not args.composite and not args.stage2_only:
         output.error("--composite is required for local/manual factorization")
         output.info("For server-coordinated work, use ecm_client.py instead")
         sys.exit(1)
@@ -123,7 +124,6 @@ def main():
             sys.exit(1)
 
         import time
-        from pathlib import Path
         residue_dir = Path("data/residues")
         residue_dir.mkdir(parents=True, exist_ok=True)
         save_path = args.save_residues or str(residue_dir / f"residue_{hash(args.composite) % 100000}_{int(time.time())}.txt")

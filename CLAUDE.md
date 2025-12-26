@@ -769,7 +769,37 @@ pylint *.py
 - **XSS protection**: Jinja2 auto-escaping with explicit `esc()` for HTML output
 
 ### Client Structure
-- **Main wrappers**: `client/ecm_wrapper.py`, `client/yafu_wrapper.py`
+
+#### Entry Points (Two Separate Scripts by Design)
+The client has two entry points for different use cases:
+
+| Script | Purpose | Composite Source | Residue Handling |
+|--------|---------|------------------|------------------|
+| `ecm_client.py` | Server-coordinated work | From server API | Upload/download via server |
+| `ecm_wrapper.py` | Local/manual factorization | `--composite` argument | Local files only |
+
+**`ecm_client.py`** - Server-coordinated modes:
+- Auto-work: Continuously requests work from server
+- `--composite`: Target specific composite (server provides t-level info)
+- `--stage1-only`: Upload residues to server
+- `--stage2-only`: Download residues from server (with `--min-b1`/`--max-b1` filters)
+
+**`ecm_wrapper.py`** - Local/manual modes:
+- Requires `--composite` argument
+- `--stage2-only <file>`: Process a local residue file
+- `--stage1-only` with `--upload`: Save locally and optionally upload
+
+#### Parser Architecture
+Both entry points use parsers defined in `lib/arg_parser.py`:
+- `create_client_parser()` - For `ecm_client.py` (server-coordinated)
+- `create_ecm_parser()` - For `ecm_wrapper.py` (local/manual)
+- `create_yafu_parser()` - For `yafu_wrapper.py`
+
+Note: `--stage2-only` has different semantics in each parser:
+- In `create_client_parser()`: Boolean flag (downloads from server)
+- In `create_ecm_parser()`: String path to local residue file
+
+#### Other Files
 - **Configuration**: `client/client.yaml` - Binary paths and API settings
 - **Base classes**: `client/lib/base_wrapper.py` - Shared wrapper functionality
 - **Utilities**: `client/lib/` - Implementation modules (parsing, configuration, execution engine)

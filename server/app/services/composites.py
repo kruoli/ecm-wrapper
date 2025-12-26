@@ -125,13 +125,14 @@ class CompositeService:
                 existing.is_active = is_active
                 updated = True
 
-            # prior_t_level is only set if currently NULL (immutable once set)
-            if prior_t_level is not None and existing.prior_t_level is None:
+            # Update prior_t_level if provided
+            if prior_t_level is not None and existing.prior_t_level != prior_t_level:
+                old_value = existing.prior_t_level
                 existing.prior_t_level = prior_t_level
                 updated = True
                 logger.info(
-                    "Set prior_t_level=%.1f for composite %s",
-                    prior_t_level, existing.id
+                    "Updated prior_t_level %.1f -> %.1f for composite %s",
+                    old_value or 0, prior_t_level, existing.id
                 )
 
             if updated:
@@ -465,8 +466,11 @@ class CompositeService:
                 ECMAttempt.superseded_by.is_(None)
             ).all()
 
-            # Calculate current t-level
-            current_t_level = self.t_level_calculator.get_current_t_level_from_attempts(ecm_attempts)
+            # Calculate current t-level, starting from prior_t_level if set
+            starting_t = composite.prior_t_level or 0.0
+            current_t_level = self.t_level_calculator.get_current_t_level_from_attempts(
+                ecm_attempts, starting_t_level=starting_t
+            )
 
             # Recalculate target t-level based on current composite length and SNFS data
             target_t_level = self.t_level_calculator.calculate_target_t_level(
@@ -754,9 +758,8 @@ class CompositeService:
                 'has_snfs_form': composite.has_snfs_form,
                 'snfs_difficulty': composite.snfs_difficulty,
                 'target_t_level': composite.target_t_level,
-                'current_t_level': composite.current_t_level,
+                'current_t_level': composite.current_t_level,  # Includes prior_t_level if set
                 'prior_t_level': composite.prior_t_level,
-                'effective_t_level': composite.effective_t_level,
                 'priority': composite.priority,
                 'is_prime': composite.is_prime,
                 'is_fully_factored': composite.is_fully_factored,

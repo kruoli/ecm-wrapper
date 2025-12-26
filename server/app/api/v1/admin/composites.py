@@ -150,7 +150,9 @@ async def bulk_add_composites_structured(
                 'snfs_difficulty': c.snfs_difficulty,
                 'priority': c.priority if c.priority is not None else request.default_priority,
                 'is_prime': c.is_prime,
-                'is_fully_factored': c.is_fully_factored
+                'is_fully_factored': c.is_fully_factored,
+                'is_active': c.is_active,
+                'prior_t_level': c.prior_t_level
             }
             for c in request.composites
         ]
@@ -219,7 +221,7 @@ async def find_composite(
     )
 
 
-@router.get("/composites/{composite_id}")
+@router.get("/composites/{composite_id:int}")
 async def get_composite_details(
     composite_id: int,
     db: Session = Depends(get_db),
@@ -234,7 +236,7 @@ async def get_composite_details(
     return details
 
 
-@router.get("/composites/{composite_id}/details", response_class=HTMLResponse)
+@router.get("/composites/{composite_id:int}/details", response_class=HTMLResponse)
 async def get_composite_details_page(
     composite_id: int,
     request: Request,
@@ -265,7 +267,7 @@ async def get_composite_details_page(
     })
 
 
-@router.put("/composites/{composite_id}/priority")
+@router.put("/composites/{composite_id:int}/priority")
 async def set_composite_priority(
     composite_id: int,
     priority: int,
@@ -288,7 +290,7 @@ async def set_composite_priority(
     }
 
 
-@router.post("/composites/{composite_id}/complete")
+@router.post("/composites/{composite_id:int}/complete")
 async def mark_composite_complete(
     composite_id: int,
     reason: str = "manual",
@@ -311,7 +313,7 @@ async def mark_composite_complete(
     }
 
 
-@router.put("/composites/{composite_id}/activate")
+@router.put("/composites/{composite_id:int}/activate")
 async def activate_composite(
     composite_id: int,
     db: Session = Depends(get_db),
@@ -333,7 +335,7 @@ async def activate_composite(
     }
 
 
-@router.put("/composites/{composite_id}/deactivate")
+@router.put("/composites/{composite_id:int}/deactivate")
 async def deactivate_composite(
     composite_id: int,
     db: Session = Depends(get_db),
@@ -391,7 +393,7 @@ async def bulk_activate_composites(
     }
 
 
-@router.delete("/composites/{composite_id}")
+@router.delete("/composites/{composite_id:int}")
 async def remove_composite(
     composite_id: int,
     reason: str = "admin_removal",

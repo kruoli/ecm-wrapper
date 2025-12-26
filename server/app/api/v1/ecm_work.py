@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy import and_, or_
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 import uuid
@@ -89,16 +89,14 @@ async def get_ecm_work(
             return Response(content=content, media_type="application/json")
 
         # Build query for suitable composites
-        # Note: We filter by effective_t_level (prior + current) < target_t_level
-        # This uses a SQL expression since effective_t_level is a Python property
+        # current_t_level now includes prior_t_level (calculated using -w flag)
         query = db.query(Composite).filter(
             and_(
                 Composite.is_active == True,  # Only assign active composites
                 Composite.is_fully_factored == False,
                 or_(Composite.is_prime.is_(None), Composite.is_prime == False),
                 Composite.target_t_level.isnot(None),
-                # Use COALESCE to handle NULL prior_t_level (treated as 0)
-                (func.coalesce(Composite.prior_t_level, 0) + Composite.current_t_level) < Composite.target_t_level
+                Composite.current_t_level < Composite.target_t_level
             )
         )
 
@@ -164,11 +162,11 @@ async def get_ecm_work(
 
         # Calculate suggested ECM parameters using t-level targeting
         # Note: target_t_level is guaranteed non-None by the filter above
-        # Use effective_t_level (prior + current) for parameter suggestions
+        # current_t_level now includes prior_t_level
         try:
             suggestion = t_level_calc.suggest_next_ecm_parameters(
                 composite.target_t_level or 0.0,  # Default to 0 if None (shouldn't happen due to filter)
-                composite.effective_t_level,  # Use effective (prior + current) for accurate targeting
+                composite.current_t_level,  # Includes prior_t_level
                 composite.digit_length
             )
 
@@ -202,22 +200,22 @@ async def get_ecm_work(
         db.add(work_assignment)
         db.flush()
 
-        effective_t = composite.effective_t_level
         prior_t = composite.prior_t_level
+        current_t = composite.current_t_level
 
         if prior_t:
             logger.info(f"Created ECM work assignment {work_id} for client {client_id}: "
                        f"{composite.digit_length}-digit composite, "
-                       f"t{effective_t:.1f} → t{composite.target_t_level:.1f} "
-                       f"(prior: t{prior_t:.1f}, verified: t{composite.current_t_level:.1f})")
+                       f"t{current_t:.1f} → t{composite.target_t_level:.1f} "
+                       f"(includes prior: t{prior_t:.1f})")
         else:
             logger.info(f"Created ECM work assignment {work_id} for client {client_id}: "
                        f"{composite.digit_length}-digit composite, "
-                       f"t{composite.current_t_level:.1f} → t{composite.target_t_level:.1f}")
+                       f"t{current_t:.1f} → t{composite.target_t_level:.1f}")
 
         # Build message based on work type strategy
         if work_type == "progressive":
-            message = f"Assigned composite with least ECM work (t{effective_t:.1f})"
+            message = f"Assigned composite with least ECM work (t{current_t:.1f})"
         else:
             message = f"Assigned easiest incomplete composite (target: t{composite.target_t_level:.1f})"
 
@@ -226,9 +224,8 @@ async def get_ecm_work(
             "composite_id": composite.id,
             "composite": composite.current_composite,
             "digit_length": composite.digit_length,
-            "current_t_level": composite.current_t_level,
+            "current_t_level": current_t,
             "prior_t_level": prior_t,
-            "effective_t_level": effective_t,
             "target_t_level": composite.target_t_level,
             "expires_at": expires_at.isoformat() if expires_at else None,
             "message": message

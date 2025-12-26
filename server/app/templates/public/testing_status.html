@@ -315,10 +315,10 @@
                                     <div class="progress-bar" style="width: {{ [comp.progress_pct, 100]|min }}%; background-color: {{ '#28a745' if comp.progress_pct >= 100 else '#ffc107' if comp.progress_pct >= 50 else '#dc3545' }}"></div>
                                 </div>
                                 <span class="small-text" style="font-weight: bold;">
-                                    t{{ (comp.effective_t_level or 0)|round(1) }}/t{{ (comp.target_t_level or 0)|round(1) }}
+                                    t{{ (comp.current_t_level or 0)|round(1) }}/t{{ (comp.target_t_level or 0)|round(1) }}
                                 </span>
                                 {% if comp.prior_t_level %}
-                                <span style="display: inline-block; padding: 1px 5px; background: #17a2b8; color: white; border-radius: 3px; font-size: 0.7em; font-weight: bold; cursor: help;" title="Prior: t{{ comp.prior_t_level|round(1) }} + Verified: t{{ (comp.current_t_level or 0)|round(1) }}">+PRIOR</span>
+                                <span style="display: inline-block; padding: 1px 5px; background: #17a2b8; color: white; border-radius: 3px; font-size: 0.7em; font-weight: bold; cursor: help;" title="Includes prior work: t{{ comp.prior_t_level|round(1) }}">+PRIOR</span>
                                 {% endif %}
                             </div>
                         </td>

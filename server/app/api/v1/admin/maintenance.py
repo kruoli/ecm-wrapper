@@ -3,7 +3,6 @@ Maintenance and system administration routes.
 """
 import logging
 import threading
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -81,11 +80,15 @@ async def calculate_t_levels_for_all_composites(
                     composite.target_t_level = target_t
 
                 # Recalculate current t-level from existing attempts
+                # Use prior_t_level as starting point if set
                 previous_attempts = db.query(ECMAttempt).filter(
                     ECMAttempt.composite_id == composite.id
                 ).all()
 
-                current_t = calculator.get_current_t_level_from_attempts(previous_attempts)
+                starting_t = composite.prior_t_level or 0.0
+                current_t = calculator.get_current_t_level_from_attempts(
+                    previous_attempts, starting_t_level=starting_t
+                )
                 if current_t != composite.current_t_level:
                     composite.current_t_level = current_t
                     current_t_updated += 1
@@ -148,25 +151,26 @@ def _recalculate_all_t_levels_background():
                 composite.target_t_level = target_t
 
                 # Recalculate current t-level from existing attempts
+                # Use prior_t_level as starting point if set
                 previous_attempts = db.query(ECMAttempt).filter(
                     ECMAttempt.composite_id == composite.id
                 ).all()
 
-                current_t = calculator.get_current_t_level_from_attempts(previous_attempts)
+                starting_t = composite.prior_t_level or 0.0
+                current_t = calculator.get_current_t_level_from_attempts(
+                    previous_attempts, starting_t_level=starting_t
+                )
                 if current_t != composite.current_t_level:
                     composite.current_t_level = current_t
                     current_t_updated += 1
 
                 updated_count += 1
 
-                # Commit very frequently and yield to allow other requests
-                if idx % 5 == 0:
+                # Commit periodically to avoid huge transactions
+                if idx % 100 == 0:
                     db.commit()
                     _recalculation_status["progress"] = idx
                     logger.info(f"T-level recalculation progress: {idx}/{len(composites)}")
-
-                    # Sleep briefly to yield control and allow other requests to process
-                    time.sleep(0.1)
 
             except Exception as e:
                 logger.warning(f"Failed to update composite {composite.id}: {e}")
@@ -264,7 +268,7 @@ async def get_recalculation_status(
     }
 
 
-@router.post("/composites/{composite_id}/recalculate-t-level")
+@router.post("/composites/{composite_id:int}/recalculate-t-level")
 async def recalculate_single_composite_t_level(
     composite_id: int,
     db: Session = Depends(get_db),

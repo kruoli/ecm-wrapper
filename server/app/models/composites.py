@@ -23,13 +23,8 @@ class Composite(Base, TimestampMixin):
 
     # T-level ECM progress tracking
     target_t_level: Mapped[Optional[float]] = mapped_column(Float, nullable=True, index=True)  # Target t-level to achieve
-    current_t_level: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)  # Current t-level achieved from work in this system
-    prior_t_level: Mapped[Optional[float]] = mapped_column(Float, nullable=True, index=True)  # T-level from work done before import (immutable)
-
-    @property
-    def effective_t_level(self) -> float:
-        """Combined t-level from prior work and current work in this system."""
-        return (self.prior_t_level or 0.0) + self.current_t_level
+    current_t_level: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)  # Current t-level achieved (includes prior_t_level if set)
+    prior_t_level: Mapped[Optional[float]] = mapped_column(Float, nullable=True, index=True)  # T-level from work done before import
 
     # Work priority
     priority: Mapped[int] = mapped_column(default=0, nullable=False, index=True)

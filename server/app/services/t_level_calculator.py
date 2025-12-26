@@ -266,33 +266,44 @@ class TLevelCalculator:
         # Add more pattern-based detection as needed
         return None
 
-    def get_current_t_level_from_attempts(self, attempts: list) -> float:
+    def get_current_t_level_from_attempts(self, attempts: list,
+                                          starting_t_level: float = 0.0) -> float:
         """
         Calculate current t-level achieved from previous ECM attempts.
 
         Args:
             attempts: List of ECMAttempt objects with curves_completed, b1, b2, method
+            starting_t_level: Base t-level to start from (e.g., prior work done before import)
 
         Returns:
-            Current t-level achieved
+            Current t-level achieved (includes starting_t_level)
         """
         if not attempts:
-            return 0.0
+            return starting_t_level
 
         # Filter for ECM attempts only
         ecm_attempts = [a for a in attempts if a.method == 'ecm']
 
         if not ecm_attempts:
-            return 0.0
+            return starting_t_level
 
         # Use external t-level software if available
         if self.t_level_available:
-            return self._calculate_t_level_external(ecm_attempts)
+            return self._calculate_t_level_external(ecm_attempts, starting_t_level)
         else:
-            return self._calculate_t_level_estimate(ecm_attempts)
+            return self._calculate_t_level_estimate(ecm_attempts, starting_t_level)
 
-    def _calculate_t_level_external(self, attempts: list) -> float:
-        """Calculate t-level using external t-level software."""
+    def _calculate_t_level_external(self, attempts: list,
+                                      starting_t_level: float = 0.0) -> float:
+        """Calculate t-level using external t-level software.
+
+        Args:
+            attempts: List of ECMAttempt objects
+            starting_t_level: Base t-level to start from (uses -w flag)
+
+        Returns:
+            Calculated t-level (includes starting_t_level)
+        """
         try:
             # Convert attempts to curve string format for t-level executable
             curve_strings = []
@@ -316,47 +327,60 @@ class TLevelCalculator:
                     curve_strings.append(curve_str)
 
             if not curve_strings:
-                return 0.0
+                return starting_t_level
 
             # Join with semicolons for multiple entries
             input_string = ";".join(curve_strings)
 
+            # Build command args - use -w flag if we have a starting t-level
+            if starting_t_level > 0:
+                args = ["-w", str(starting_t_level), "-q", input_string]
+            else:
+                args = ["-q", input_string]
+
             # Call external t-level calculator using executor
             success, output = self.executor.execute_and_get_last_line(
-                args=["-q", input_string],
+                args=args,
                 timeout=30
             )
 
             if not success or not output:
-                return 0.0
+                return starting_t_level
 
             # Parse output: expected format is "t45.185"
             if output.startswith('t'):
                 t_level = float(output[1:])  # Remove 't' prefix and convert to float
-                logger.info(f"External t-level calculation: {input_string} -> {output}")
+                if starting_t_level > 0:
+                    logger.info(f"External t-level calculation (starting from t{starting_t_level}): {input_string} -> {output}")
+                else:
+                    logger.info(f"External t-level calculation: {input_string} -> {output}")
                 return t_level
             else:
                 logger.warning(f"Unexpected t-level output format: {output}")
-                return 0.0
+                return starting_t_level
 
         except Exception as e:
             logger.warning(f"External t-level calculation failed: {e}")
-            return 0.0
+            return starting_t_level
 
-    def _calculate_t_level_estimate(self, attempts: list) -> float:
+    def _calculate_t_level_estimate(self, attempts: list,
+                                     starting_t_level: float = 0.0) -> float:
         """
         Fallback t-level estimation when external calculator unavailable.
 
-        Returns 0.0 for now - proper calculation requires the external t-level binary.
+        Returns starting_t_level for now - proper calculation requires the external t-level binary.
         """
         # Without proper probability tables, any estimate would be misleading
-        # Better to return 0.0 and rely on the external calculator
-        logger.info("Using fallback t-level estimation (returns 0.0)")
-        return 0.0
+        # Better to return starting_t_level and rely on the external calculator
+        logger.info("Using fallback t-level estimation (returns starting_t_level)")
+        return starting_t_level
 
     def recalculate_composite_t_level(self, db, composite) -> float:
         """
         Recalculate the t-level for a composite based on all its ECM attempts.
+
+        Uses prior_t_level as the starting point (work done before import),
+        then adds the t-level contribution from ECM attempts in this system.
 
         Excludes attempts that have been superseded (e.g., stage 1 attempts
         that were replaced by full stage 1+2 attempts).
@@ -366,7 +390,7 @@ class TLevelCalculator:
             composite: Composite model instance
 
         Returns:
-            Updated t-level value
+            Updated t-level value (includes prior_t_level)
         """
         from ..models.attempts import ECMAttempt
 
@@ -376,14 +400,20 @@ class TLevelCalculator:
             ECMAttempt.superseded_by.is_(None)  # Exclude superseded attempts
         ).all()
 
-        # Calculate new t-level
-        new_t_level = self.get_current_t_level_from_attempts(attempts)
+        # Use prior_t_level as starting point (work done before import)
+        starting_t_level = composite.prior_t_level or 0.0
+
+        # Calculate new t-level, starting from prior work
+        new_t_level = self.get_current_t_level_from_attempts(attempts, starting_t_level)
 
         # Update composite
         composite.current_t_level = new_t_level
         db.flush()  # Make changes visible within transaction
 
-        logger.info(f"Recalculated t-level for composite {composite.id}: {new_t_level}")
+        if starting_t_level > 0:
+            logger.info(f"Recalculated t-level for composite {composite.id}: t{new_t_level:.2f} (starting from prior t{starting_t_level:.2f})")
+        else:
+            logger.info(f"Recalculated t-level for composite {composite.id}: t{new_t_level:.2f}")
         return new_t_level
 
     def suggest_next_ecm_parameters(self, target_t_level: float,

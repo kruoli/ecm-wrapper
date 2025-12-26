@@ -8,12 +8,13 @@ Provides reusable dependencies for:
 """
 
 import secrets
+from typing import Optional
 from fastapi import Header, HTTPException, status, Depends
 from .config import get_settings
 
 settings = get_settings()
 
-async def verify_admin_key(x_admin_key: str = Header(None)):
+async def verify_admin_key(x_admin_key: Optional[str] = Header(None)):
     """
     Dependency to verify admin API key from header.
 

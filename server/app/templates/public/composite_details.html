@@ -77,9 +77,9 @@
         </table>
     </div>
 
-    {% set effective_t = composite.effective_t_level %}
+    {% set current_t = composite.current_t_level or 0 %}
     {% set target_t = composite.target_t_level if composite.target_t_level else 0 %}
-    {% set progress_pct = (effective_t / target_t * 100) if target_t > 0 else 0 %}
+    {% set progress_pct = (current_t / target_t * 100) if target_t > 0 else 0 %}
     <div class="card">
         <h2>T-Level Progress
             {% if composite.prior_t_level %}
@@ -88,12 +88,9 @@
         </h2>
         <table>
             {% if composite.prior_t_level %}
-            <tr><th>Prior T-Level</th><td>t{{ composite.prior_t_level|round(2) }} <span style="color: #666; font-size: 0.85em;">(imported, no curve data)</span></td></tr>
-            <tr><th>Verified T-Level</th><td>t{{ (composite.current_t_level or 0)|round(2) }} <span style="color: #666; font-size: 0.85em;">(from curves in this system)</span></td></tr>
-            <tr><th>Effective T-Level</th><td><strong>t{{ effective_t|round(2) }}</strong> <span style="color: #666; font-size: 0.85em;">(prior + verified)</span></td></tr>
-            {% else %}
-            <tr><th>Current T-Level</th><td>t{{ effective_t|round(2) }}</td></tr>
+            <tr><th>Prior T-Level</th><td>t{{ composite.prior_t_level|round(2) }} <span style="color: #666; font-size: 0.85em;">(imported from previous work)</span></td></tr>
             {% endif %}
+            <tr><th>Current T-Level</th><td><strong>t{{ current_t|round(2) }}</strong>{% if composite.prior_t_level %} <span style="color: #666; font-size: 0.85em;">(includes prior work)</span>{% endif %}</td></tr>
             <tr><th>Target T-Level</th><td>t{{ target_t|round(2) }}</td></tr>
             <tr><th>Progress</th><td>
                 <div class="progress-bar-container">

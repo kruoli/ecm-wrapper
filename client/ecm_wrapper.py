@@ -73,6 +73,8 @@ def main():
 
     # Detect mode and execute
     result = None
+    # Track composite for submission - may come from args or residue file
+    composite = args.composite
 
     # Stage 2 Only Mode - load residue from local file
     # Note: --stage2-only contains the residue file path
@@ -86,16 +88,19 @@ def main():
             output.error(f"Residue file not found: {args.stage2_only}")
             sys.exit(1)
 
+        # Parse residue file for B1 and composite
+        residue_info = wrapper._parse_residue_file(residue_path)
+        b1 = residue_info.get('b1', 0)
+        composite_from_residue = residue_info.get('composite', 'unknown')
+        composite = composite_from_residue  # Use for submission
+
         output.mode_header("Stage 2 Only Mode", {
             "Residue": args.stage2_only,
-            "Composite": args.composite,
+            "Composite": composite_from_residue[:40] + "..." if len(composite_from_residue) > 40 else composite_from_residue,
             "B2": args.b2,
             "Workers": workers
         })
 
-        # Parse residue file for B1
-        residue_info = wrapper._parse_residue_file(residue_path)
-        b1 = residue_info.get('b1', 0)
         if b1 == 0:
             output.warning("Could not parse B1 from residue file, using 0")
 
@@ -105,7 +110,8 @@ def main():
             b1=b1,
             b2=args.b2,
             workers=workers,
-            verbose=args.verbose or False
+            verbose=args.verbose or False,
+            progress_interval=args.progress_interval or 0
         )
 
         # Build FactorResult
@@ -402,7 +408,7 @@ def main():
     # so we skip post-execution submission for those modes to avoid double submission
     mode_handles_own_submission = args.tlevel or args.two_stage
     if result and not args.no_submit and not mode_handles_own_submission:
-        results_dict = result.to_dict(args.composite, method)
+        results_dict = result.to_dict(composite, method)
 
         # Add ECM parameters that aren't in FactorResult
         # b1 and method resolved at top of function for all modes

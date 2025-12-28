@@ -339,7 +339,9 @@ New `colab_setup.ipynb` notebook for running ECM client in Google Colab:
 ## Minimal Database Schema
 
 Essential tables for ECM coordination:
-- `composites`: Numbers with t-level progress (id, number, digit_length, target_t_level, current_t_level, is_prime, is_fully_factored, priority)
+- `composites`: Numbers with t-level progress (id, number, digit_length, target_t_level, current_t_level, prior_t_level, is_prime, is_fully_factored, priority)
+  - `prior_t_level`: Work done before import (used as starting point for t-level calculations via `-w` flag)
+  - `current_t_level`: Actual combined t-level including prior work (calculated properly, not simple addition)
 - `ecm_attempts`: Individual ECM curve attempts with B1/B2 parameters and parametrization (0-3)
   - `superseded_by`: Links stage 1 attempt to stage 2 that replaced it (for decoupled two-stage)
 - `ecm_residues`: Stage 1 residue files for decoupled two-stage ECM (NEW 2025-11)
@@ -362,6 +364,10 @@ Essential tables for ECM coordination:
   - Parametrization 3: Twisted Edwards curves (GPU default)
 - **ecm_attempts.superseded_by**: When stage 2 completes, stage 1 attempt is marked as superseded
   - T-level calculator excludes superseded attempts to avoid double-counting
+- **composites.prior_t_level**: T-level work done before import into the system
+  - Used as starting point via `-w` flag when calculating current t-level
+  - T-levels are logarithmic/probabilistic, not additive (t40 + t40 ≈ t41, not t80)
+  - `current_t_level` represents the true combined t-level from prior + new work
 - **factors.sigma**: Sigma value that found the factor (for reproducibility)
 - **ecm_attempts.b2**: Can be NULL (use GMP-ECM default) or 0 (stage 1 only)
 

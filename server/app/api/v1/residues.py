@@ -40,12 +40,15 @@ async def upload_residue(
     file: UploadFile = File(..., description="ECM residue file from stage 1"),
     client_id: str = Header(..., alias="X-Client-ID", description="Client identifier"),
     stage1_attempt_id: Optional[int] = Query(None, description="ID of stage 1 ECM attempt to link"),
-    expiry_days: int = Query(7, ge=1, le=30, description="Days until residue expires"),
     db: Session = Depends(get_db),
     residue_manager: ResidueManager = Depends(get_residue_manager)
 ):
     """
     Upload a residue file after completing stage 1 ECM.
+
+    Residues don't expire by time - they remain available until:
+    - The composite is fully factored
+    - A stage 2 worker completes processing them
 
     The server parses the file to extract:
     - Composite number (N=)
@@ -57,7 +60,6 @@ async def upload_residue(
         file: The residue file content
         client_id: ID of the uploading client (header)
         stage1_attempt_id: Optional ID of the stage 1 attempt for supersession tracking
-        expiry_days: Days until residue expires if not consumed
         db: Database session
 
     Returns:
@@ -87,8 +89,7 @@ async def upload_residue(
                 db=db,
                 file_content=content,
                 client_id=client_id,
-                stage1_attempt_id=stage1_attempt_id,
-                expiry_days=expiry_days
+                stage1_attempt_id=stage1_attempt_id
             )
 
             # Get composite for response
@@ -109,7 +110,6 @@ async def upload_residue(
                 parametrization=residue.parametrization,
                 curve_count=residue.curve_count,
                 file_size_bytes=residue.file_size_bytes,
-                expires_at=residue.expires_at,
                 message=f"Residue uploaded successfully. {residue.curve_count} curves ready for stage 2."
             )
 
@@ -135,7 +135,7 @@ async def get_residue_work(
     min_priority: Optional[int] = Query(None, description="Minimum composite priority"),
     min_b1: Optional[int] = Query(None, ge=1, description="Minimum B1 bound of residue"),
     max_b1: Optional[int] = Query(None, ge=1, description="Maximum B1 bound of residue"),
-    claim_timeout_hours: int = Query(24, ge=1, le=168, description="Hours until claim expires"),
+    claim_timeout_hours: int = Query(72, ge=1, le=336, description="Hours until claim expires (default 72h/3 days)"),
     db: Session = Depends(get_db),
     residue_manager: ResidueManager = Depends(get_residue_manager)
 ):
@@ -152,7 +152,7 @@ async def get_residue_work(
         min_priority: Minimum composite priority filter
         min_b1: Minimum B1 bound of residue
         max_b1: Maximum B1 bound of residue
-        claim_timeout_hours: Hours until claim expires
+        claim_timeout_hours: Hours until claim expires (default 72h/3 days, max 14 days)
         db: Database session
 
     Returns:

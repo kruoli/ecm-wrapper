@@ -75,16 +75,19 @@ async def delete_residue(
 
 
 @router.post("/residues/cleanup")
-async def cleanup_expired_residues(
+async def cleanup_residues(
     db: Session = Depends(get_db),
     _admin: bool = Depends(verify_admin_key),
     residue_manager: ResidueManager = Depends(get_residue_manager)
 ):
     """
-    Manually trigger cleanup of expired residues.
+    Manually trigger cleanup of residues.
 
-    This removes residues that have expired (expires_at < now)
-    and deletes their associated files.
+    This performs two types of cleanup:
+    1. Releases expired claims (claims that timed out without completion)
+    2. Deletes residues for fully factored composites
+
+    Available residues don't expire by time - only claims have timeouts.
 
     Args:
         db: Database session
@@ -92,13 +95,20 @@ async def cleanup_expired_residues(
         residue_manager: Residue manager service
 
     Returns:
-        Cleanup summary with count of removed residues
+        Cleanup summary with counts
     """
-    # Use ResidueManager's cleanup method
-    cleaned_count = residue_manager.cleanup_expired_residues(db)
+    # Release expired claims (claimed residues that timed out)
+    claims_released = residue_manager.cleanup_expired_claims(db)
+
+    # Delete residues for fully factored composites
+    factored_cleaned = residue_manager.cleanup_factored_composites(db)
+
+    total_cleaned = claims_released + factored_cleaned
 
     return {
         "success": True,
-        "message": f"Cleaned up {cleaned_count} expired residue(s)",
-        "cleaned_count": cleaned_count
+        "message": f"Released {claims_released} expired claim(s), cleaned {factored_cleaned} factored composite residue(s)",
+        "claims_released": claims_released,
+        "factored_composites_cleaned": factored_cleaned,
+        "total_cleaned": total_cleaned
     }

@@ -514,10 +514,11 @@ def get_residues_filtered(
     if composite_id:
         filters.append(ECMResidue.composite_id == composite_id)
     if expiring_soon:
-        # Expires in less than 24 hours
+        # Only claimed residues have expires_at set (claim timeout)
+        # Available residues don't expire by time
         expiry_threshold = datetime.utcnow() + timedelta(hours=24)
         filters.append(ECMResidue.expires_at < expiry_threshold)
-        filters.append(ECMResidue.status.in_(['available', 'claimed']))
+        filters.append(ECMResidue.status == 'claimed')
 
     if filters:
         query = query.filter(and_(*filters))

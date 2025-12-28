@@ -12,7 +12,6 @@ class ResidueUploadResponse(BaseModel):
     parametrization: int = Field(..., description="ECM parametrization (parsed from file)")
     curve_count: int = Field(..., description="Number of curves in residue file")
     file_size_bytes: int = Field(..., description="Size of uploaded file")
-    expires_at: datetime = Field(..., description="When this residue will expire if not consumed")
     message: str = Field(..., description="Status message")
 
 
@@ -60,7 +59,7 @@ class ResidueInfoResponse(BaseModel):
     file_size_bytes: int
     status: str
     created_at: datetime
-    expires_at: datetime
+    expires_at: Optional[datetime]  # Only set when claimed (claim timeout)
     claimed_at: Optional[datetime]
     claimed_by: Optional[str]
     completed_at: Optional[datetime]

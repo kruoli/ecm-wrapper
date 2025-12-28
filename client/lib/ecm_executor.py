@@ -609,8 +609,10 @@ class ECMWrapper(BaseWrapper):
                     if stage1_factor:
                         self.logger.info(f"[CPU Thread] Factor found in stage 1: {stage1_factor}")
                         with result_lock:
-                            all_factors.extend(all_stage1_factors)
-                            all_sigmas.extend([None] * len(all_stage1_factors))
+                            # all_stage1_factors is list of (factor, sigma) tuples - unpack them
+                            for f, s in all_stage1_factors:
+                                all_factors.append(f)
+                                all_sigmas.append(s)
                             total_curves += curves
                             # Track with B2=0 (stage 1 only)
                             curve_history.append(f"{curves}@{b1},0,p=3")

@@ -136,18 +136,20 @@ class ResidueManager:
         db: Session,
         file_content: bytes,
         client_id: str,
-        stage1_attempt_id: Optional[int] = None,
-        expiry_days: int = 7
+        stage1_attempt_id: Optional[int] = None
     ) -> ECMResidue:
         """
         Store a residue file and create database record.
+
+        Residues don't expire by time - they remain available until:
+        - The composite is fully factored
+        - A stage 2 worker completes processing them
 
         Args:
             db: Database session
             file_content: Raw residue file bytes
             client_id: ID of the uploading client
             stage1_attempt_id: Optional ID of the stage 1 attempt to link
-            expiry_days: Days until residue expires
 
         Returns:
             ECMResidue database record
@@ -195,6 +197,8 @@ class ResidueManager:
         logger.info(f"Stored residue file: {file_path} ({len(file_content)} bytes)")
 
         # Create database record
+        # expires_at is None for available residues (no time-based expiration)
+        # It will be set when claimed (claim timeout)
         residue = ECMResidue(
             composite_id=composite.id,
             client_id=client_id,
@@ -206,7 +210,7 @@ class ResidueManager:
             file_size_bytes=len(file_content),
             checksum=checksum,
             status='available',
-            expires_at=datetime.utcnow() + timedelta(days=expiry_days)
+            expires_at=None
         )
 
         db.add(residue)
@@ -245,11 +249,13 @@ class ResidueManager:
         Returns:
             ECMResidue if found, None otherwise
         """
+        # Available residues don't have time-based expiration
+        # Only filter by status (and exclude factored composites)
         query = db.query(ECMResidue).join(
             Composite, ECMResidue.composite_id == Composite.id
         ).filter(
             ECMResidue.status == 'available',
-            ECMResidue.expires_at > datetime.utcnow()
+            Composite.is_fully_factored == False  # noqa: E712
         )
 
         # Apply filters
@@ -283,7 +289,7 @@ class ResidueManager:
         db: Session,
         residue_id: int,
         client_id: str,
-        claim_timeout_hours: int = 24
+        claim_timeout_hours: int = 72  # 3 days default for large stage 2 work
     ) -> ECMResidue:
         """
         Claim a residue for stage 2 processing.
@@ -292,7 +298,7 @@ class ResidueManager:
             db: Database session
             residue_id: ID of residue to claim
             client_id: ID of claiming client
-            claim_timeout_hours: Hours until claim expires
+            claim_timeout_hours: Hours until claim expires (default 72h/3 days)
 
         Returns:
             Updated ECMResidue record
@@ -346,8 +352,8 @@ class ResidueManager:
         residue.status = 'available'
         residue.claimed_at = None
         residue.claimed_by = None
-        # Reset expiration to default
-        residue.expires_at = ECMResidue.default_expiry()
+        # Clear expiration - available residues don't expire by time
+        residue.expires_at = None
 
         logger.info(f"Residue {residue_id} released by {client_id}")
         return residue
@@ -495,9 +501,48 @@ class ResidueManager:
 
         return suggested_b2
 
-    def cleanup_expired_residues(self, db: Session) -> int:
+    def cleanup_expired_claims(self, db: Session) -> int:
         """
-        Clean up expired residues (delete files and mark as expired).
+        Release claims that have timed out (claimed but not completed in time).
+
+        Only claimed residues have expiration times. Available residues don't expire.
+        This releases the claim so another worker can pick up the work.
+
+        Args:
+            db: Database session
+
+        Returns:
+            Number of claims released
+        """
+        expired_claims = db.query(ECMResidue).filter(
+            ECMResidue.status == 'claimed',
+            ECMResidue.expires_at < datetime.utcnow()
+        ).all()
+
+        count = 0
+        for residue in expired_claims:
+            try:
+                # Release the claim back to available (don't delete file)
+                old_claimer = residue.claimed_by
+                residue.status = 'available'
+                residue.claimed_at = None
+                residue.claimed_by = None
+                residue.expires_at = None
+                count += 1
+                logger.info(f"Released expired claim on residue {residue.id} (was claimed by {old_claimer})")
+            except Exception as e:
+                logger.error(f"Error releasing claim on residue {residue.id}: {e}")
+
+        if count > 0:
+            logger.info(f"Released {count} expired claims")
+
+        return count
+
+    def cleanup_factored_composites(self, db: Session) -> int:
+        """
+        Clean up residues for composites that have been fully factored.
+
+        Residues are no longer useful once their composite is factored.
 
         Args:
             db: Database session
@@ -505,26 +550,29 @@ class ResidueManager:
         Returns:
             Number of residues cleaned up
         """
-        expired = db.query(ECMResidue).filter(
-            ECMResidue.expires_at < datetime.utcnow(),
+        # Find residues for fully factored composites
+        residues_to_cleanup = db.query(ECMResidue).join(
+            Composite, ECMResidue.composite_id == Composite.id
+        ).filter(
+            Composite.is_fully_factored == True,  # noqa: E712
             ECMResidue.status.in_(['available', 'claimed'])
         ).all()
 
         count = 0
-        for residue in expired:
+        for residue in residues_to_cleanup:
             try:
                 file_path = Path(residue.storage_path)
                 if file_path.exists():
                     file_path.unlink()
-                    logger.info(f"Deleted expired residue file: {file_path}")
+                    logger.info(f"Deleted residue file for factored composite: {file_path}")
 
-                residue.status = 'expired'
+                residue.status = 'expired'  # Mark as cleaned up
                 count += 1
             except Exception as e:
                 logger.error(f"Error cleaning up residue {residue.id}: {e}")
 
         if count > 0:
-            logger.info(f"Cleaned up {count} expired residues")
+            logger.info(f"Cleaned up {count} residues for factored composites")
 
         return count
 

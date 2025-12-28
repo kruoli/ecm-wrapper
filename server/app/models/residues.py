@@ -50,7 +50,9 @@ class ECMResidue(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(20), default='available', nullable=False)
 
     # Timing
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)  # Auto-cleanup if not consumed
+    # expires_at is only set when claimed (claim timeout). None = no time-based expiration.
+    # Residues are cleaned up when their composite is factored, not by time.
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     claimed_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # Client ID of stage 2 worker
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -60,9 +62,9 @@ class ECMResidue(Base, TimestampMixin):
     stage1_attempt: Mapped[Optional["ECMAttempt"]] = relationship("ECMAttempt", foreign_keys=[stage1_attempt_id])
 
     @classmethod
-    def default_expiry(cls) -> datetime:
-        """Default expiration: 7 days from now."""
-        return datetime.utcnow() + timedelta(days=7)
+    def default_claim_timeout(cls) -> datetime:
+        """Default claim timeout: 3 days from now."""
+        return datetime.utcnow() + timedelta(days=3)
 
     # Indexes for common queries
     __table_args__ = (

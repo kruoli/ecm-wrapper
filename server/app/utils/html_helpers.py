@@ -137,12 +137,14 @@ def format_time_remaining(expires_at, current_time) -> str:
     Format time remaining until expiration.
 
     Args:
-        expires_at: Expiration datetime
+        expires_at: Expiration datetime (can be None)
         current_time: Current datetime
 
     Returns:
-        Formatted time string (e.g., "45m", "Expired")
+        Formatted time string (e.g., "45m", "Expired", "No expiry")
     """
+    if expires_at is None:
+        return "No expiry"
     if expires_at > current_time:
         time_remaining = expires_at - current_time
         minutes = int(time_remaining.total_seconds() / 60)

@@ -21,6 +21,7 @@ from ..models.attempts import ECMAttempt
 from ..models.work_assignments import WorkAssignment
 from ..models.factors import Factor
 from ..models.projects import Project, ProjectComposite
+from ..models.residues import ECMResidue
 from ..utils.number_utils import calculate_digit_length, validate_integer
 from .t_level_calculator import TLevelCalculator
 from .composite_loader import CompositeLoader
@@ -302,6 +303,11 @@ class CompositeService:
             Factor.composite_id == composite_id
         ).delete()
 
+        # Residues reference attempts via stage1_attempt_id, so delete residues before attempts
+        residues_deleted = db.query(ECMResidue).filter(
+            ECMResidue.composite_id == composite_id
+        ).delete()
+
         attempts_deleted = db.query(ECMAttempt).filter(
             ECMAttempt.composite_id == composite_id
         ).delete()
@@ -315,8 +321,8 @@ class CompositeService:
         db.flush()  # Make changes visible within transaction
 
         logger.info(
-            "Deleted composite %s (reason: %s): %d attempts, %d factors, %d work assignments",
-            composite_id, reason, attempts_deleted, factors_deleted, work_deleted
+            "Deleted composite %s (reason: %s): %d attempts, %d factors, %d work assignments, %d residues",
+            composite_id, reason, attempts_deleted, factors_deleted, work_deleted, residues_deleted
         )
 
         return {
@@ -326,7 +332,8 @@ class CompositeService:
             "cancelled_work_assignments": len(active_work),
             "deleted_attempts": attempts_deleted,
             "deleted_factors": factors_deleted,
-            "deleted_work_assignments": work_deleted
+            "deleted_work_assignments": work_deleted,
+            "deleted_residues": residues_deleted
         }
 
     # ==================== Status Updates ====================

@@ -134,6 +134,54 @@
             recalcBtn.disabled = false;
         });
     }
+
+    window.deleteAttempt = function deleteAttempt(attemptId, method, curves) {
+        const apiKey = sessionStorage.getItem('admin_api_key');
+        if (!apiKey) {
+            window.location.href = '/api/v1/admin/login';
+            return;
+        }
+
+        const compositeId = {{ composite.id }};
+
+        if (!confirm(`Are you sure you want to delete attempt #${attemptId}?\n\nMethod: ${method}\nCurves: ${curves}\n\nThe composite's t-level will be recalculated after deletion.\n\nThis action cannot be undone.`)) {
+            return;
+        }
+
+        // Show loading state on the button
+        const deleteBtn = document.getElementById(`delete-attempt-${attemptId}`);
+        if (deleteBtn) {
+            deleteBtn.textContent = '...';
+            deleteBtn.disabled = true;
+        }
+
+        fetch(`/api/v1/admin/attempts/${attemptId}?composite_id=${compositeId}`, {
+            method: 'DELETE',
+            headers: {
+                'X-Admin-Key': apiKey
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.json().then(err => {
+                    throw new Error(err.detail || `Delete failed: ${response.status}`);
+                });
+            }
+            return response.json();
+        })
+        .then(result => {
+            alert(`Deleted attempt #${attemptId}\n\nT-level: t${result.old_t_level} → t${result.new_t_level}`);
+            // Reload page to show updated table
+            reloadWithAuth();
+        })
+        .catch(error => {
+            alert(`Failed to delete attempt: ${error.message}`);
+            if (deleteBtn) {
+                deleteBtn.textContent = '🗑️';
+                deleteBtn.disabled = false;
+            }
+        });
+    }
 </script>
 <style>
     .btn-danger {
@@ -283,6 +331,7 @@
         <div class="table-wrapper">
             <table>
                 <tr>
+                    <th>ID</th>
                     <th>Method</th>
                     <th>B1</th>
                     <th>B2</th>
@@ -290,9 +339,11 @@
                     <th>Factor Found</th>
                     <th>Client</th>
                     <th>Submitted</th>
+                    <th>Actions</th>
                 </tr>
                 {% for attempt in recent_attempts %}
                 <tr {% if attempt.superseded_by %}style="opacity: 0.5; background-color: #f9f9f9;"{% endif %}>
+                    <td>{{ attempt.id }}</td>
                     <td>{{ esc(attempt.method) }}</td>
                     <td>{{ "{:,}".format(attempt.b1) }}</td>
                     <td>
@@ -321,6 +372,13 @@
                     </td>
                     <td>{{ esc(attempt.client_id) }}</td>
                     <td>{{ esc(attempt.created_at) }}</td>
+                    <td>
+                        <button id="delete-attempt-{{ attempt.id }}"
+                                onclick="deleteAttempt({{ attempt.id }}, '{{ attempt.method }}', {{ attempt.curves_completed }})"
+                                class="btn btn-danger"
+                                style="padding: 2px 8px; font-size: 0.85em;"
+                                title="Delete attempt #{{ attempt.id }}">🗑️</button>
+                    </td>
                 </tr>
                 {% endfor %}
             </table>

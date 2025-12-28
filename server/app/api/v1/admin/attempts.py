@@ -8,6 +8,7 @@ from ....database import get_db
 from ....dependencies import verify_admin_key, get_t_level_calculator
 from ....models.attempts import ECMAttempt
 from ....models.composites import Composite
+from ....models.residues import ECMResidue
 from ....services.t_level_calculator import TLevelCalculator
 
 router = APIRouter()
@@ -50,6 +51,9 @@ async def delete_attempt(
 
     # Store old t-level
     old_t_level = composite.current_t_level or 0.0
+
+    # Delete any residues that reference this attempt (foreign key constraint)
+    db.query(ECMResidue).filter(ECMResidue.stage1_attempt_id == attempt_id).delete()
 
     # Delete the attempt
     db.delete(attempt)

@@ -31,7 +31,7 @@ from .stage1_helpers import submit_stage1_complete_workflow
 from .error_helpers import check_work_limit_reached
 from .cleanup_helpers import handle_shutdown
 from .results_builder import results_for_stage1
-from .arg_parser import resolve_gpu_settings, resolve_worker_count, get_workers_default
+from .arg_parser import resolve_gpu_settings, resolve_worker_count, get_workers_default, get_max_batch_default
 from .ecm_arg_helpers import parse_sigma_arg, resolve_param, resolve_workers
 
 if TYPE_CHECKING:
@@ -778,6 +778,9 @@ class StandardAutoWorkMode(WorkMode):
 
         workers = resolve_worker_count(self.args) if self.args.multiprocess else 1
 
+        # Resolve max_batch from args or config
+        max_batch = getattr(self.args, 'max_batch', None) or get_max_batch_default(self.wrapper.config)
+
         config = TLevelConfig(
             composite=composite,
             target_t_level=target_tlevel,
@@ -785,6 +788,7 @@ class StandardAutoWorkMode(WorkMode):
             threads=workers,
             verbose=self.args.verbose,
             progress_interval=getattr(self.args, 'progress_interval', 0),
+            max_batch_curves=max_batch,
             project=self.args.project,
             no_submit=False,
             work_id=self.current_work_id

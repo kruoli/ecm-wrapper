@@ -41,6 +41,7 @@ programs:
     gpu_device: 0
     gpu_curves: null
     workers: 8  # Parallel workers (multiprocess ECM, stage2 threads)
+    max_batch: null  # Max curves per GPU batch in two-stage mode (null = no limit)
     pm1_b1: 2900000000
     pm1_b2: 1000000000000000
     pp1_b1: 110000000

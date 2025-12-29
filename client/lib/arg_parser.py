@@ -419,6 +419,23 @@ def get_workers_default(config: Dict[str, Any]) -> int:
     return 4
 
 
+def get_max_batch_default(config: Dict[str, Any]) -> Optional[int]:
+    """
+    Get default max_batch value from config.
+
+    Used for chunking large GPU batches in two-stage mode.
+
+    Args:
+        config: Configuration dictionary
+
+    Returns:
+        Default max_batch value or None if not set
+    """
+    if config and 'programs' in config and 'gmp_ecm' in config['programs']:
+        return config['programs']['gmp_ecm'].get('max_batch')
+    return None
+
+
 # Backward compatibility alias
 get_stage2_workers_default = get_workers_default
 

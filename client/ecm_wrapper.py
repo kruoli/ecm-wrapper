@@ -20,7 +20,7 @@ from typing import Optional
 
 from lib.ecm_executor import ECMWrapper
 from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
-from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_workers_default, parse_int_with_scientific
+from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_workers_default, get_max_batch_default, parse_int_with_scientific
 from lib.stage1_helpers import submit_stage1_complete_workflow
 from lib.results_builder import results_for_stage1
 from lib.user_output import UserOutput
@@ -51,6 +51,9 @@ def main():
 
     # Get workers default from config
     workers = args.workers if args.workers else get_workers_default(wrapper.config)
+
+    # Get max_batch default from config (for two-stage GPU batching)
+    max_batch = getattr(args, 'max_batch', None) or get_max_batch_default(wrapper.config)
 
     # Resolve B1 from args or config based on method
     # This provides a sensible default when --b1 is not specified
@@ -257,7 +260,7 @@ def main():
                 workers=args.workers or 1,
                 use_two_stage=args.two_stage or False,
                 progress_interval=args.progress_interval or 0,
-                max_batch_curves=getattr(args, 'max_batch', None),
+                max_batch_curves=max_batch,
                 b2_multiplier=getattr(args, 'b2_multiplier', None) or 100.0,
                 project=args.project,
                 no_submit=args.no_submit or False

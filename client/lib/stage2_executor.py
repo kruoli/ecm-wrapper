@@ -105,7 +105,16 @@ class Stage2Executor:
                 futures.append(future)
 
             # Wait for completion or first factor
+            graceful_shutdown = False
             for future in as_completed(futures):
+                # Check for graceful shutdown request from main thread
+                if hasattr(self.wrapper, 'graceful_shutdown_requested') and self.wrapper.graceful_shutdown_requested:
+                    self.logger.info("Stage 2: Graceful shutdown requested - letting workers finish current chunks")
+                    graceful_shutdown = True
+                    # Don't set stop_event here - let workers finish their current chunks naturally
+                    # Just stop waiting for remaining futures
+                    break
+
                 try:
                     result = future.result()
                     if result:
@@ -115,15 +124,20 @@ class Stage2Executor:
                 except Exception as e:
                     self.logger.error(f"Worker thread error: {e}")
 
-            # Ensure all remaining processes are terminated
-            with self.process_lock:
-                for process in self.running_processes:
-                    if process.poll() is None:
-                        process.terminate()
-                        try:
-                            process.wait(timeout=2)
-                        except subprocess.TimeoutExpired:
-                            process.kill()
+            # Ensure all remaining processes are terminated (but not during graceful shutdown)
+            if not graceful_shutdown:
+                with self.process_lock:
+                    for process in self.running_processes:
+                        if process.poll() is None:
+                            process.terminate()
+                            try:
+                                process.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+            else:
+                # During graceful shutdown, wait for workers to complete naturally
+                self.logger.info("Stage 2: Waiting for workers to complete their current chunks...")
+                # The ThreadPoolExecutor context manager will wait for all workers to finish
 
         # Cleanup temporary chunk files and directory
         self._cleanup_chunks(residue_chunks)

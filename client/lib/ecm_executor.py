@@ -49,6 +49,8 @@ class ECMWrapper(BaseWrapper):
                 # Graceful shutdown support
         self.stop_event = threading.Event()
         self.interrupted = False
+        self.graceful_shutdown_requested = False  # First Ctrl+C: finish current work
+        self._original_sigint_handler: Optional[Any] = None  # Store original handler for restoration
 
     # ==================== NEW CONFIG-BASED METHODS ====================
     # These methods use configuration objects for cleaner interfaces
@@ -167,87 +169,118 @@ class ECMWrapper(BaseWrapper):
         """
         start_time = time.time()
 
-        # Check if resuming from existing residue file
-        if config.resume_file:
-            residue_file = Path(config.resume_file)
-            if not residue_file.exists():
-                self.logger.error(f"Resume file not found: {residue_file}")
-                result = FactorResult()
-                result.success = False
-                result.execution_time = time.time() - start_time
-                return result
-
-            # Parse residue file for metadata
-            residue_info = self._parse_residue_file(residue_file)
-            _composite = residue_info['composite']
-            stage1_curves = residue_info['curve_count']
-            stage1_b1 = residue_info['b1']
-
-            # Use B1 from residue file if available
-            if stage1_b1 > 0:
-                if stage1_b1 != config.b1:
-                    self.logger.info(f"Using B1={stage1_b1} from residue file (overriding config B1={config.b1})")
-                actual_b1 = stage1_b1
+        # Install graceful shutdown signal handler
+        def graceful_sigint_handler(signum, frame):
+            """Handle Ctrl+C gracefully: first time finish current work, second time abort."""
+            if not self.graceful_shutdown_requested:
+                self.graceful_shutdown_requested = True
+                print("\n[Ctrl+C] Graceful shutdown initiated - completing current curves...")
+                print("[Ctrl+C] Press Ctrl+C again to abort immediately")
+                self.logger.info("Graceful shutdown requested - will complete current work")
             else:
+                print("\n[Ctrl+C] Immediate abort requested")
+                self.logger.info("Immediate abort requested")
+                # Restore original handler and re-raise to trigger immediate abort
+                if self._original_sigint_handler:
+                    signal.signal(signal.SIGINT, self._original_sigint_handler)
+                raise KeyboardInterrupt()
+
+        # Save and install new handler
+        self._original_sigint_handler = signal.signal(signal.SIGINT, graceful_sigint_handler)
+
+        try:
+            # Check if resuming from existing residue file
+            if config.resume_file:
+                residue_file = Path(config.resume_file)
+                if not residue_file.exists():
+                    self.logger.error(f"Resume file not found: {residue_file}")
+                    result = FactorResult()
+                    result.success = False
+                    result.execution_time = time.time() - start_time
+                    return result
+
+                # Parse residue file for metadata
+                residue_info = self._parse_residue_file(residue_file)
+                _composite = residue_info['composite']
+                stage1_curves = residue_info['curve_count']
+                stage1_b1 = residue_info['b1']
+
+                # Use B1 from residue file if available
+                if stage1_b1 > 0:
+                    if stage1_b1 != config.b1:
+                        self.logger.info(f"Using B1={stage1_b1} from residue file (overriding config B1={config.b1})")
+                    actual_b1 = stage1_b1
+                else:
+                    actual_b1 = config.b1
+
+                self.logger.info(f"Resuming from residue file: {residue_file}")
+                self.logger.info(f"Stage 1 completed {stage1_curves} curves at B1={actual_b1}")
+
+                # Skip stage 1, go directly to stage 2
+                stage1_result = None
+            else:
+                # Normal flow: Setup residue file and run stage 1
+                residue_file = self._create_residue_path(config)
                 actual_b1 = config.b1
+                stage1_curves = 0
 
-            self.logger.info(f"Resuming from residue file: {residue_file}")
-            self.logger.info(f"Stage 1 completed {stage1_curves} curves at B1={actual_b1}")
+                # Stage 1: GPU execution
+                stage1_result = self._run_stage1_primitive(
+                    composite=config.composite,
+                    b1=config.b1,
+                    curves=config.stage1_curves,
+                    residue_file=residue_file,
+                    use_gpu=(config.stage1_device == "GPU"),
+                    param=config.stage1_parametrization,
+                    verbose=config.verbose
+                )
 
-            # Skip stage 1, go directly to stage 2
-            stage1_result = None
-        else:
-            # Normal flow: Setup residue file and run stage 1
-            residue_file = self._create_residue_path(config)
-            actual_b1 = config.b1
-            stage1_curves = 0
+                # Early return if factor found in stage 1
+                if stage1_result['factors']:
+                    return self._build_factor_result(stage1_result, start_time)
 
-            # Stage 1: GPU execution
-            stage1_result = self._run_stage1_primitive(
-                composite=config.composite,
-                b1=config.b1,
-                curves=config.stage1_curves,
+                # Skip stage 2 if b2=0 (stage 1 only mode)
+                if config.b2 == 0:
+                    self.logger.info("B2=0: Skipping stage 2 (stage 1 only mode)")
+                    return self._build_factor_result(stage1_result, start_time)
+
+                stage1_curves = stage1_result.get('curves_run', 0)
+
+            # Stage 2: Multi-threaded CPU processing
+            actual_b2 = config.b2 or (actual_b1 * 100)  # Default B2
+            self.logger.info(f"Starting stage 2: B1={actual_b1:,}, B2={actual_b2:,}, workers={config.threads}")
+
+            # _run_stage2_multithread returns: (factor, all_factors, curves_completed, execution_time, sigma)
+            _factor, all_factors, curves_completed, _stage2_time, sigma = self._run_stage2_multithread(
                 residue_file=residue_file,
-                use_gpu=(config.stage1_device == "GPU"),
-                param=config.stage1_parametrization,
-                verbose=config.verbose
+                b1=actual_b1,
+                b2=actual_b2,
+                workers=config.threads,
+                verbose=config.verbose,
+                progress_interval=config.progress_interval
             )
 
-            # Early return if factor found in stage 1
-            if stage1_result['factors']:
-                return self._build_factor_result(stage1_result, start_time)
+            # Build FactorResult from stage 2 results
+            result = FactorResult()
+            if all_factors:
+                for f in all_factors:
+                    result.add_factor(f, sigma)
+            result.curves_run = curves_completed
+            result.execution_time = time.time() - start_time
+            result.success = len(all_factors) > 0
 
-            # Skip stage 2 if b2=0 (stage 1 only mode)
-            if config.b2 == 0:
-                self.logger.info("B2=0: Skipping stage 2 (stage 1 only mode)")
-                return self._build_factor_result(stage1_result, start_time)
+            # Check if execution was gracefully shutdown
+            if self.graceful_shutdown_requested:
+                result.interrupted = True
+                self.logger.info(f"Graceful shutdown completed - processed {curves_completed} curves")
 
-            stage1_curves = stage1_result.get('curves_run', 0)
-
-        # Stage 2: Multi-threaded CPU processing
-        actual_b2 = config.b2 or (actual_b1 * 100)  # Default B2
-        self.logger.info(f"Starting stage 2: B1={actual_b1:,}, B2={actual_b2:,}, workers={config.threads}")
-
-        # _run_stage2_multithread returns: (factor, all_factors, curves_completed, execution_time, sigma)
-        _factor, all_factors, curves_completed, _stage2_time, sigma = self._run_stage2_multithread(
-            residue_file=residue_file,
-            b1=actual_b1,
-            b2=actual_b2,
-            workers=config.threads,
-            verbose=config.verbose,
-            progress_interval=config.progress_interval
-        )
-
-        # Build FactorResult from stage 2 results
-        result = FactorResult()
-        if all_factors:
-            for f in all_factors:
-                result.add_factor(f, sigma)
-        result.curves_run = curves_completed
-        result.execution_time = time.time() - start_time
-        result.success = len(all_factors) > 0
-
-        return result
+            return result
+        finally:
+            # Always restore the original signal handler
+            if self._original_sigint_handler:
+                signal.signal(signal.SIGINT, self._original_sigint_handler)
+            # Reset graceful shutdown flag for next execution
+            self.graceful_shutdown_requested = False
 
     def run_multiprocess_v2(self, config: MultiprocessConfig) -> FactorResult:
         """

@@ -190,22 +190,28 @@ class WorkMode(ABC):
         self.current_work_id = None
         self.completed_count += 1
         self.consecutive_failures = 0
+        # Reset graceful shutdown flag after each work unit completes
+        # (in case finish_after_current is cleared and loop continues)
+        self.wrapper.graceful_shutdown_requested = False
 
     def _setup_signal_handler(self) -> None:
         """
         Install signal handler for graceful shutdown.
 
         First Ctrl+C: Set finish_after_current flag (complete current work, then exit)
+                     Also sets graceful_shutdown_requested for curve-level completion
         Second Ctrl+C: Raise KeyboardInterrupt for immediate abort
         """
         def handler(signum, frame):
             if not self._first_interrupt_received:
-                # First interrupt: graceful shutdown
+                # First interrupt: graceful shutdown at both work and curve level
                 self._first_interrupt_received = True
                 self.ctx.finish_after_current = True
+                self.wrapper.graceful_shutdown_requested = True  # Signal stage 2 workers to finish current curves
                 print("\n")
                 print("=" * 60)
                 print("Finishing current work unit, then exiting...")
+                print("(Stage 2 workers will complete their current curves)")
                 print("Press Ctrl+C again to abort immediately")
                 print("=" * 60)
             else:
@@ -215,10 +221,12 @@ class WorkMode(ABC):
         self._original_sigint_handler = signal.signal(signal.SIGINT, handler)
 
     def _restore_signal_handler(self) -> None:
-        """Restore original signal handler."""
+        """Restore original signal handler and reset graceful shutdown flag."""
         if self._original_sigint_handler is not None:
             signal.signal(signal.SIGINT, self._original_sigint_handler)
             self._original_sigint_handler = None
+        # Reset graceful shutdown flag for wrapper
+        self.wrapper.graceful_shutdown_requested = False
 
     def should_continue(self) -> bool:
         """

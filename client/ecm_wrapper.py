@@ -15,6 +15,7 @@ Modes:
 """
 
 import sys
+import signal
 from pathlib import Path
 from typing import Optional
 
@@ -107,24 +108,51 @@ def main():
         if b1 == 0:
             output.warning("Could not parse B1 from residue file, using 0")
 
-        # Run stage 2 using multithread executor
-        factor, all_factors, curves_completed, exec_time, sigma = wrapper._run_stage2_multithread(
-            residue_file=residue_path,
-            b1=b1,
-            b2=args.b2,
-            workers=workers,
-            verbose=args.verbose or False,
-            progress_interval=args.progress_interval or 0
-        )
+        # Install graceful shutdown signal handler
+        def graceful_sigint_handler(signum, frame):
+            """Handle Ctrl+C gracefully: first time finish current work, second time abort."""
+            if not wrapper.graceful_shutdown_requested:
+                wrapper.graceful_shutdown_requested = True
+                print("\n[Ctrl+C] Graceful shutdown initiated - completing current curves...")
+                print("[Ctrl+C] Press Ctrl+C again to abort immediately")
+            else:
+                print("\n[Ctrl+C] Immediate abort requested")
+                # Restore original handler and re-raise to trigger immediate abort
+                if wrapper._original_sigint_handler:
+                    signal.signal(signal.SIGINT, wrapper._original_sigint_handler)
+                raise KeyboardInterrupt()
 
-        # Build FactorResult
-        result = FactorResult()
-        result.success = True
-        result.curves_run = curves_completed
-        result.execution_time = exec_time
-        if all_factors:
-            for f in all_factors:
-                result.add_factor(f, sigma)
+        wrapper._original_sigint_handler = signal.signal(signal.SIGINT, graceful_sigint_handler)
+
+        try:
+            # Run stage 2 using multithread executor
+            factor, all_factors, curves_completed, exec_time, sigma = wrapper._run_stage2_multithread(
+                residue_file=residue_path,
+                b1=b1,
+                b2=args.b2,
+                workers=workers,
+                verbose=args.verbose or False,
+                progress_interval=args.progress_interval or 0
+            )
+
+            # Build FactorResult
+            result = FactorResult()
+            result.success = True
+            result.curves_run = curves_completed
+            result.execution_time = exec_time
+            if all_factors:
+                for f in all_factors:
+                    result.add_factor(f, sigma)
+
+            # Mark as interrupted if graceful shutdown occurred
+            if wrapper.graceful_shutdown_requested:
+                result.interrupted = True
+                output.info(f"Graceful shutdown completed - processed {curves_completed} curves")
+        finally:
+            # Restore original signal handler
+            if wrapper._original_sigint_handler:
+                signal.signal(signal.SIGINT, wrapper._original_sigint_handler)
+            wrapper.graceful_shutdown_requested = False
 
     # Stage 1 Only Mode - save residue to local file (optionally upload with --upload)
     elif args.stage1_only:

@@ -372,6 +372,10 @@ class TLevelCalculator:
             else:
                 args = ["-q", input_string]
 
+            logger.info(
+                f"Calling t-level binary with args: {args}"
+            )
+
             # Call external t-level calculator using executor
             success, output = self.executor.execute_and_get_last_line(
                 args=args,

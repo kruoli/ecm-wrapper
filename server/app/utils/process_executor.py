@@ -57,6 +57,9 @@ class ExternalProgramExecutor:
         """
         cmd = [self.binary_path] + args
 
+        # Log the command being executed
+        self.logger.info(f"Executing command: {' '.join(repr(arg) for arg in cmd)}")
+
         try:
             # Prepare input
             input_bytes = input_data.encode('utf-8') if input_data else None

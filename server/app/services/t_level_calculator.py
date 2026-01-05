@@ -367,18 +367,21 @@ class TLevelCalculator:
             )
 
             # Build command args - use -w flag if we have a starting t-level
+            # Pass curve string via stdin (not -q flag) to avoid argument parsing issues
             if starting_t_level > 0:
-                args = ["-w", str(starting_t_level), "-q", input_string]
+                args = ["-w", str(starting_t_level)]
             else:
-                args = ["-q", input_string]
+                args = []
 
             logger.info(
-                f"Calling t-level binary with args: {args}"
+                f"Calling t-level binary with args: {args}, passing {len(input_string)} chars via stdin"
             )
 
             # Call external t-level calculator using executor
+            # Curve string is passed via stdin (like: echo "curves" | t-level -w X)
             success, output = self.executor.execute_and_get_last_line(
                 args=args,
+                input_data=input_string,
                 timeout=30
             )
 

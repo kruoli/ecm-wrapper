@@ -306,7 +306,7 @@ class TLevelCalculator:
         """
         try:
             # Convert attempts to curve string format for t-level executable
-            logger.debug(
+            logger.info(
                 f"Processing {len(attempts)} attempts for t-level calculation "
                 f"(starting_t_level={starting_t_level})"
             )
@@ -316,7 +316,7 @@ class TLevelCalculator:
                 if attempt.curves_completed > 0:
                     # Validate required fields
                     if attempt.b1 is None or attempt.b1 <= 0:
-                        logger.warning(
+                        logger.error(
                             f"Skipping attempt with invalid B1: {attempt.b1} "
                             f"(attempt_id={attempt.id if hasattr(attempt, 'id') else 'unknown'})"
                         )
@@ -341,10 +341,11 @@ class TLevelCalculator:
                     if curve_str and curve_str.strip():
                         curve_strings.append(curve_str)
                     else:
-                        logger.warning(
+                        logger.error(
                             f"Skipping invalid curve string for attempt: "
                             f"curves={attempt.curves_completed}, b1={attempt.b1}, "
-                            f"b2={attempt.b2}, param={attempt.parametrization}"
+                            f"b2={attempt.b2}, param={attempt.parametrization}, "
+                            f"curve_str='{curve_str}'"
                         )
 
             if not curve_strings:
@@ -355,13 +356,13 @@ class TLevelCalculator:
 
             # Defensive check: ensure input_string is not empty or just semicolons
             if not input_string or not input_string.strip() or input_string.strip(";").strip() == "":
-                logger.warning(
-                    f"Generated empty curve string from {len(curve_strings)} attempts, "
-                    f"returning starting t-level {starting_t_level}"
+                logger.error(
+                    f"Generated empty curve string from {len(curve_strings)} curve_strings "
+                    f"(curve_strings={curve_strings}), returning starting t-level {starting_t_level}"
                 )
                 return starting_t_level
 
-            logger.debug(
+            logger.info(
                 f"Generated {len(curve_strings)} valid curve strings: {input_string}"
             )
 

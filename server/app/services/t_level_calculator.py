@@ -306,9 +306,22 @@ class TLevelCalculator:
         """
         try:
             # Convert attempts to curve string format for t-level executable
+            logger.debug(
+                f"Processing {len(attempts)} attempts for t-level calculation "
+                f"(starting_t_level={starting_t_level})"
+            )
+
             curve_strings = []
             for attempt in attempts:
                 if attempt.curves_completed > 0:
+                    # Validate required fields
+                    if attempt.b1 is None or attempt.b1 <= 0:
+                        logger.warning(
+                            f"Skipping attempt with invalid B1: {attempt.b1} "
+                            f"(attempt_id={attempt.id if hasattr(attempt, 'id') else 'unknown'})"
+                        )
+                        continue
+
                     # Format: curves@B1[,B2][,param]
                     # Format numbers to avoid decimals in scientific notation (use 11e7 not 1.1e+08)
                     b1_str = self._format_number_for_tlevel(attempt.b1)
@@ -324,13 +337,33 @@ class TLevelCalculator:
                         # No B2 specified - let t-level binary use GMP-ECM defaults
                         curve_str = f"{attempt.curves_completed}@{b1_str},p={param}"
 
-                    curve_strings.append(curve_str)
+                    # Validate curve string before adding
+                    if curve_str and curve_str.strip():
+                        curve_strings.append(curve_str)
+                    else:
+                        logger.warning(
+                            f"Skipping invalid curve string for attempt: "
+                            f"curves={attempt.curves_completed}, b1={attempt.b1}, "
+                            f"b2={attempt.b2}, param={attempt.parametrization}"
+                        )
 
             if not curve_strings:
                 return starting_t_level
 
             # Join with semicolons for multiple entries
             input_string = ";".join(curve_strings)
+
+            # Defensive check: ensure input_string is not empty or just semicolons
+            if not input_string or not input_string.strip() or input_string.strip(";").strip() == "":
+                logger.warning(
+                    f"Generated empty curve string from {len(curve_strings)} attempts, "
+                    f"returning starting t-level {starting_t_level}"
+                )
+                return starting_t_level
+
+            logger.debug(
+                f"Generated {len(curve_strings)} valid curve strings: {input_string}"
+            )
 
             # Build command args - use -w flag if we have a starting t-level
             if starting_t_level > 0:

@@ -84,8 +84,8 @@ class CompositeInput(BaseModel):
     is_fully_factored: Optional[bool] = Field(
         None, description="Whether the composite is fully factored"
     )
-    is_active: bool = Field(
-        False, description="Whether composite is available for work assignment (defaults to False for manual review)"
+    is_active: Optional[bool] = Field(
+        None, description="Whether composite is available for work assignment (None = preserve existing, defaults to False for new composites)"
     )
     prior_t_level: Optional[float] = Field(
         None, description="T-level from work done before import (e.g., from factordb or previous campaigns)"

@@ -72,7 +72,7 @@ class AliquotWrapper(BaseWrapper):
 
     def __init__(self, config_path: str, factorizer: str = 'cado', hybrid_threshold: int = 100,
                  siqs_threshold: int = 100, ecm_program: str = 'gmp-ecm', threads: Optional[int] = None,
-                 verbose: bool = False, use_two_stage: bool = False):
+                 verbose: bool = False, use_two_stage: bool = False, max_batch_curves: Optional[int] = None):
         """Initialize aliquot wrapper with specified factorization engine.
 
         Args:
@@ -84,6 +84,7 @@ class AliquotWrapper(BaseWrapper):
             threads: Optional thread/worker count for parallel execution
             verbose: Enable verbose output from factorization programs
             use_two_stage: Use GPU two-stage mode for ECM (GPU stage 1 + CPU stage 2, default: False)
+            max_batch_curves: Max curves per GPU batch in two-stage t-level mode (default: None = use config)
         """
         super().__init__(config_path)
         self.config_path = config_path  # Store for lazy initialization of sub-wrappers
@@ -94,6 +95,7 @@ class AliquotWrapper(BaseWrapper):
         self.threads = threads
         self.verbose = verbose
         self.use_two_stage = use_two_stage
+        self.max_batch_curves = max_batch_curves
 
         # Lazy initialization of factorizers (created on first access)
         self._cado = None
@@ -317,6 +319,12 @@ class AliquotWrapper(BaseWrapper):
 
                 self.logger.info(f"Running progressive GMP-ECM to t{target_t_level:.1f} on C{cofactor_digits}")
 
+                # Determine max_batch_curves: CLI arg > config value > None
+                max_batch = self.max_batch_curves
+                if max_batch is None:
+                    # Fall back to config value
+                    max_batch = self.config['programs']['gmp_ecm'].get('max_batch')
+
                 config = TLevelConfig(
                     composite=str(current_composite),
                     target_t_level=target_t_level,
@@ -324,9 +332,14 @@ class AliquotWrapper(BaseWrapper):
                     threads=self.threads if self.threads else 1,
                     verbose=self.verbose,
                     use_two_stage=self.use_two_stage,  # GPU two-stage mode if enabled
+                    max_batch_curves=max_batch,  # Enable batching for pipelined GPU/CPU execution
                     no_submit=True  # Aliquot handles its own submissions
                 )
                 ecm_result = self.ecm.run_tlevel_v2(config)
+
+                # Print curve summary for this ECM run
+                if ecm_result.curve_summary:
+                    ecm_result.print_curve_summary(show_parametrization=self.verbose)
 
                 # Update achieved t-level (carries over to cofactor if factor found)
                 current_t_level = ecm_result.t_level_achieved
@@ -924,6 +937,8 @@ Common test sequences:
                        help='Use GPU two-stage mode for ECM (GPU stage 1 + CPU stage 2, requires GMP-ECM with GPU support)')
     parser.add_argument('--gpu', action='store_true',
                        help='Alias for --two-stage (use GPU acceleration for ECM)')
+    parser.add_argument('--max-batch', type=int,
+                       help='Max curves per GPU batch in two-stage t-level mode (enables chunking for earlier factor discovery)')
     parser.add_argument('-v', '--verbose', action='store_true',
                        help='Enable verbose output from factorization programs (ECM, CADO-NFS)')
 
@@ -936,7 +951,8 @@ Common test sequences:
     # Initialize wrapper with selected factorizer
     wrapper = AliquotWrapper(args.config, factorizer=args.factorizer, hybrid_threshold=args.hybrid_threshold,
                             siqs_threshold=args.siqs_threshold, ecm_program=args.ecm_program,
-                            threads=args.workers, verbose=args.verbose, use_two_stage=args.two_stage)
+                            threads=args.workers, verbose=args.verbose, use_two_stage=args.two_stage,
+                            max_batch_curves=args.max_batch)
 
     # Override factor logging config if requested
     if args.quiet_factors:

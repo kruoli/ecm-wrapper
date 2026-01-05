@@ -461,6 +461,10 @@ def main():
             output.info(f"\nSubmitting {result.curves_run} curves (no factors) to API...")
             wrapper.submit_result(results_dict, args.project, f"gmp-ecm-{method}")
 
+    # Print curve summary for t-level runs
+    if result and result.curve_summary:
+        result.print_curve_summary(show_parametrization=args.verbose)
+
     # Print summary
     if result:
         output.result_summary(result.curves_run, result.execution_time, result.factors)

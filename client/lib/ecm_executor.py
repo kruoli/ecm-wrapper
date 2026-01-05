@@ -565,6 +565,14 @@ class ECMWrapper(BaseWrapper):
                         else:
                             actual_curves = batch_curves  # Fallback if no residue (factor found?)
 
+                        # Check for shutdown before putting to queue (prevents deadlock if CPU thread stopped consuming)
+                        if shutdown_event.is_set():
+                            self.logger.info(f"[GPU Thread] Shutdown detected after stage 1 completion, discarding batch")
+                            # Clean up residue file since it won't be processed
+                            if residue_file.exists():
+                                residue_file.unlink()
+                            break
+
                         # Put work item in queue (blocks if queue is full)
                         b2_for_batch = b1 * 100  # Two-stage uses B1 * 100
                         residue_queue.put({
@@ -601,9 +609,12 @@ class ECMWrapper(BaseWrapper):
                         self.logger.error(f"[GPU Thread] Error in stage 1: {e}")
                         break  # Exit the batch loop on error
 
-            # Send sentinel
-            self.logger.info("[GPU Thread] All batches complete, signaling CPU thread")
-            residue_queue.put(None)
+            # Send sentinel (only if CPU thread is still running and consuming)
+            if not shutdown_event.is_set():
+                self.logger.info("[GPU Thread] All batches complete, signaling CPU thread")
+                residue_queue.put(None)
+            else:
+                self.logger.info("[GPU Thread] All batches complete, CPU already stopped (shutdown event set)")
 
         def cpu_consumer():
             """CPU thread: Process stage 2 from residue queue"""
@@ -619,7 +630,9 @@ class ECMWrapper(BaseWrapper):
                     break
 
                 # Get next work item
+                self.logger.info("[CPU Thread] Waiting for next work item from queue...")
                 work_item = residue_queue.get()
+                self.logger.info(f"[CPU Thread] Received work item (stage1_factor={work_item.get('stage1_factor') is not None})")
 
                 # Check for sentinel
                 if work_item is None:
@@ -692,11 +705,14 @@ class ECMWrapper(BaseWrapper):
                             self.logger.info(f"[CPU Thread] Current t-level: {current_t_level:.2f}")
 
                             if all_stage2_factors:
+                                self.logger.info("[CPU Thread] Factor found, will break after cleanup")
                                 residue_queue.task_done()
                                 # Clean up
                                 if residue_file.exists():
                                     residue_file.unlink()
                                 break
+
+                        self.logger.info("[CPU Thread] Stage 2 complete (no factor), cleaning up")
                     else:
                         self.logger.warning(f"[CPU Thread] Stage 1 failed or no residue file")
 
@@ -705,11 +721,31 @@ class ECMWrapper(BaseWrapper):
                         residue_file.unlink()
 
                     residue_queue.task_done()
+                    self.logger.info("[CPU Thread] Batch complete, looping for next work item")
 
                 except Exception as e:
                     self.logger.error(f"[CPU Thread] Error processing batch: {e}")
                     residue_queue.task_done()
                     continue
+
+            # Drain queue to prevent GPU thread from blocking on put()
+            # This happens when CPU breaks early (e.g., factor found)
+            drained = 0
+            while True:
+                try:
+                    # Non-blocking get: if queue empty, raises queue.Empty immediately
+                    item = residue_queue.get_nowait()
+                    if item is not None:
+                        # Clean up any residue files that weren't processed
+                        residue_file = item.get('residue_file')
+                        if residue_file and Path(residue_file).exists():
+                            Path(residue_file).unlink()
+                        drained += 1
+                    residue_queue.task_done()
+                except queue.Empty:
+                    break
+            if drained > 0:
+                self.logger.info(f"[CPU Thread] Drained {drained} unprocessed items from queue")
 
         # Start both threads
         gpu_thread = threading.Thread(target=gpu_producer, name="GPU-Stage1")
@@ -731,6 +767,7 @@ class ECMWrapper(BaseWrapper):
         result.success = len(all_factors) > 0
         result.t_level_achieved = current_t_level
         result.interrupted = self.interrupted
+        result.curve_summary = self._parse_curve_history(curve_history)
 
         self.logger.info(f"Pipelined t-level execution complete: {total_curves} curves, t{current_t_level:.2f} achieved")
 
@@ -941,6 +978,7 @@ class ECMWrapper(BaseWrapper):
                     result.execution_time = time.time() - start_time
                     result.success = True
                     result.t_level_achieved = current_t_level  # Track achieved t-level
+                    result.curve_summary = self._parse_curve_history(curve_history)
                     return result
 
                 # Update current t-level after this batch
@@ -970,8 +1008,56 @@ class ECMWrapper(BaseWrapper):
         result.success = len(all_factors) > 0
         result.t_level_achieved = current_t_level  # Track achieved t-level
         result.interrupted = self.interrupted  # Signal that execution was interrupted
+        result.curve_summary = self._parse_curve_history(curve_history)
 
         return result
+
+    def _parse_curve_history(self, curve_history: List[str]) -> List[Dict[str, Any]]:
+        """
+        Parse curve history strings into structured summary data.
+
+        Args:
+            curve_history: List of strings in format "{curves}@{b1},{b2},p={param}" or "{curves}@{b1},p={param}"
+
+        Returns:
+            List of dictionaries with B1, B2, curves, and parametrization
+        """
+        import re
+        summary = []
+
+        for entry in curve_history:
+            # Pattern: "{curves}@{b1},{b2},p={param}" or "{curves}@{b1},p={param}"
+            # Also handle: "{curves}@{b1},0,p={param}" for stage1-only
+            match = re.match(r'(\d+)@(\d+),?(\d+)?,p=(\d+)', entry)
+            if match:
+                curves = int(match.group(1))
+                b1 = int(match.group(2))
+                b2_str = match.group(3)
+                param = int(match.group(4))
+
+                # Parse B2 (None = default, 0 = stage1 only, number = explicit B2)
+                if b2_str is None:
+                    b2 = None  # GMP-ECM default
+                else:
+                    b2 = int(b2_str)
+
+                # Determine mode
+                if b2 == 0:
+                    mode = "Stage1 Only"
+                elif b2 is None:
+                    mode = "ECM (default B2)"
+                else:
+                    mode = "Two-Stage"
+
+                summary.append({
+                    'b1': b1,
+                    'b2': b2,
+                    'curves': curves,
+                    'parametrization': param,
+                    'mode': mode
+                })
+
+        return summary
 
     # ==================== LEGACY METHODS (BACKWARD COMPATIBLE) ====================
 

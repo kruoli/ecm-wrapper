@@ -209,12 +209,69 @@ class FactorResult:
 
     # T-level tracking (for progressive ECM)
     t_level_achieved: float = 0.0  # T-level reached during execution
+    curve_summary: List[Dict[str, Any]] = field(default_factory=list)  # Detailed curve execution summary
 
     def add_factor(self, factor: str, sigma: Optional[str] = None):
         """Add a discovered factor with its sigma."""
         self.factors.append(factor)
         self.sigmas.append(sigma)
         self.success = True
+
+    def print_curve_summary(self, show_parametrization: bool = False) -> None:
+        """
+        Print a summary table of curves executed during t-level runs.
+
+        Args:
+            show_parametrization: If True, include parametrization column
+        """
+        if not self.curve_summary:
+            return
+
+        print("\nCurve Execution Summary:")
+        print("=" * 80)
+
+        # Calculate column widths
+        if show_parametrization:
+            header = f"{'B1':<15} {'B2':<15} {'Curves':<10} {'Param':<6} {'Mode':<12}"
+            print(header)
+            print("-" * 80)
+        else:
+            header = f"{'B1':<15} {'B2':<15} {'Curves':<10} {'Mode':<12}"
+            print(header)
+            print("-" * 80)
+
+        total_curves = 0
+        for step in self.curve_summary:
+            b1 = step['b1']
+            b2 = step.get('b2')
+            curves = step['curves']
+            param = step.get('parametrization', 1)
+            mode = step.get('mode', 'ECM')
+
+            total_curves += curves
+
+            # Format B2 display
+            if b2 is None:
+                b2_str = "GMP default"
+            elif b2 == 0:
+                b2_str = "0 (stage1)"
+            else:
+                b2_str = f"{b2:,}"
+
+            # Format B1 display
+            b1_str = f"{b1:,}"
+
+            if show_parametrization:
+                param_str = f"p={param}"
+                print(f"{b1_str:<15} {b2_str:<15} {curves:<10} {param_str:<6} {mode:<12}")
+            else:
+                print(f"{b1_str:<15} {b2_str:<15} {curves:<10} {mode:<12}")
+
+        print("-" * 80)
+        print(f"{'Total:':<15} {'':<15} {total_curves:<10}")
+        if self.t_level_achieved > 0:
+            print(f"\nT-level achieved: {self.t_level_achieved:.2f}")
+        print("=" * 80)
 
     @property
     def factor_sigma_pairs(self) -> List[tuple]:

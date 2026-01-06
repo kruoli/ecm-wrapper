@@ -45,9 +45,11 @@ async def get_composite_stats(
     factors_list = [f.factor for f in factors]
 
     # Determine status
-    status: Literal["composite", "prime", "fully_factored"]
-    if comp.is_prime:
-        status = "prime"
+    status: Literal["composite", "sufficient", "fully_factored", "complete"]
+    if comp.is_complete and comp.is_fully_factored:
+        status = "complete"
+    elif comp.is_complete:
+        status = "sufficient"
     elif comp.is_fully_factored:
         status = "fully_factored"
     else:

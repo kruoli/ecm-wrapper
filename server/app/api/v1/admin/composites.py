@@ -149,7 +149,7 @@ async def bulk_add_composites_structured(
                 'has_snfs_form': c.has_snfs_form,
                 'snfs_difficulty': c.snfs_difficulty,
                 'priority': c.priority if c.priority is not None else request.default_priority,
-                'is_prime': c.is_prime,
+                'is_complete': c.is_complete,
                 'is_fully_factored': c.is_fully_factored,
                 'is_active': c.is_active,
                 'prior_t_level': c.prior_t_level

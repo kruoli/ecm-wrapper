@@ -94,7 +94,7 @@ async def get_ecm_work(
             and_(
                 Composite.is_active == True,  # Only assign active composites
                 Composite.is_fully_factored == False,
-                or_(Composite.is_prime.is_(None), Composite.is_prime == False),
+                or_(Composite.is_complete.is_(None), Composite.is_complete == False),
                 Composite.target_t_level.isnot(None),
                 Composite.current_t_level < Composite.target_t_level
             )

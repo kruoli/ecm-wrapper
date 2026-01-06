@@ -34,7 +34,7 @@ class CompositeStats(BaseModel):
     )
     priority: int = Field(..., description="Priority level")
     is_active: bool = Field(..., description="Whether composite is available for work assignment")
-    status: Literal["composite", "prime", "fully_factored"] = Field(
+    status: Literal["composite", "sufficient", "fully_factored", "complete"] = Field(
         ..., description="Current status"
     )
     factors_found: List[str] = Field(
@@ -56,7 +56,7 @@ class CompositeResponse(BaseModel):
     current_t_level: Optional[float]  # Includes prior_t_level if set
     prior_t_level: Optional[float]
     priority: int
-    is_prime: Optional[bool]
+    is_complete: Optional[bool]  # Marks composite as sufficiently complete for OPN purposes
     is_fully_factored: bool
     is_active: bool
     created_at: datetime
@@ -78,8 +78,8 @@ class CompositeInput(BaseModel):
         None, description="GNFS-equivalent digit count for SNFS numbers"
     )
     priority: int = Field(0, description="Priority level for work assignment")
-    is_prime: Optional[bool] = Field(
-        None, description="Whether the composite is actually prime"
+    is_complete: Optional[bool] = Field(
+        None, description="Whether the composite is sufficiently complete for OPN purposes"
     )
     is_fully_factored: Optional[bool] = Field(
         None, description="Whether the composite is fully factored"

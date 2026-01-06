@@ -17,7 +17,7 @@ class Composite(Base, TimestampMixin):
     snfs_difficulty: Mapped[Optional[int]] = mapped_column(nullable=True)  # GNFS-equivalent digit count for SNFS numbers
 
     # Status fields
-    is_prime: Mapped[Optional[bool]] = mapped_column(Boolean, default=None, nullable=True)  # NULL until determined
+    is_complete: Mapped[Optional[bool]] = mapped_column(Boolean, default=None, nullable=True)  # Marks composite as sufficiently complete for OPN purposes
     is_fully_factored: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)  # Whether composite is available for work assignment
 
@@ -31,7 +31,7 @@ class Composite(Base, TimestampMixin):
 
     # Add indexes for common queries
     __table_args__ = (
-        Index('ix_composites_factored_status', 'is_fully_factored', 'is_prime'),
+        Index('ix_composites_factored_status', 'is_fully_factored', 'is_complete'),
         Index('ix_composites_t_level_progress', 'target_t_level', 'current_t_level'),
         Index('ix_composites_priority_work', 'priority', 'is_fully_factored'),
         Index('ix_composites_active_status', 'is_active', 'is_fully_factored'),  # For work assignment queries

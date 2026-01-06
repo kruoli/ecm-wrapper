@@ -28,7 +28,7 @@ def serialize_composite(composite, include_full_number: bool = False) -> Dict[st
         "current_composite": composite.current_composite,
         "digit_length": composite.digit_length,
         "priority": composite.priority,
-        "is_prime": composite.is_prime,
+        "is_complete": composite.is_complete,
         "is_fully_factored": composite.is_fully_factored,
         "current_t_level": composite.current_t_level,  # Includes prior_t_level if set
         "prior_t_level": composite.prior_t_level,

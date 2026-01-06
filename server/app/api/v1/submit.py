@@ -197,7 +197,7 @@ async def submit_result(
                                 f"Skipping final prime factor {factor_str[:20]}{'...' if len(factor_str) > 20 else ''} "
                                 f"- not adding to factors table"
                             )
-                            # Mark that we found the final prime (will set is_prime=True later)
+                            # Mark that we found the final prime (will set is_complete=True later)
                             running_cofactor = factor_str  # The "cofactor" is now just this prime
                             continue
 
@@ -258,7 +258,7 @@ async def submit_result(
                         # Test if cofactor is prime
                         if is_probably_prime(running_cofactor):
                             logger.info(f"Cofactor is prime - marking composite {composite.id} as fully factored")
-                            composite.is_prime = True
+                            composite.is_complete = True
                             composite.is_fully_factored = True
                         else:
                             # Cofactor is still composite - recalculate target t-level for new size

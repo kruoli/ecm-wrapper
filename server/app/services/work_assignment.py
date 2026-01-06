@@ -260,7 +260,7 @@ class WorkAssignmentService:
             and_(
                 Composite.is_active == True,  # Only assign active composites
                 Composite.is_fully_factored == False,
-                or_(Composite.is_prime.is_(None), Composite.is_prime == False)
+                or_(Composite.is_complete.is_(None), Composite.is_complete == False)
             )
         )
 

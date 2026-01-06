@@ -220,6 +220,7 @@ class FactorResult:
     def print_curve_summary(self, show_parametrization: bool = False) -> None:
         """
         Print a summary table of curves executed during t-level runs.
+        Groups identical B1/B2/param combinations together.
 
         Args:
             show_parametrization: If True, include parametrization column
@@ -227,27 +228,36 @@ class FactorResult:
         if not self.curve_summary:
             return
 
+        # Group curves by (B1, B2, param)
+        grouped: dict = {}
+        for step in self.curve_summary:
+            b1 = step['b1']
+            b2 = step.get('b2')
+            param = step.get('parametrization', 1)
+            curves = step['curves']
+
+            key = (b1, b2, param)
+            if key in grouped:
+                grouped[key] += curves
+            else:
+                grouped[key] = curves
+
         print("\nCurve Execution Summary:")
         print("=" * 80)
 
         # Calculate column widths
         if show_parametrization:
-            header = f"{'B1':<15} {'B2':<15} {'Curves':<10} {'Param':<6} {'Mode':<12}"
+            header = f"{'B1':<15} {'B2':<15} {'Curves':<10} {'Param':<6}"
             print(header)
             print("-" * 80)
         else:
-            header = f"{'B1':<15} {'B2':<15} {'Curves':<10} {'Mode':<12}"
+            header = f"{'B1':<15} {'B2':<15} {'Curves':<10}"
             print(header)
             print("-" * 80)
 
         total_curves = 0
-        for step in self.curve_summary:
-            b1 = step['b1']
-            b2 = step.get('b2')
-            curves = step['curves']
-            param = step.get('parametrization', 1)
-            mode = step.get('mode', 'ECM')
-
+        # Sort by B1 for consistent display
+        for (b1, b2, param), curves in sorted(grouped.items(), key=lambda x: x[0][0]):
             total_curves += curves
 
             # Format B2 display
@@ -263,9 +273,9 @@ class FactorResult:
 
             if show_parametrization:
                 param_str = f"p={param}"
-                print(f"{b1_str:<15} {b2_str:<15} {curves:<10} {param_str:<6} {mode:<12}")
+                print(f"{b1_str:<15} {b2_str:<15} {curves:<10} {param_str:<6}")
             else:
-                print(f"{b1_str:<15} {b2_str:<15} {curves:<10} {mode:<12}")
+                print(f"{b1_str:<15} {b2_str:<15} {curves:<10}")
 
         print("-" * 80)
         print(f"{'Total:':<15} {'':<15} {total_curves:<10}")

@@ -1,6 +1,8 @@
 {# Status badge component #}
-{% if is_prime %}
-<span class="status-badge status-complete">Prime</span>
+{% if is_complete and is_fully_factored %}
+<span class="status-badge status-complete">Complete</span>
+{% elif is_complete %}
+<span class="status-badge status-complete">Sufficient</span>
 {% elif is_fully_factored %}
 <span class="status-badge status-complete">Fully Factored</span>
 {% else %}

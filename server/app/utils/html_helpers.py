@@ -92,21 +92,26 @@ def get_health_class(percentage: float,
     return 'health-critical'
 
 
-def format_status_badge(is_prime: bool, is_fully_factored: bool) -> Dict[str, str]:
+def format_status_badge(is_complete: bool, is_fully_factored: bool) -> Dict[str, str]:
     """
     Get status badge information for a composite.
 
     Args:
-        is_prime: Whether the number is prime
+        is_complete: Whether the composite is sufficiently complete for OPN purposes
         is_fully_factored: Whether the number is fully factored
 
     Returns:
         Dictionary with badge class and text
     """
-    if is_prime:
+    if is_complete and is_fully_factored:
         return {
             'class': 'status-complete',
-            'text': 'Prime'
+            'text': 'Complete'
+        }
+    if is_complete:
+        return {
+            'class': 'status-complete',
+            'text': 'Sufficient'
         }
     if is_fully_factored:
         return {

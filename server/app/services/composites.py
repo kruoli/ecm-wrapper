@@ -50,7 +50,7 @@ class CompositeService:
         current_composite: Optional[str] = None,
         has_snfs_form: Optional[bool] = None,
         snfs_difficulty: Optional[int] = None,
-        is_prime: Optional[bool] = None,
+        is_complete: Optional[bool] = None,
         is_fully_factored: Optional[bool] = None,
         priority: Optional[int] = None,
         is_active: Optional[bool] = None,
@@ -68,7 +68,7 @@ class CompositeService:
             current_composite: Current composite value after factorization
             has_snfs_form: Whether number has SNFS form
             snfs_difficulty: SNFS difficulty rating
-            is_prime: Whether number is prime
+            is_complete: Whether number is sufficiently complete for OPN purposes
             is_fully_factored: Whether number is fully factored
             priority: Priority level
             is_active: Whether composite is available for work assignment (defaults to False for new composites)
@@ -110,8 +110,8 @@ class CompositeService:
                 updated = True
                 t_level_needs_update = True  # snfs_difficulty affects target t-level
 
-            if is_prime is not None and existing.is_prime != is_prime:
-                existing.is_prime = is_prime
+            if is_complete is not None and existing.is_complete != is_complete:
+                existing.is_complete = is_complete
                 updated = True
 
             if is_fully_factored is not None and existing.is_fully_factored != is_fully_factored:
@@ -180,7 +180,7 @@ class CompositeService:
             digit_length=digit_length,
             has_snfs_form=has_snfs_form if has_snfs_form is not None else False,
             snfs_difficulty=snfs_difficulty,
-            is_prime=is_prime if is_prime is not None else False,
+            is_complete=is_complete if is_complete is not None else False,
             is_fully_factored=is_fully_factored if is_fully_factored is not None else False,
             priority=priority if priority is not None else 0,
             is_active=is_active if is_active is not None else False,  # Default to inactive for manual review
@@ -358,9 +358,9 @@ class CompositeService:
         db.flush()  # Make changes visible within transaction
         return rows_updated > 0
 
-    def mark_prime(self, db: Session, composite_id: int) -> bool:
+    def mark_complete(self, db: Session, composite_id: int) -> bool:
         """
-        Mark composite as prime.
+        Mark composite as sufficiently complete for OPN purposes.
 
         Args:
             db: Database session
@@ -374,7 +374,7 @@ class CompositeService:
         """
         rows_updated = db.query(Composite)\
             .filter(Composite.id == composite_id)\
-            .update({"is_prime": True})
+            .update({"is_complete": True})
         db.flush()  # Make changes visible within transaction
         return rows_updated > 0
 
@@ -548,7 +548,9 @@ class CompositeService:
             if is_probably_prime(cofactor):
                 logger.info("Cofactor %s is prime - marking composite %d as fully factored",
                            cofactor[:20] + "..." if len(cofactor) > 20 else cofactor, composite_id)
-                composite.is_prime = True
+                # Cofactor stays in current_composite (it's the final prime)
+                # OPN can read it from there when syncing
+                composite.is_complete = True
                 composite.is_fully_factored = True
             else:
                 # Cofactor is still composite - recalculate target t-level for new size
@@ -663,7 +665,7 @@ class CompositeService:
                         current_composite=item.get('current_composite'),
                         has_snfs_form=item.get('has_snfs_form'),  # None if not provided
                         snfs_difficulty=item.get('snfs_difficulty'),
-                        is_prime=item.get('is_prime'),
+                        is_complete=item.get('is_complete'),
                         is_fully_factored=item.get('is_fully_factored'),
                         priority=item.get('priority', default_priority),
                         is_active=item.get('is_active'),
@@ -768,7 +770,7 @@ class CompositeService:
                 'current_t_level': composite.current_t_level,  # Includes prior_t_level if set
                 'prior_t_level': composite.prior_t_level,
                 'priority': composite.priority,
-                'is_prime': composite.is_prime,
+                'is_complete': composite.is_complete,
                 'is_fully_factored': composite.is_fully_factored,
                 'created_at': composite.created_at,
                 'updated_at': composite.updated_at
@@ -997,7 +999,7 @@ class CompositeService:
 
         # Get all composites with t-level data
         composites = db.query(Composite).filter(
-            or_(Composite.is_prime.is_(None), Composite.is_prime == False),
+            or_(Composite.is_complete.is_(None), Composite.is_complete == False),
             Composite.is_fully_factored == False
         ).all()
 

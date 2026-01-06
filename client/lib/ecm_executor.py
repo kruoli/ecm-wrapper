@@ -632,13 +632,14 @@ class ECMWrapper(BaseWrapper):
                 # Get next work item
                 self.logger.info("[CPU Thread] Waiting for next work item from queue...")
                 work_item = residue_queue.get()
-                self.logger.info(f"[CPU Thread] Received work item (stage1_factor={work_item.get('stage1_factor') is not None})")
 
                 # Check for sentinel
                 if work_item is None:
                     self.logger.info("[CPU Thread] Received stop signal")
                     residue_queue.task_done()
                     break
+
+                self.logger.info(f"[CPU Thread] Received work item (stage1_factor={work_item.get('stage1_factor') is not None})")
 
                 try:
                     residue_file = work_item['residue_file']

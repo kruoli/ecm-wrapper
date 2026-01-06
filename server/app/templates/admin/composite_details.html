@@ -224,13 +224,14 @@
             <tr><th>Created</th><td>{{ esc(composite.created_at) }}</td></tr>
             <tr><th>Last Updated</th><td>{{ esc(composite.updated_at) }}</td></tr>
             <tr><th>Status</th><td>
-                {% if composite.is_fully_factored %}
+                {% if composite.is_complete and composite.is_fully_factored %}
+                <span class="status-badge status-complete">Complete</span>
+                {% elif composite.is_complete %}
+                <span class="status-badge status-complete">Sufficient</span>
+                {% elif composite.is_fully_factored %}
                 <span class="status-badge status-complete">Fully Factored</span>
                 {% else %}
                 <span class="status-badge status-active">Active</span>
-                {% endif %}
-                {% if composite.is_prime %}
-                <span class="status-badge status-complete">Prime</span>
                 {% endif %}
             </td></tr>
         </table>

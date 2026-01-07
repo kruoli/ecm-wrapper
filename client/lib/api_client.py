@@ -324,8 +324,8 @@ class APIClient:
     def get_ecm_work(
         self,
         client_id: str,
-        min_digits: Optional[int] = None,
-        max_digits: Optional[int] = None,
+        min_target_tlevel: Optional[float] = None,
+        max_target_tlevel: Optional[float] = None,
         priority: Optional[int] = None,
         timeout_days: int = 1,
         work_type: str = "standard"
@@ -335,8 +335,8 @@ class APIClient:
 
         Args:
             client_id: Client identifier
-            min_digits: Minimum composite digit length (optional)
-            max_digits: Maximum composite digit length (optional)
+            min_target_tlevel: Minimum target t-level (filter by difficulty)
+            max_target_tlevel: Maximum target t-level (filter by difficulty)
             priority: Minimum priority filter (optional)
             timeout_days: Work assignment expiration in days (default: 1)
             work_type: Work assignment strategy - "standard" (smallest first) or "progressive" (least ECM done first)
@@ -356,10 +356,10 @@ class APIClient:
 
         # Build query parameters
         params = {'client_id': client_id, 'timeout_days': timeout_days, 'work_type': work_type}
-        if min_digits is not None:
-            params['min_digits'] = min_digits
-        if max_digits is not None:
-            params['max_digits'] = max_digits
+        if min_target_tlevel is not None:
+            params['min_target_tlevel'] = min_target_tlevel
+        if max_target_tlevel is not None:
+            params['max_target_tlevel'] = max_target_tlevel
         if priority is not None:
             params['priority'] = priority
 
@@ -494,8 +494,8 @@ class APIClient:
     def get_residue_work(
         self,
         client_id: str,
-        min_digits: Optional[int] = None,
-        max_digits: Optional[int] = None,
+        min_target_tlevel: Optional[float] = None,
+        max_target_tlevel: Optional[float] = None,
         min_priority: Optional[int] = None,
         min_b1: Optional[int] = None,
         max_b1: Optional[int] = None,
@@ -506,8 +506,8 @@ class APIClient:
 
         Args:
             client_id: Client identifier
-            min_digits: Minimum composite digit length
-            max_digits: Maximum composite digit length
+            min_target_tlevel: Minimum target t-level
+            max_target_tlevel: Maximum target t-level
             min_priority: Minimum composite priority
             min_b1: Minimum B1 bound of residue
             max_b1: Maximum B1 bound of residue
@@ -521,10 +521,10 @@ class APIClient:
 
         headers = {'X-Client-ID': client_id}
         params = {'claim_timeout_hours': claim_timeout_hours}
-        if min_digits is not None:
-            params['min_digits'] = min_digits
-        if max_digits is not None:
-            params['max_digits'] = max_digits
+        if min_target_tlevel is not None:
+            params['min_target_tlevel'] = min_target_tlevel
+        if max_target_tlevel is not None:
+            params['max_target_tlevel'] = max_target_tlevel
         if min_priority is not None:
             params['min_priority'] = min_priority
         if min_b1 is not None:

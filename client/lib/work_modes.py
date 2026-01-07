@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Dict, TYPE_CHECKING
 import argparse
+import multiprocessing
 import signal
 import time
 
@@ -530,8 +531,8 @@ class Stage2ConsumerMode(WorkMode):
     def request_work(self) -> Optional[Dict[str, Any]]:
         residue_work = self.api_client.get_residue_work(
             client_id=self.ctx.client_id,
-            min_digits=getattr(self.args, 'min_digits', None),
-            max_digits=getattr(self.args, 'max_digits', None),
+            min_target_tlevel=getattr(self.args, 'min_target_tlevel', None),
+            max_target_tlevel=getattr(self.args, 'max_target_tlevel', None),
             min_priority=getattr(self.args, 'priority', None),
             min_b1=getattr(self.args, 'min_b1', None),
             max_b1=getattr(self.args, 'max_b1', None),
@@ -784,7 +785,15 @@ class StandardAutoWorkMode(WorkMode):
         mode_desc = "client t-level" if has_client_tlevel else "server t-level"
         print(f"Mode: {mode_desc} (start: {start_tlevel:.1f}, target: {target_tlevel:.1f})")
 
-        workers = resolve_worker_count(self.args) if self.args.multiprocess else 1
+        # Use workers for multiprocess mode OR two-stage mode (for CPU stage 2)
+        two_stage = getattr(self.args, 'two_stage', False)
+        if self.args.multiprocess:
+            workers = resolve_worker_count(self.args)
+        elif two_stage:
+            # For two-stage, use explicit --workers or auto-detect CPU count
+            workers = self.args.workers if self.args.workers > 0 else multiprocessing.cpu_count()
+        else:
+            workers = 1
 
         # Resolve max_batch from args or config
         max_batch = getattr(self.args, 'max_batch', None) or get_max_batch_default(self.wrapper.config)
@@ -797,6 +806,8 @@ class StandardAutoWorkMode(WorkMode):
             verbose=self.args.verbose,
             progress_interval=getattr(self.args, 'progress_interval', 0),
             max_batch_curves=max_batch,
+            use_two_stage=getattr(self.args, 'two_stage', False),
+            b2_multiplier=getattr(self.args, 'b2_multiplier', None) or 100.0,
             project=self.args.project,
             no_submit=False,
             work_id=self.current_work_id

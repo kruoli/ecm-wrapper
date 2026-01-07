@@ -228,8 +228,8 @@ class ResidueManager:
         self,
         db: Session,
         client_id: str,
-        min_digits: Optional[int] = None,
-        max_digits: Optional[int] = None,
+        min_target_tlevel: Optional[float] = None,
+        max_target_tlevel: Optional[float] = None,
         min_priority: Optional[int] = None,
         min_b1: Optional[int] = None,
         max_b1: Optional[int] = None
@@ -240,8 +240,8 @@ class ResidueManager:
         Args:
             db: Database session
             client_id: ID of requesting client
-            min_digits: Minimum composite digit size
-            max_digits: Maximum composite digit size
+            min_target_tlevel: Minimum target t-level
+            max_target_tlevel: Maximum target t-level
             min_priority: Minimum composite priority
             min_b1: Minimum B1 bound of residue
             max_b1: Maximum B1 bound of residue
@@ -259,10 +259,10 @@ class ResidueManager:
         )
 
         # Apply filters
-        if min_digits is not None:
-            query = query.filter(Composite.digit_length >= min_digits)
-        if max_digits is not None:
-            query = query.filter(Composite.digit_length <= max_digits)
+        if min_target_tlevel is not None:
+            query = query.filter(Composite.target_t_level >= min_target_tlevel)
+        if max_target_tlevel is not None:
+            query = query.filter(Composite.target_t_level <= max_target_tlevel)
         if min_priority is not None:
             query = query.filter(Composite.priority >= min_priority)
         if min_b1 is not None:

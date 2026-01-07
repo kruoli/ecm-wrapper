@@ -254,6 +254,10 @@ def main():
         current_composite = args.composite
         current_t_level = args.start_tlevel or 0.0
         all_factors = []
+        all_curve_summaries = []  # Aggregate curve summary across all iterations
+        total_execution_time = 0.0
+        total_curves_run = 0
+        final_t_level = 0.0
 
         # Progressive factorization loop
         while True:
@@ -295,6 +299,13 @@ def main():
             )
 
             result = wrapper.run_tlevel_v2(config)
+
+            # Aggregate statistics from this iteration
+            if result.curve_summary:
+                all_curve_summaries.extend(result.curve_summary)
+            total_execution_time += result.execution_time
+            total_curves_run += result.curves_run
+            final_t_level = result.t_level_achieved if result.t_level_achieved else final_t_level
 
             # Collect factors
             if result.factors:
@@ -339,13 +350,21 @@ def main():
                 output.warning("Interrupted by user")
                 break
 
-        # Build final result with all collected factors
+        # Build final aggregate result with all collected data
+        result = FactorResult()
+        for f in all_factors:
+            result.add_factor(f, None)
+        result.success = len(all_factors) > 0
+        result.curves_run = total_curves_run
+        result.execution_time = total_execution_time
+        result.curve_summary = all_curve_summaries
+        result.t_level_achieved = final_t_level
+
+        # Print all factors found at the end
         if all_factors:
-            # Create aggregate result
-            result = FactorResult()
-            for f in all_factors:
-                result.add_factor(f, None)
-            result.success = True
+            output.section("All Factors Found")
+            for i, factor in enumerate(all_factors, 1):
+                output.item(f"Factor {i}", f"{factor} ({len(factor)} digits)")
 
     # Multiprocess Mode
     elif args.multiprocess:

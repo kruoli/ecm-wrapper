@@ -130,8 +130,8 @@ async def upload_residue(
 @router.get("/work", response_model=ResidueWorkResponse)
 async def get_residue_work(
     client_id: str = Header(..., alias="X-Client-ID", description="Client identifier"),
-    min_digits: Optional[int] = Query(None, ge=1, description="Minimum composite digit size"),
-    max_digits: Optional[int] = Query(None, ge=1, description="Maximum composite digit size"),
+    min_target_tlevel: Optional[float] = Query(None, description="Minimum target t-level"),
+    max_target_tlevel: Optional[float] = Query(None, description="Maximum target t-level"),
     min_priority: Optional[int] = Query(None, description="Minimum composite priority"),
     min_b1: Optional[int] = Query(None, ge=1, description="Minimum B1 bound of residue"),
     max_b1: Optional[int] = Query(None, ge=1, description="Maximum B1 bound of residue"),
@@ -147,8 +147,8 @@ async def get_residue_work(
 
     Args:
         client_id: ID of the requesting client
-        min_digits: Minimum composite digit size filter
-        max_digits: Maximum composite digit size filter
+        min_target_tlevel: Minimum target t-level filter
+        max_target_tlevel: Maximum target t-level filter
         min_priority: Minimum composite priority filter
         min_b1: Minimum B1 bound of residue
         max_b1: Maximum B1 bound of residue
@@ -163,8 +163,8 @@ async def get_residue_work(
         residue = residue_manager.get_available_work(
             db=db,
             client_id=client_id,
-            min_digits=min_digits,
-            max_digits=max_digits,
+            min_target_tlevel=min_target_tlevel,
+            max_target_tlevel=max_target_tlevel,
             min_priority=min_priority,
             min_b1=min_b1,
             max_b1=max_b1

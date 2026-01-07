@@ -97,8 +97,8 @@ def request_ecm_work(api_client, client_id: str, args: argparse.Namespace,
     """
     work = api_client.get_ecm_work(
         client_id=client_id,
-        min_digits=args.min_digits if hasattr(args, 'min_digits') else None,
-        max_digits=args.max_digits if hasattr(args, 'max_digits') else None,
+        min_target_tlevel=args.min_target_tlevel if hasattr(args, 'min_target_tlevel') else None,
+        max_target_tlevel=args.max_target_tlevel if hasattr(args, 'max_target_tlevel') else None,
         priority=args.priority if hasattr(args, 'priority') else None,
         work_type=args.work_type if hasattr(args, 'work_type') else 'standard'
     )

@@ -665,6 +665,25 @@ class ECMWrapper(BaseWrapper):
                             curve_history.append(f"{curves}@{b1},0,p=3")
                             current_t_level = calculate_tlevel(curve_history, base_tlevel=config.start_t_level)
 
+                        # Submit results with factor (b2=0 since stage 2 never ran)
+                        if not config.no_submit and curves > 0:
+                            # Extract just the factor strings from (factor, sigma) tuples
+                            factor_strings = [f for f, s in all_stage1_factors]
+                            step_results = {
+                                'success': True,
+                                'factors_found': factor_strings,
+                                'curves_completed': curves,
+                                'execution_time': stage1_time,
+                                'composite': config.composite,
+                                'method': 'ecm',
+                                'b1': b1,
+                                'b2': 0,  # Stage 1 only
+                                'parametrization': 3
+                            }
+                            if config.work_id:
+                                step_results['work_id'] = config.work_id
+                            self.submit_result(step_results, config.project, 'gmp-ecm-ecm')
+
                         # Signal GPU to stop
                         self.logger.info("[CPU Thread] Stopping GPU production (factor found)")
                         shutdown_event.set()
@@ -707,6 +726,22 @@ class ECMWrapper(BaseWrapper):
 
                             if all_stage2_factors:
                                 self.logger.info("[CPU Thread] Factor found, will break after cleanup")
+                                # Submit results with factor before breaking
+                                if not config.no_submit and curves_completed > 0:
+                                    step_results = {
+                                        'success': True,
+                                        'factors_found': all_stage2_factors,
+                                        'curves_completed': curves_completed,
+                                        'execution_time': stage1_time + stage2_time,
+                                        'composite': config.composite,
+                                        'method': 'ecm',
+                                        'b1': b1,
+                                        'b2': b2,
+                                        'parametrization': 3
+                                    }
+                                    if config.work_id:
+                                        step_results['work_id'] = config.work_id
+                                    self.submit_result(step_results, config.project, 'gmp-ecm-ecm')
                                 residue_queue.task_done()
                                 # Clean up
                                 if residue_file.exists():
@@ -714,6 +749,25 @@ class ECMWrapper(BaseWrapper):
                                 break
 
                         self.logger.info("[CPU Thread] Stage 2 complete (no factor), cleaning up")
+
+                        # Submit results for this batch (outside the lock to avoid blocking)
+                        if not config.no_submit and curves_completed > 0:
+                            step_results = {
+                                'success': True,
+                                'factors_found': all_stage2_factors if all_stage2_factors else [],
+                                'curves_completed': curves_completed,
+                                'execution_time': stage1_time + stage2_time,
+                                'composite': config.composite,
+                                'method': 'ecm',
+                                'b1': b1,
+                                'b2': b2,
+                                'parametrization': 3  # Two-stage uses GPU param
+                            }
+                            if config.work_id:
+                                step_results['work_id'] = config.work_id
+                            submit_response = self.submit_result(step_results, config.project, 'gmp-ecm-ecm')
+                            if not submit_response:
+                                self.logger.warning(f"[CPU Thread] Failed to submit results for B1={b1}")
                     else:
                         self.logger.warning(f"[CPU Thread] Stage 1 failed or no residue file")
 

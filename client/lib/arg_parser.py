@@ -152,10 +152,10 @@ Examples:
     # Work filtering
     parser.add_argument('--work-count', type=int,
                        help='Number of work items to process (default: unlimited)')
-    parser.add_argument('--min-digits', type=int,
-                       help='Minimum composite size (digits)')
-    parser.add_argument('--max-digits', type=int,
-                       help='Maximum composite size (digits)')
+    parser.add_argument('--min-target-tlevel', type=float,
+                       help='Minimum target t-level (filter work by difficulty)')
+    parser.add_argument('--max-target-tlevel', type=float,
+                       help='Maximum target t-level (filter work by difficulty)')
     parser.add_argument('--priority', type=int,
                        help='Minimum priority level')
     parser.add_argument('--work-type', choices=['standard', 'progressive'], default='standard',
@@ -322,10 +322,10 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
     # Filter options only valid in auto-work mode
     if hasattr(args, 'work_count') and args.work_count is not None and not args.auto_work:
         errors['work_count'] = "--work-count only valid in --auto-work mode"
-    if hasattr(args, 'min_digits') and args.min_digits is not None and not args.auto_work:
-        errors['min_digits'] = "--min-digits only valid in --auto-work mode"
-    if hasattr(args, 'max_digits') and args.max_digits is not None and not args.auto_work:
-        errors['max_digits'] = "--max-digits only valid in --auto-work mode"
+    if hasattr(args, 'min_target_tlevel') and args.min_target_tlevel is not None and not args.auto_work:
+        errors['min_target_tlevel'] = "--min-target-tlevel only valid in --auto-work mode"
+    if hasattr(args, 'max_target_tlevel') and args.max_target_tlevel is not None and not args.auto_work:
+        errors['max_target_tlevel'] = "--max-target-tlevel only valid in --auto-work mode"
     if hasattr(args, 'priority') and args.priority is not None and not args.auto_work:
         errors['priority'] = "--priority only valid in --auto-work mode"
 

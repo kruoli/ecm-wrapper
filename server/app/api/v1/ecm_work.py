@@ -27,8 +27,8 @@ settings = get_settings()
 async def get_ecm_work(
     client_id: str,
     priority: Optional[int] = None,
-    min_digits: Optional[int] = None,
-    max_digits: Optional[int] = None,
+    min_target_tlevel: Optional[float] = None,
+    max_target_tlevel: Optional[float] = None,
     timeout_days: int = 1,
     work_type: str = "standard",
     db: Session = Depends(get_db),
@@ -48,8 +48,8 @@ async def get_ecm_work(
     Args:
         client_id: Unique identifier for the requesting client
         priority: Minimum priority level (filters for priority >= this value)
-        min_digits: Minimum number of digits
-        max_digits: Maximum number of digits
+        min_target_tlevel: Minimum target t-level (filters for target_t_level >= this value)
+        max_target_tlevel: Maximum target t-level (filters for target_t_level <= this value)
         timeout_days: Work assignment expiration in days (default: 1)
         work_type: Work assignment strategy - "standard" (easiest/lowest target t-level first) or "progressive" (least ECM done first)
         db: Database session
@@ -104,11 +104,11 @@ async def get_ecm_work(
         if priority is not None:
             query = query.filter(Composite.priority >= priority)
 
-        # Apply digit length filters
-        if min_digits is not None:
-            query = query.filter(Composite.digit_length >= min_digits)
-        if max_digits is not None:
-            query = query.filter(Composite.digit_length <= max_digits)
+        # Apply target t-level filters
+        if min_target_tlevel is not None:
+            query = query.filter(Composite.target_t_level >= min_target_tlevel)
+        if max_target_tlevel is not None:
+            query = query.filter(Composite.target_t_level <= max_target_tlevel)
 
         # Exclude composites with active work assignments
         active_work_composites = db.query(WorkAssignment.composite_id).filter(

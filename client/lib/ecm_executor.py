@@ -368,8 +368,8 @@ class ECMWrapper(BaseWrapper):
                         all_raw_outputs.append(f"=== Worker {result['worker_id']} ===\n{result['raw_output']}")
 
                     completed_workers += 1
-                except Exception:
-                    # Check if processes are still alive (Queue.Empty or other errors)
+                except queue.Empty:
+                    # Timeout waiting for result - check if processes are still alive
                     if not any(p.is_alive() for p in processes):
                         break
                     continue
@@ -1040,8 +1040,9 @@ class ECMWrapper(BaseWrapper):
                 try:
                     current_t_level = calculate_tlevel(curve_history, base_tlevel=config.start_t_level)
                     self.logger.info(f"Current t-level: {current_t_level:.2f}")
-                except:
-                    # If t-level calculation fails, approximate it
+                except (subprocess.CalledProcessError, ValueError, OSError) as e:
+                    # If t-level calculation fails (binary error, parse error), approximate it
+                    self.logger.warning(f"T-level calculation failed ({type(e).__name__}), using step target: {step_target:.2f}")
                     current_t_level = step_target
 
                 # Check if we've reached overall target

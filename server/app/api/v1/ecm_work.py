@@ -17,6 +17,7 @@ from ...models.residues import ECMResidue
 from ...services.t_level_calculator import TLevelCalculator
 from ...utils.transactions import transaction_scope
 from ...config import get_settings
+from ...constants import ECM_BOUNDS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -236,22 +237,6 @@ async def get_ecm_work(
 
 def _get_escalated_parameters(digit_length: int, previous_attempts: list) -> tuple:
     """Get escalated ECM parameters when target t-level is reached."""
-    # Standard ECM bounds table
-    ECM_BOUNDS = [
-        (30, 2000, 147000, 25),
-        (35, 11000, 1900000, 90),
-        (40, 50000, 12500000, 300),
-        (45, 250000, 128000000, 700),
-        (50, 1000000, 1000000000, 1800),
-        (55, 3000000, 5000000000, 5100),
-        (60, 11000000, 35000000000, 10600),
-        (65, 43000000, 240000000000, 19300),
-        (70, 110000000, 873000000000, 49000),
-        (75, 260000000, 2600000000000, 124000),
-        (80, 850000000, 11700000000000, 210000),
-        (85, 2900000000, 55300000000000, 340000),
-    ]
-
     max_b1_attempted = max((attempt.b1 for attempt in previous_attempts if attempt.method == 'ecm'), default=0)
     escalated_b1 = max_b1_attempted * 3
 

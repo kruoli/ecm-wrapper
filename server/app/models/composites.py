@@ -9,7 +9,7 @@ class Composite(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     number: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # Original mathematical form (e.g., "2^1223-1")
-    current_composite: Mapped[str] = mapped_column(Text, nullable=False)  # Current composite being factored (gets smaller as we find factors)
+    current_composite: Mapped[str] = mapped_column(Text, nullable=False)  # Current composite being factored (gets smaller as we find factors) - hash index added in migration
     digit_length: Mapped[int] = mapped_column(nullable=False, index=True)
 
     # SNFS tracking
@@ -30,6 +30,8 @@ class Composite(Base, TimestampMixin):
     priority: Mapped[int] = mapped_column(default=0, nullable=False, index=True)
 
     # Add indexes for common queries
+    # Note: current_composite has a PostgreSQL hash index created via migration
+    # (not defined here because hash indexes are PostgreSQL-specific and break SQLite tests)
     __table_args__ = (
         Index('ix_composites_factored_status', 'is_fully_factored', 'is_complete'),
         Index('ix_composites_t_level_progress', 'target_t_level', 'current_t_level'),

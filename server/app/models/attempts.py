@@ -96,9 +96,9 @@ class ECMAttempt(Base, TimestampMixin):
         )
 
     # Indexes for common queries
+    # Note: work_hash index is created automatically via unique=True on the column
     __table_args__ = (
         Index('ix_ecm_attempts_composite_method', 'composite_id', 'method'),
         Index('ix_ecm_attempts_client_status', 'client_id', 'status'),
         Index('ix_ecm_attempts_factor_found', 'factor_found'),
-        Index('ix_ecm_attempts_work_hash', 'work_hash'),
     )

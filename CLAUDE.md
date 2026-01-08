@@ -115,7 +115,7 @@ curl -X POST http://localhost:8000/api/v1/results/ecm \
 cd server
 source venv/bin/activate
 pytest tests/test_number_utils.py -v           # Test number utilities
-pytest tests/ --ignore=tests/test_transactions.py -v  # All tests except transactions
+pytest tests/ -v  # All server tests
 
 cd ../client
 pytest test_factorization.py -v               # Test parsing logic

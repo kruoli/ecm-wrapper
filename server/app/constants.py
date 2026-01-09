@@ -7,23 +7,28 @@ to avoid duplication and ensure consistency.
 
 from typing import List, Tuple
 
-# ECM parameter table based on GMP-ECM documentation and best practices
+# ECM parameter table based on Paul Zimmerman's GMP-ECM 7 recommendations
+# Source: https://www.rieselprime.de/ziki/Elliptic_curve_method
 # Format: (max_digits, b1, b2, typical_curves)
 # - max_digits: Maximum factor size (in digits) this B1 level is suitable for
-# - b1: Stage 1 bound
-# - b2: Stage 2 bound
-# - typical_curves: Number of curves typically needed to find a factor of this size
+# - b1: Stage 1 bound (from Zimmerman table)
+# - b2: Stage 2 bound (approximated as 100*B1, GMP-ECM calculates optimal internally)
+# - typical_curves: Expected curves for GMP-ECM 7 default parameters
+#
+# Note: These values are currently used for internal bookkeeping only.
+# The client calculates actual parameters via the t-level binary.
 ECM_BOUNDS: List[Tuple[int, int, int, int]] = [
-    (30, 2000, 147000, 25),
-    (35, 11000, 1900000, 90),
-    (40, 50000, 12500000, 300),
-    (45, 250000, 128000000, 700),
-    (50, 1000000, 1000000000, 1800),
-    (55, 3000000, 5000000000, 5100),
-    (60, 11000000, 35000000000, 10600),
-    (65, 43000000, 240000000000, 19300),
-    (70, 110000000, 873000000000, 49000),
-    (75, 260000000, 2600000000000, 124000),
-    (80, 850000000, 11700000000000, 210000),
-    (85, 2900000000, 55300000000000, 340000),
+    (20, 11000, 1100000, 107),
+    (25, 50000, 5000000, 261),
+    (30, 250000, 25000000, 513),
+    (35, 1000000, 100000000, 1071),
+    (40, 3000000, 300000000, 2753),
+    (45, 11000000, 1100000000, 5208),
+    (50, 43000000, 4300000000, 8704),
+    (55, 110000000, 11000000000, 20479),
+    (60, 260000000, 26000000000, 47888),
+    (65, 850000000, 85000000000, 78923),
+    (70, 2900000000, 290000000000, 115153),
+    (75, 7600000000, 760000000000, 211681),
+    (80, 25000000000, 2500000000000, 296479),
 ]

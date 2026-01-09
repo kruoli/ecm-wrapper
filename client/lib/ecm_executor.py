@@ -346,31 +346,44 @@ class ECMWrapper(BaseWrapper):
         total_curves_completed = 0
         completed_workers = 0
 
+        def process_result(result: dict) -> None:
+            """Process a single worker result."""
+            nonlocal total_curves_completed
+            total_curves_completed += result['curves_completed']
+
+            if result['factor_found']:
+                factor = result['factor_found']
+                # Deduplicate: multiple workers can find the same factor
+                if factor not in all_factors:
+                    all_factors.append(factor)
+                    all_sigmas.append(result.get('sigma_found'))
+                    self.logger.info(f"Worker {result['worker_id']} found factor: {factor}")
+                else:
+                    self.logger.info(f"Worker {result['worker_id']} found same factor: {factor} (already recorded)")
+                stop_event.set()  # Signal workers to stop on factor found
+
+            # Collect raw output from each worker
+            if 'raw_output' in result:
+                all_raw_outputs.append(f"=== Worker {result['worker_id']} ===\n{result['raw_output']}")
+
         try:
             while completed_workers < len(processes):
                 try:
                     result = result_queue.get(timeout=0.5)
-                    total_curves_completed += result['curves_completed']
-
-                    if result['factor_found']:
-                        factor = result['factor_found']
-                        # Deduplicate: multiple workers can find the same factor
-                        if factor not in all_factors:
-                            all_factors.append(factor)
-                            all_sigmas.append(result.get('sigma_found'))
-                            self.logger.info(f"Worker {result['worker_id']} found factor: {factor}")
-                        else:
-                            self.logger.info(f"Worker {result['worker_id']} found same factor: {factor} (already recorded)")
-                        stop_event.set()  # Signal workers to stop on factor found
-
-                    # Collect raw output from each worker
-                    if 'raw_output' in result:
-                        all_raw_outputs.append(f"=== Worker {result['worker_id']} ===\n{result['raw_output']}")
-
+                    process_result(result)
                     completed_workers += 1
                 except queue.Empty:
                     # Timeout waiting for result - check if processes are still alive
                     if not any(p.is_alive() for p in processes):
+                        # Drain any remaining results from the queue before breaking
+                        # (processes may have exited after putting results in queue)
+                        while True:
+                            try:
+                                result = result_queue.get_nowait()
+                                process_result(result)
+                                completed_workers += 1
+                            except queue.Empty:
+                                break
                         break
                     continue
         except KeyboardInterrupt:
@@ -1738,9 +1751,10 @@ class ECMWrapper(BaseWrapper):
                         sub_primes = self._fully_factor_found_result(found_factor, max_ecm_attempts, quiet=quiet)
                         all_primes.extend(sub_primes)
 
-                        # Divide out from cofactor
+                        # Divide out from cofactor (use while loop to handle repeated factors)
                         for prime in sub_primes:
-                            current_cofactor //= int(prime)
+                            while current_cofactor % int(prime) == 0:
+                                current_cofactor //= int(prime)
 
                     # Check if fully factored
                     if current_cofactor == 1:

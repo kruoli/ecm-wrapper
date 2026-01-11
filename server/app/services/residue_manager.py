@@ -390,6 +390,31 @@ class ResidueManager:
         if not stage2_attempt:
             raise ValueError(f"Stage 2 attempt {stage2_attempt_id} not found")
 
+        # Validate that this is a legitimate stage 2 completion:
+        # Must either find a factor OR complete at least 75% of the assigned curves
+        has_factor = stage2_attempt.factor_found is not None
+        min_curves_required = int(0.75 * residue.curve_count)
+        curves_completed = stage2_attempt.curves_completed
+
+        if not has_factor and curves_completed < min_curves_required:
+            # Reject this completion and release the residue back to available
+            residue.status = 'available'
+            residue.claimed_at = None
+            residue.claimed_by = None
+            residue.expires_at = None
+            db.flush()
+
+            logger.warning(
+                f"Rejected residue {residue_id} completion: stage2_attempt {stage2_attempt_id} "
+                f"has no factor and curves_completed={curves_completed} < {min_curves_required} "
+                f"(75% of {residue.curve_count}). Residue released back to pool."
+            )
+            raise ValueError(
+                f"Invalid stage 2 completion: no factor found and only {curves_completed} curves "
+                f"completed out of {residue.curve_count} assigned (minimum required: {min_curves_required}, 75%). "
+                f"Residue {residue_id} has been released back to the available pool."
+            )
+
         # Mark stage 1 attempt as superseded (if linked)
         if residue.stage1_attempt_id:
             stage1_attempt = db.query(ECMAttempt).filter(

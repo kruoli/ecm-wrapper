@@ -54,7 +54,9 @@ class Stage2Executor:
         # Shared state for worker coordination
         self.factor_found: Optional[Tuple[str, str]] = None
         self.factor_lock = threading.Lock()
-        self.stop_event = threading.Event()
+        # Use wrapper's stop_event for multi-level shutdown support
+        # (Ctrl+C level 2 sets this to stop after current curve)
+        self.stop_event = wrapper.stop_event
         self.running_processes: List[subprocess.Popen] = []
         self.process_lock = threading.Lock()
         self.curves_completed_total = 0
@@ -78,6 +80,11 @@ class Stage2Executor:
             - sigma: Sigma value that found the factor (or None)
         """
         start_time = time.time()
+
+        # CRITICAL: Clear stop_event at start of each execution
+        # This prevents a factor found in a previous run from stopping this run
+        self.stop_event.clear()
+        self.factor_found = None  # Also reset factor state
 
         # Extract B1 from residue file to ensure consistency
         residue_info = self.wrapper._parse_residue_file(self.residue_file)
@@ -209,20 +216,16 @@ class Stage2Executor:
             with self.process_lock:
                 self.running_processes.append(process)
 
-            # Stream output for progress tracking if progress_interval is set
-            if progress_interval > 0:
-                full_output = self._stream_worker_output(
-                    process, worker_id, total_lines, progress_interval, early_termination
-                )
-            else:
-                # Original behavior - get all output at once
-                stdout, stderr = process.communicate()
-                full_output = stdout if stdout else ""
+            # Stream output line by line to enable curve-level shutdown
+            # (stop_event is checked after each curve completes)
+            full_output = self._stream_worker_output(
+                process, worker_id, total_lines, progress_interval, early_termination
+            )
 
-                # Check if we should terminate early due to factor found elsewhere
-                if early_termination and self.stop_event.is_set():
-                    self.logger.info(f"Worker {worker_id} terminating due to factor found elsewhere")
-                    return None
+            # Check if we were stopped due to shutdown request
+            if early_termination and self.stop_event.is_set():
+                self.logger.info(f"Worker {worker_id} stopped due to shutdown request")
+                # Don't return None - we want to count the curves we did complete
 
             # Count curve completions from output
             curves_completed = full_output.count("Step 2 took")

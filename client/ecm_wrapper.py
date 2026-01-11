@@ -203,7 +203,7 @@ def main():
                 output.item("Factors found", result.factors)
 
             # Upload residue to server if --upload flag is set
-            if args.upload and not args.no_submit:
+            if args.upload and args.submit:
                 residue_path = Path(save_path)
                 if residue_path.exists():
                     # Get client_id from config
@@ -243,7 +243,7 @@ def main():
 
             # Mark that we've already submitted if --upload was used
             if args.upload:
-                args.no_submit = True  # Prevent double submission
+                args.submit = False  # Prevent double submission
 
     # T-level Mode (including progressive factorization when --tlevel given without value)
     elif args.tlevel is not None:
@@ -295,7 +295,7 @@ def main():
                 max_batch_curves=max_batch,
                 b2_multiplier=getattr(args, 'b2_multiplier', None) or 100.0,
                 project=args.project,
-                no_submit=args.no_submit or False
+                no_submit=not args.submit
             )
 
             result = wrapper.run_tlevel_v2(config)
@@ -419,7 +419,7 @@ def main():
             continue_after_factor=False,
             progress_interval=args.progress_interval or 0,
             project=args.project,
-            no_submit=args.no_submit or False
+            no_submit=not args.submit
         )
 
         result = wrapper.run_two_stage_v2(config)
@@ -454,10 +454,10 @@ def main():
         result = wrapper.run_ecm_v2(config)
 
     # Submit results if available
-    # Note: T-level mode and two-stage mode handle their own submissions internally,
-    # so we skip post-execution submission for those modes to avoid double submission
-    mode_handles_own_submission = args.tlevel or args.two_stage
-    if result and not args.no_submit and not mode_handles_own_submission:
+    # Note: T-level mode handles its own submissions internally,
+    # so we skip post-execution submission for that mode to avoid double submission
+    mode_handles_own_submission = args.tlevel is not None
+    if result and args.submit and not mode_handles_own_submission:
         results_dict = result.to_dict(composite, method)
 
         # Add ECM parameters that aren't in FactorResult

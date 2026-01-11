@@ -58,7 +58,7 @@ def create_ecm_parser() -> argparse.ArgumentParser:
                        help='Target t-level. If specified without a value, auto-calculates as 4/13 of digit length and runs progressively until factored.')
     parser.add_argument('--start-tlevel', type=float, help='Starting t-level (for resuming, requires --tlevel)')
     parser.add_argument('--project', '-p', help='Project name')
-    parser.add_argument('--no-submit', action='store_true', help='Do not submit to API')
+    parser.add_argument('--submit', action='store_true', help='Submit results to API')
 
     # Auto-work mode
     parser.add_argument('--auto-work', action='store_true',

@@ -46,9 +46,10 @@ class ECMWrapper(BaseWrapper):
         super().__init__(config_path)
         self.residue_manager = ResidueFileManager()
         # Initialize new executor for config-based methods
-                # Graceful shutdown support
-        self.stop_event = threading.Event()
+        # Graceful shutdown support (3 levels)
+        self.stop_event = threading.Event()  # Shared with Stage2Executor for curve-level stop
         self.interrupted = False
+        self.shutdown_level = 0  # 0=none, 1=complete batch, 2=complete curve, 3=abort
         self.graceful_shutdown_requested = False  # First Ctrl+C: finish current work
         self._original_sigint_handler: Optional[Any] = None  # Store original handler for restoration
 
@@ -169,17 +170,27 @@ class ECMWrapper(BaseWrapper):
         """
         start_time = time.time()
 
-        # Install graceful shutdown signal handler
+        # Install graceful shutdown signal handler (3 levels)
         def graceful_sigint_handler(signum, frame):
-            """Handle Ctrl+C gracefully: first time finish current work, second time abort."""
-            if not self.graceful_shutdown_requested:
+            """Handle Ctrl+C gracefully with 3 levels:
+            1st: Complete current batch (workers finish their chunks)
+            2nd: Complete current curve then stop
+            3rd: Immediate abort
+            """
+            self.shutdown_level += 1
+            if self.shutdown_level == 1:
                 self.graceful_shutdown_requested = True
-                print("\n[Ctrl+C] Graceful shutdown initiated - completing current curves...")
-                print("[Ctrl+C] Press Ctrl+C again to abort immediately")
-                self.logger.info("Graceful shutdown requested - will complete current work")
+                print("\n[Ctrl+C] Graceful shutdown - completing current batch...")
+                print("[Ctrl+C] Press again to stop after current curve, twice more to abort")
+                self.logger.info("Shutdown level 1: completing current batch")
+            elif self.shutdown_level == 2:
+                self.stop_event.set()  # Signal workers to stop after current curve
+                print("\n[Ctrl+C] Stopping after current curve...")
+                print("[Ctrl+C] Press again to abort immediately")
+                self.logger.info("Shutdown level 2: stopping after current curve")
             else:
                 print("\n[Ctrl+C] Immediate abort requested")
-                self.logger.info("Immediate abort requested")
+                self.logger.info("Shutdown level 3: immediate abort")
                 # Restore original handler and re-raise to trigger immediate abort
                 if self._original_sigint_handler:
                     signal.signal(signal.SIGINT, self._original_sigint_handler)
@@ -279,8 +290,10 @@ class ECMWrapper(BaseWrapper):
             # Always restore the original signal handler
             if self._original_sigint_handler:
                 signal.signal(signal.SIGINT, self._original_sigint_handler)
-            # Reset graceful shutdown flag for next execution
+            # Reset shutdown state for next execution
             self.graceful_shutdown_requested = False
+            self.shutdown_level = 0
+            self.stop_event.clear()
 
     def run_multiprocess_v2(self, config: MultiprocessConfig) -> FactorResult:
         """

@@ -426,6 +426,9 @@ class TLevelCalculator:
         Excludes attempts that have been superseded (e.g., stage 1 attempts
         that were replaced by full stage 1+2 attempts).
 
+        For partial supersession (stage 2 completed fewer curves than stage 1),
+        credits leftover curves at B1-only.
+
         Args:
             db: Database session
             composite: Composite model instance
@@ -434,12 +437,53 @@ class TLevelCalculator:
             Updated t-level value (includes prior_t_level)
         """
         from ..models.attempts import ECMAttempt
+        from ..models.residues import ECMResidue
 
         # Get all ECM attempts for this composite, excluding superseded ones
         attempts = db.query(ECMAttempt).filter(
             ECMAttempt.composite_id == composite.id,
             ECMAttempt.superseded_by.is_(None)  # Exclude superseded attempts
         ).all()
+
+        # Find partial supersession cases from completed residues
+        # These are residues where stage 2 completed fewer curves than stage 1 had
+        completed_residues = db.query(ECMResidue).filter(
+            ECMResidue.composite_id == composite.id,
+            ECMResidue.status == 'completed',
+            ECMResidue.stage1_attempt_id.isnot(None)
+        ).all()
+
+        # Create synthetic "attempts" for leftover curves (B1-only credit)
+        class LeftoverCurves:
+            """Synthetic attempt object for leftover curves from partial stage 2."""
+            def __init__(self, curves, b1, parametrization):
+                self.curves_completed = curves
+                self.b1 = b1
+                self.b2 = None  # B1-only (no stage 2)
+                self.parametrization = parametrization
+                self.method = 'ecm'
+
+        for residue in completed_residues:
+            # Find the stage 1 attempt
+            stage1 = db.query(ECMAttempt).filter(
+                ECMAttempt.id == residue.stage1_attempt_id
+            ).first()
+
+            if stage1 and stage1.superseded_by:
+                # Find the stage 2 attempt that superseded it
+                stage2 = db.query(ECMAttempt).filter(
+                    ECMAttempt.id == stage1.superseded_by
+                ).first()
+
+                if stage2 and stage2.curves_completed < residue.curve_count:
+                    # Partial completion - calculate leftover curves
+                    leftover = residue.curve_count - stage2.curves_completed
+                    leftover_attempt = LeftoverCurves(leftover, residue.b1, residue.parametrization)
+                    attempts.append(leftover_attempt)
+                    logger.info(
+                        f"Partial supersession: residue {residue.id} had {residue.curve_count} curves, "
+                        f"stage2 completed {stage2.curves_completed}, adding {leftover} leftover at B1-only"
+                    )
 
         # Use prior_t_level as starting point (work done before import)
         starting_t_level = composite.prior_t_level or 0.0

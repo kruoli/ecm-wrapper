@@ -25,8 +25,11 @@ python3 client/yafu_wrapper.py --composite "123456789012345" --mode ecm --curves
 python3 client/yafu_wrapper.py --composite "123456789012345" --mode pm1 --b1 1000000
 python3 client/yafu_wrapper.py --composite "123456789012345" --mode auto
 
-# Test without API submission
-python3 client/ecm_wrapper.py --composite "123456789012345" --no-submit
+# Test without API submission (ecm_wrapper.py defaults to no submission)
+python3 client/ecm_wrapper.py --composite "123456789012345"
+
+# Submit results to API (opt-in for ecm_wrapper.py)
+python3 client/ecm_wrapper.py --composite "123456789012345" --submit
 
 # Stage 1 only with residue upload to server (manual mode)
 python3 client/ecm_wrapper.py --composite "123456789012345" --b1 50000 --curves 100 --stage1-only --upload
@@ -143,7 +146,7 @@ pytest test_factorization.py -v               # Test parsing logic
 Clients can now continuously request and process work assignments from the server without manually specifying composites:
 
 **Implementation:**
-- **Client**: New `--auto-work` flag in `ecm_wrapper.py` (lines 1547-1751)
+- **Client**: `ecm_client.py` provides auto-work mode (implied, no flag needed)
 - **API**: Uses `/ecm-work` endpoint to request assignments
 - **Work Lifecycle**: Automatic claim → execute → submit → complete workflow
 
@@ -153,7 +156,7 @@ Clients can now continuously request and process work assignments from the serve
 - **Work count limit**: `--work-count N` to process N assignments then exit
 - **Filtering**: `--min-digits`, `--max-digits`, `--priority` to filter work
 - **Mode support**: Compatible with `--multiprocess` and `--two-stage` (B1/B2 mode only)
-- **Graceful shutdown**: Ctrl+C abandons current work assignment properly
+- **Graceful shutdown**: Multi-level Ctrl+C handling (see "Graceful Shutdown" section below)
 
 **API Methods** (`client/lib/api_client.py`):
 - `get_ecm_work()` - Request work from `/ecm-work` endpoint
@@ -657,6 +660,33 @@ pylint *.py
 
 ## Recent Bug Fixes and Improvements
 
+### Graceful Shutdown (2026-01)
+Multi-level Ctrl+C handling for Stage 2 and CPU Stage 1 execution:
+- **1st Ctrl+C**: "Completing current batch..." - Workers finish their current chunks, then submit results
+- **2nd Ctrl+C**: "Stopping after current curve..." - Workers stop after completing the current curve, then submit
+- **3rd Ctrl+C**: Immediate abort
+
+**Implementation**: `lib/ecm_executor.py` uses `shutdown_level` counter and shared `stop_event` with `Stage2Executor`
+
+**Note**: GPU Stage 1 runs all curves in a single batch, so only batch-level shutdown applies there.
+
+### Submission Flag Changes (2026-01)
+- **`ecm_wrapper.py`**: Changed from `--no-submit` to `--submit` (opt-in submission)
+  - Default behavior: Results are NOT submitted to API
+  - Use `--submit` flag to enable API submission
+- **`ecm_client.py`**: Unchanged - always submits by default
+  - Use `--no-submit` to disable submission
+
+### Server-Side Residue Validation (2026-01)
+The server now validates stage 2 completions before accepting them:
+- **Factor found**: Always accepted (any number of curves)
+- **No factor**: Must complete at least 75% of assigned curves
+- **Invalid completions**: Residue is released back to the available pool with error message
+
+**Implementation**: `server/app/services/residue_manager.py:complete_residue()`
+
+This prevents buggy clients from marking residues as complete without actually processing them.
+
 ### Two-Stage ECM Improvements
 - **Exit code handling**: Fixed stage 1 to treat factor discovery (exit code 8) as success, not failure
 - **B2 parameter accuracy**: When factor found in stage 1, now correctly submits with `b2=0` (stage 2 never ran)
@@ -767,7 +797,8 @@ pylint *.py
 - **Timing attack protection**: Constant-time key comparison using `secrets.compare_digest()`
 - **Submission validation**: Only composites already in database can receive ECM results (prevents accidental pollution)
   - Returns 404 with helpful error message for unregistered composites
-  - Users must use `--no-submit` flag for local testing
+  - `ecm_wrapper.py` defaults to no submission (use `--submit` to opt-in)
+  - `ecm_client.py` always submits (use `--no-submit` to opt-out)
 - **File upload limits**: 10 MB maximum file size on bulk upload endpoints
 - **Input validation**: UTF-8 encoding validation, Pydantic schema validation
 - **Error sanitization**: Generic error messages to clients, detailed logging server-side

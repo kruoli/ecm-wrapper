@@ -281,12 +281,16 @@ function clearFilters() {
 function releaseClaim(residueId) {
     if (!confirm(`Release claim on residue ${residueId}? It will return to the available pool.`)) return;
 
-    fetchWithAuth(`/api/v1/residues/${residueId}/claim`, {
+    fetchWithAuth(`/api/v1/admin/residues/${residueId}/release`, {
         method: 'DELETE'
     })
     .then(response => response.json())
     .then(data => {
-        alert(`Claim on residue ${residueId} released`);
+        if (data.success) {
+            alert(`Claim on residue ${residueId} released`);
+        } else {
+            alert(data.message || 'Failed to release claim');
+        }
         reloadWithAuth();
     })
     .catch(error => {

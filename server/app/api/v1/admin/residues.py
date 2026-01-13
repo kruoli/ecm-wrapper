@@ -74,6 +74,66 @@ async def delete_residue(
     }
 
 
+@router.delete("/residues/{residue_id}/release")
+async def admin_release_residue_claim(
+    residue_id: int,
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key),
+    residue_manager: ResidueManager = Depends(get_residue_manager)
+):
+    """
+    Admin endpoint to release a claimed residue back to the available pool.
+
+    Unlike the client endpoint, this doesn't require the X-Client-ID header
+    and can release any claimed residue regardless of who claimed it.
+
+    Args:
+        residue_id: ID of the residue to release
+        db: Database session
+        _admin: Admin authentication check
+        residue_manager: Residue manager service
+
+    Returns:
+        Success message with released residue info
+
+    Raises:
+        HTTPException: If residue not found or not claimed
+    """
+    residue = get_or_404(
+        db.query(ECMResidue).filter(ECMResidue.id == residue_id).first(),
+        "Residue",
+        str(residue_id)
+    )
+
+    if residue.status != 'claimed':
+        return {
+            "success": False,
+            "message": f"Residue {residue_id} is not claimed (status: {residue.status})",
+            "residue_id": residue_id,
+            "status": residue.status
+        }
+
+    # Store info for response
+    previous_claimer = residue.claimed_by
+
+    # Release the claim
+    with transaction_scope(db, "admin_release_residue_claim"):
+        residue.status = 'available'
+        residue.claimed_by = None
+        residue.claimed_at = None
+        residue.expires_at = None
+
+    logger.info(f"Admin released claim on residue {residue_id} (was claimed by {previous_claimer})")
+
+    return {
+        "success": True,
+        "message": f"Residue {residue_id} released back to available pool",
+        "residue_id": residue_id,
+        "previous_claimer": previous_claimer,
+        "status": "available"
+    }
+
+
 @router.post("/residues/cleanup")
 async def cleanup_residues(
     db: Session = Depends(get_db),

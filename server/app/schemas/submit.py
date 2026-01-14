@@ -30,6 +30,7 @@ class SubmitResultRequest(BaseModel):
     parameters: ParametersSchema
     results: ResultsSchema
     raw_output: Optional[str] = Field(None, description="Full program output")
+    residue_checksum: Optional[str] = Field(None, description="SHA-256 checksum of residue file (for stage 2 work from residue pool)")
 
 class ErrorDetail(BaseModel):
     type: str = Field(..., description="Error type")

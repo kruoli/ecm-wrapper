@@ -223,7 +223,8 @@ class APIClient:
         program: str,
         program_version: str,
         results: Dict[str, Any],
-        project: Optional[str] = None
+        project: Optional[str] = None,
+        residue_checksum: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Build standard API submission payload.
@@ -236,6 +237,7 @@ class APIClient:
             program_version: Program version string
             results: Results dictionary with execution data
             project: Optional project name
+            residue_checksum: Optional SHA-256 checksum of residue file (for stage 2 from residue pool)
 
         Returns:
             Formatted API payload dictionary
@@ -292,7 +294,8 @@ class APIClient:
                 'curves_completed': results.get('curves_completed', 0),
                 'execution_time': results.get('execution_time', 0)
             },
-            'raw_output': results.get('raw_output', '')
+            'raw_output': results.get('raw_output', ''),
+            'residue_checksum': residue_checksum  # For stage 2 work from residue pool
         }
 
         # Debug logging for multi-factor submissions

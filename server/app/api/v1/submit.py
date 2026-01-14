@@ -9,6 +9,7 @@ from ...database import get_db
 from ...dependencies import get_composite_service
 from ...schemas.submit import SubmitResultRequest, SubmitResultResponse
 from ...models import Composite, ECMAttempt, Factor
+from ...models.residues import ECMResidue
 from ...services.composites import CompositeService
 from ...services.factors import FactorService
 from ...utils.number_utils import is_trivial_factor, verify_factor_divides
@@ -116,6 +117,22 @@ async def submit_result(
                     factor_status="duplicate"
                 )
 
+            # Validate residue_checksum if provided (for stage 2 work from residue pool)
+            # This verifies the client actually had the residue file
+            residue_checksum = result_request.residue_checksum
+            if residue_checksum:
+                residue = db.query(ECMResidue).filter(
+                    ECMResidue.checksum == residue_checksum,
+                    ECMResidue.composite_id == composite.id
+                ).first()
+                if not residue:
+                    logger.warning(
+                        f"Invalid residue_checksum {residue_checksum[:16]}... from {client_ip} "
+                        f"for composite {composite.id} - not linking to residue"
+                    )
+                    # Don't fail submission - just don't link it (could be manual work)
+                    residue_checksum = None
+
             # Create attempt record with IP logging
             attempt = ECMAttempt(
                 composite_id=composite.id,
@@ -132,7 +149,8 @@ async def submit_result(
                 program_version=result_request.program_version,
                 raw_output=result_request.raw_output,
                 work_hash=work_hash,
-                client_ip=client_ip
+                client_ip=client_ip,
+                residue_checksum=residue_checksum
             )
 
             db.add(attempt)

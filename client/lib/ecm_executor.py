@@ -600,11 +600,11 @@ class ECMWrapper(BaseWrapper):
                             break
 
                         # Put work item in queue (blocks if queue is full)
-                        b2_for_batch = b1 * 100  # Two-stage uses B1 * 100
+                        # Use b2_for_calculation which respects config.b2_multiplier
                         residue_queue.put({
                             'residue_file': residue_file,
                             'b1': b1,
-                            'b2': b2_for_batch,
+                            'b2': b2_for_calculation,
                             'curves': actual_curves,
                             'stage1_factor': stage1_factor,
                             'all_factors': all_stage1_factors,
@@ -617,7 +617,7 @@ class ECMWrapper(BaseWrapper):
                         # Update PROJECTED t-level to account for this queued batch
                         # This prevents over-producing curves while CPU is still catching up
                         with projected_lock:
-                            projected_curve_history.append(f"{actual_curves}@{b1},{int(b2_for_batch)},p=3")
+                            projected_curve_history.append(f"{actual_curves}@{b1},{int(b2_for_calculation)},p=3")
                             # Pass starting t-level so new curves add to base, not start from t0
                             projected_t_level = calculate_tlevel(projected_curve_history, base_tlevel=config.start_t_level)
                             current_projected = projected_t_level  # Update for next iteration's logging
@@ -1012,21 +1012,21 @@ class ECMWrapper(BaseWrapper):
                 effective_param = 3 if config.use_two_stage else config.parametrization
 
                 # CRITICAL: Calculate actual B2 used for accurate t-level tracking
-                # Two-stage mode uses B1 * 100, which gives ~1.8 t-levels LESS per 100 curves
+                # Two-stage mode uses B1 * multiplier, which gives less t-level per curve
                 # than GMP's default B2. Must include B2 in curve history to prevent overestimating progress.
                 # Example: 100@11e6,p=3 → t33.9 (wrong!), 100@11e6,11e8,p=3 → t32.2 (correct)
                 if config.use_two_stage:
-                    actual_b2 = b1 * 100
+                    actual_b2 = int(b1 * config.b2_multiplier)
                     # Format B2 as integer (no decimals) for t-level binary compatibility
-                    curve_history.append(f"{step_result.curves_run}@{b1},{int(actual_b2)},p={effective_param}")
+                    curve_history.append(f"{step_result.curves_run}@{b1},{actual_b2},p={effective_param}")
                 else:
                     # Standard mode: omit B2 to let t-level binary use GMP default
                     curve_history.append(f"{step_result.curves_run}@{b1},p={effective_param}")
 
                 # Submit this batch's results if enabled
                 if not config.no_submit and step_result.curves_run > 0:
-                    # Calculate B2 for submission (two-stage uses B1*100, else use GMP default)
-                    submission_b2 = (b1 * 100) if config.use_two_stage else None
+                    # Calculate B2 for submission (two-stage uses B1*multiplier, else use GMP default)
+                    submission_b2 = int(b1 * config.b2_multiplier) if config.use_two_stage else None
 
                     step_results = {
                         'success': True,

@@ -306,7 +306,8 @@ class BaseWrapper:
             program=program,
             program_version=self.get_program_version(program),
             results=results,
-            project=project
+            project=project,
+            residue_checksum=results.get('residue_checksum')  # For stage 2 from residue pool
         )
 
         # Submit to all configured endpoints

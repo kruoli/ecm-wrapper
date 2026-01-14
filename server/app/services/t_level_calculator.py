@@ -445,25 +445,63 @@ class TLevelCalculator:
             ECMAttempt.superseded_by.is_(None)  # Exclude superseded attempts
         ).all()
 
-        # Find partial supersession cases from completed residues
-        # These are residues where stage 2 completed fewer curves than stage 1 had
+        # Create synthetic "attempts" for leftover curves (B1-only credit)
+        class LeftoverCurves:
+            """Synthetic attempt object for leftover curves from partial stage 2."""
+            def __init__(self, curves, b1, parametrization, source_desc):
+                self.curves_completed = curves
+                self.b1 = b1
+                self.b2 = None  # B1-only (no stage 2)
+                self.parametrization = parametrization
+                self.method = 'ecm'
+                self._source = source_desc  # For logging
+
+        # Find partial supersession cases from ATTEMPTS directly
+        # This handles cases where stage 2 completed fewer curves than stage 1,
+        # regardless of whether residue records exist
+        superseded_attempts = db.query(ECMAttempt).filter(
+            ECMAttempt.composite_id == composite.id,
+            ECMAttempt.superseded_by.isnot(None),  # Has been superseded
+            ECMAttempt.method == 'ecm'
+        ).all()
+
+        for stage1 in superseded_attempts:
+            # Find the stage 2 attempt that superseded this one
+            stage2 = db.query(ECMAttempt).filter(
+                ECMAttempt.id == stage1.superseded_by
+            ).first()
+
+            if stage2 and stage2.curves_completed < stage1.curves_completed:
+                # Partial completion - stage 2 did fewer curves than stage 1
+                leftover = stage1.curves_completed - stage2.curves_completed
+                leftover_attempt = LeftoverCurves(
+                    leftover,
+                    stage1.b1,
+                    stage1.parametrization or 3,
+                    f"attempt {stage1.id}"
+                )
+                attempts.append(leftover_attempt)
+                logger.info(
+                    f"Partial supersession: stage1 attempt {stage1.id} had {stage1.curves_completed} curves, "
+                    f"stage2 attempt {stage2.id} completed {stage2.curves_completed}, "
+                    f"adding {leftover} leftover at B1-only"
+                )
+
+        # Also check completed residues for additional context (may have different curve counts)
         completed_residues = db.query(ECMResidue).filter(
             ECMResidue.composite_id == composite.id,
             ECMResidue.status == 'completed',
             ECMResidue.stage1_attempt_id.isnot(None)
         ).all()
 
-        # Create synthetic "attempts" for leftover curves (B1-only credit)
-        class LeftoverCurves:
-            """Synthetic attempt object for leftover curves from partial stage 2."""
-            def __init__(self, curves, b1, parametrization):
-                self.curves_completed = curves
-                self.b1 = b1
-                self.b2 = None  # B1-only (no stage 2)
-                self.parametrization = parametrization
-                self.method = 'ecm'
+        # Track which stage1 attempts we've already handled via direct supersession check
+        handled_stage1_ids = {a.id for a in superseded_attempts}
 
         for residue in completed_residues:
+            # Skip if we already handled this stage1 attempt above
+            if residue.stage1_attempt_id in handled_stage1_ids:
+                continue
+
             # Find the stage 1 attempt
             stage1 = db.query(ECMAttempt).filter(
                 ECMAttempt.id == residue.stage1_attempt_id
@@ -475,10 +513,16 @@ class TLevelCalculator:
                     ECMAttempt.id == stage1.superseded_by
                 ).first()
 
+                # Use residue.curve_count which may differ from stage1.curves_completed
                 if stage2 and stage2.curves_completed < residue.curve_count:
                     # Partial completion - calculate leftover curves
                     leftover = residue.curve_count - stage2.curves_completed
-                    leftover_attempt = LeftoverCurves(leftover, residue.b1, residue.parametrization)
+                    leftover_attempt = LeftoverCurves(
+                        leftover,
+                        residue.b1,
+                        residue.parametrization,
+                        f"residue {residue.id}"
+                    )
                     attempts.append(leftover_attempt)
                     logger.info(
                         f"Partial supersession: residue {residue.id} had {residue.curve_count} curves, "

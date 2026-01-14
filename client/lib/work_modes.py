@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Dict, TYPE_CHECKING
 import argparse
+import hashlib
 import multiprocessing
 import signal
 import time
@@ -524,9 +525,18 @@ class Stage2ConsumerMode(WorkMode):
     def __init__(self, ctx: WorkLoopContext):
         super().__init__(ctx)
         self.local_residue_file: Optional[Path] = None
+        self._residue_checksum: Optional[str] = None
         # Import here to avoid circular dependency
         from .stage2_executor import Stage2Executor
         self.Stage2Executor = Stage2Executor
+
+    def _compute_file_checksum(self, filepath: Path) -> str:
+        """Compute SHA-256 checksum of file for residue verification."""
+        sha256 = hashlib.sha256()
+        with open(filepath, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                sha256.update(chunk)
+        return sha256.hexdigest()
 
     def request_work(self) -> Optional[Dict[str, Any]]:
         residue_work = self.api_client.get_residue_work(
@@ -596,7 +606,12 @@ class Stage2ConsumerMode(WorkMode):
             result.error_message = "Failed to download residue file"
             return result
 
-        print(f"Downloaded {self.local_residue_file.stat().st_size} bytes")
+        file_size = self.local_residue_file.stat().st_size
+        print(f"Downloaded {file_size} bytes")
+
+        # Compute checksum for residue verification
+        self._residue_checksum = self._compute_file_checksum(self.local_residue_file)
+        self.logger.debug(f"Residue checksum: {self._residue_checksum}")
 
         # Get workers count
         workers = getattr(self.args, 'workers', None) or \
@@ -654,6 +669,7 @@ class Stage2ConsumerMode(WorkMode):
             'method': 'ecm',
             'parametrization': work.get('parametrization', 3),
             'execution_time': result.execution_time,
+            'residue_checksum': self._residue_checksum,  # For orphan detection
         }
 
         print("Submitting stage 2 results...")

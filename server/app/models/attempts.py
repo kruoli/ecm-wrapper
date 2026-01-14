@@ -48,6 +48,11 @@ class ECMAttempt(Base, TimestampMixin):
     # When stage 2 completes, it supersedes the stage 1 attempt
     superseded_by: Mapped[Optional[int]] = mapped_column(ForeignKey("ecm_attempts.id"), nullable=True)
 
+    # Residue file checksum (for stage 2 work from residue pool)
+    # SHA-256 of the residue file, used to detect orphaned attempts when
+    # another client completes the same residue
+    residue_checksum: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
     # Relationships
     composite: Mapped["Composite"] = relationship("Composite")
     superseding_attempt: Mapped[Optional["ECMAttempt"]] = relationship("ECMAttempt", remote_side=[id], uselist=False)

@@ -442,6 +442,25 @@ class ResidueManager:
         except Exception as e:
             logger.error(f"Error deleting residue file {residue.storage_path}: {e}")
 
+        # Mark orphaned attempts from the same residue as superseded
+        # These are partial attempts that were submitted but failed to complete the residue
+        # (e.g., client interrupted, then another client completed the same residue)
+        orphaned_attempts = db.query(ECMAttempt).filter(
+            ECMAttempt.residue_checksum == residue.checksum,
+            ECMAttempt.id != stage2_attempt_id,
+            ECMAttempt.superseded_by.is_(None)  # Not already superseded
+        ).all()
+
+        for orphan in orphaned_attempts:
+            orphan.superseded_by = stage2_attempt_id
+            logger.info(
+                f"Marked orphaned attempt {orphan.id} as superseded by {stage2_attempt_id} "
+                f"(same residue checksum {residue.checksum[:16]}...)"
+            )
+
+        if orphaned_attempts:
+            db.flush()  # Ensure supersession is visible to t-level calculation
+
         # Recalculate t-level for composite (excluding superseded attempts)
         new_t_level = self._recalculate_composite_t_level(db, residue.composite_id)
 

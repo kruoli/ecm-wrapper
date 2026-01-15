@@ -556,7 +556,7 @@ class AliquotWrapper(BaseWrapper):
 
         return seq
 
-    def fetch_factordb_last_term(self, start: int) -> Optional[Tuple[int, int]]:
+    def fetch_factordb_last_term(self, start: int) -> Optional[Tuple[int, int, str, Dict[int, int]]]:
         """
         Fetch the last known term from FactorDB for an aliquot sequence.
 
@@ -564,7 +564,11 @@ class AliquotWrapper(BaseWrapper):
             start: Starting number of the aliquot sequence
 
         Returns:
-            Tuple of (iteration, composite) or None if fetch failed
+            Tuple of (iteration, composite, status, known_factors) or None if fetch failed
+            - iteration: The sequence iteration number
+            - composite: The full number at this iteration
+            - status: FactorDB status ("C", "CF", "FF", "P", etc.)
+            - known_factors: Dict of {prime: exponent} for known prime factors
         """
         import requests
         import re
@@ -605,20 +609,40 @@ class AliquotWrapper(BaseWrapper):
 
             api_result = api_response.json()
 
-            # Extract composite number from API response
-            # API returns: {"id": "...", "status": "C"/"CF", "factors": [[prime, exp], ...]}
-            # Reconstruct the number from factors
+            # Extract composite number and factor info from API response
+            # API returns: {"id": "...", "status": "C"/"CF"/"FF", "factors": [[prime, exp], ...]}
             if 'factors' in api_result and api_result['factors']:
-                # Reconstruct number: multiply all prime^exponent
+                status = api_result.get('status', 'C')
+
+                # Reconstruct number and collect known factors
                 composite = 1
+                known_factors: Dict[int, int] = {}
+
                 for factor_pair in api_result['factors']:
-                    prime = int(factor_pair[0])
+                    factor = int(factor_pair[0])
                     exponent = int(factor_pair[1])
-                    composite *= prime ** exponent
+                    composite *= factor ** exponent
+
+                    # Check if this factor is a proven prime (use Miller-Rabin)
+                    # For "CF" status, one factor will be composite (the cofactor)
+                    if is_probably_prime(factor):
+                        known_factors[factor] = exponent
 
                 composite_str = str(composite)
-                self.logger.info(f"FactorDB: Found iteration {iteration} with {len(composite_str)}-digit composite")
-                return (iteration, composite)
+
+                # Log what we found
+                if status == "FF":
+                    self.logger.info(f"FactorDB: Iteration {iteration} is FULLY FACTORED ({len(known_factors)} prime factors)")
+                elif status == "CF" and known_factors:
+                    cofactor = composite
+                    for p, e in known_factors.items():
+                        cofactor //= p ** e
+                    self.logger.info(f"FactorDB: Iteration {iteration} has {len(known_factors)} known prime factors, "
+                                   f"{len(str(cofactor))}-digit cofactor remains")
+                else:
+                    self.logger.info(f"FactorDB: Iteration {iteration} with {len(composite_str)}-digit composite (status={status})")
+
+                return (iteration, composite, status, known_factors)
             else:
                 self.logger.warning(f"Could not extract factors from FactorDB API (response: {api_result})")
                 return None
@@ -968,6 +992,10 @@ Common test sequences:
     resume_iteration = None
     resume_composite = None
 
+    # Track known factors from FactorDB (used to skip redundant factorization)
+    fdb_known_factors: Dict[int, int] = {}
+    fdb_status: Optional[str] = None
+
     if args.resume_factordb:
         # Warn if --resume-iteration is also specified (it will be ignored)
         if args.resume_iteration is not None:
@@ -975,11 +1003,18 @@ Common test sequences:
             print(f"         To resume from a specific iteration, use: --resume-iteration N --resume-composite X")
             print()
 
-        # Fetch last known term from FactorDB
+        # Fetch last known term from FactorDB (now includes known factors)
         result = wrapper.fetch_factordb_last_term(args.start)
         if result:
-            resume_iteration, resume_composite = result
-            print(f"Resuming from FactorDB: iteration {resume_iteration}, {len(str(resume_composite))}-digit composite")
+            resume_iteration, resume_composite, fdb_status, fdb_known_factors = result
+            print(f"Resuming from FactorDB: iteration {resume_iteration}, {len(str(resume_composite))}-digit number (status={fdb_status})")
+            if fdb_known_factors:
+                print(f"  FactorDB already knows {len(fdb_known_factors)} prime factor(s)")
+                for p, e in sorted(fdb_known_factors.items()):
+                    if e > 1:
+                        print(f"    {p}^{e}")
+                    else:
+                        print(f"    {p}")
         else:
             print("Failed to fetch from FactorDB. Exiting.")
             print("To start from scratch, run without --resume-factordb flag.")
@@ -1004,8 +1039,42 @@ Common test sequences:
                 seq.sequence.append(None)  # Placeholder for unknown intermediates
             seq.sequence.append(resume_composite)
 
-            # Factor the resume composite
-            success, factorization, _ = wrapper.factor_number(resume_composite)
+            # Factor the resume composite (using known factors from FactorDB if available)
+            if fdb_status == "FF" and fdb_known_factors:
+                # FactorDB says it's fully factored - use their factors directly
+                print(f"  Using FactorDB's complete factorization (no local factoring needed)")
+                factorization = fdb_known_factors.copy()
+                success = True
+            elif fdb_status == "CF" and fdb_known_factors:
+                # FactorDB has partial factorization - only factor the cofactor
+                cofactor = resume_composite
+                for p, e in fdb_known_factors.items():
+                    cofactor //= p ** e
+
+                if is_probably_prime(cofactor):
+                    # Cofactor is prime - we're done!
+                    print(f"  FactorDB's cofactor C{len(str(cofactor))} is prime - no factoring needed")
+                    factorization = fdb_known_factors.copy()
+                    factorization[cofactor] = 1
+                    success = True
+                else:
+                    # Factor only the cofactor
+                    print(f"  Factoring only the {len(str(cofactor))}-digit cofactor (FactorDB has {len(fdb_known_factors)} known factors)")
+                    success, cofactor_factorization, _ = wrapper.factor_number(cofactor)
+                    if success:
+                        # Combine known factors with cofactor factorization
+                        factorization = fdb_known_factors.copy()
+                        for p, e in cofactor_factorization.items():
+                            if p in factorization:
+                                factorization[p] += e
+                            else:
+                                factorization[p] = e
+                    else:
+                        factorization = {}
+            else:
+                # No useful info from FactorDB - factor from scratch
+                success, factorization, _ = wrapper.factor_number(resume_composite)
+
             if success:
                 seq.factorizations[resume_composite] = factorization
 

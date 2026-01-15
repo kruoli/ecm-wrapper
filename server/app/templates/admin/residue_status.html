@@ -317,14 +317,18 @@ function deleteResidue(residueId) {
 }
 
 function cleanupExpired() {
-    if (!confirm('Clean up all expired residues? This will delete expired residue files and database records.')) return;
+    if (!confirm('Clean up expired residues?\n\nThis will:\n- Release expired claims back to the available pool\n- Delete residues for fully factored composites')) return;
 
     fetchWithAuth('/api/v1/admin/residues/cleanup', {
         method: 'POST'
     })
     .then(response => response.json())
     .then(data => {
-        alert(`Cleaned up ${data.cleaned_count} expired residue(s)`);
+        if (data.success) {
+            alert(`Cleanup complete!\n\n- Released ${data.claims_released} expired claim(s)\n- Cleaned ${data.factored_composites_cleaned} factored composite residue(s)\n\nTotal: ${data.total_cleaned}`);
+        } else {
+            alert(data.message || 'Cleanup failed');
+        }
         reloadWithAuth();
     })
     .catch(error => {

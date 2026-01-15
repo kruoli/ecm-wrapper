@@ -15,16 +15,54 @@ use ecm_wrapper.py instead.
 """
 
 import sys
+from pathlib import Path
 
 from lib.ecm_executor import ECMWrapper
 from lib.work_modes import WorkLoopContext, get_work_mode
 from lib.arg_parser import create_client_parser
 
 
+def check_setup_complete() -> bool:
+    """Check if client.local.yaml exists and warn if not."""
+    config_path = Path("client.local.yaml")
+    if not config_path.exists():
+        print()
+        print("!" * 70)
+        print("!!" + " " * 66 + "!!")
+        print("!!  WARNING: client.local.yaml not found!" + " " * 25 + "!!")
+        print("!!" + " " * 66 + "!!")
+        print("!!  You are using default settings (username: 'default_user')." + " " * 5 + "!!")
+        print("!!  Your contributions will not be properly tracked." + " " * 15 + "!!")
+        print("!!" + " " * 66 + "!!")
+        print("!!  Please run the setup wizard first:" + " " * 28 + "!!")
+        print("!!" + " " * 66 + "!!")
+        print("!!      python3 setup.py" + " " * 42 + "!!")
+        print("!!" + " " * 66 + "!!")
+        print("!" * 70)
+        print()
+
+        # Ask if they want to continue anyway
+        try:
+            response = input("Continue with default settings? [y/N]: ").strip().lower()
+            if response not in ('y', 'yes'):
+                print("\nExiting. Please run 'python3 setup.py' to configure the client.")
+                return False
+            print()
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting.")
+            return False
+
+    return True
+
+
 def main():
     """Main entry point for ECM client."""
     parser = create_client_parser()
     args = parser.parse_args()
+
+    # Check for setup completion (unless --help was requested)
+    if not check_setup_complete():
+        sys.exit(1)
 
     # ecm_client.py always operates in auto-work mode (implied)
     args.auto_work = True

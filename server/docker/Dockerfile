@@ -25,4 +25,5 @@ COPY bin/group.gp /app/bin/group.gp
 RUN chmod +x /app/bin/t-level
 
 # Run database migrations on startup
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# Use 4 workers for better connection handling under load
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4"]

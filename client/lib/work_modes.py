@@ -28,6 +28,7 @@ import time
 from .ecm_config import (
     ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
 )
+from .ecm_math import get_optimal_b1_for_tlevel
 from .work_helpers import print_work_header, print_work_status, request_ecm_work
 from .stage1_helpers import submit_stage1_complete_workflow
 from .error_helpers import check_work_limit_reached
@@ -387,32 +388,74 @@ class Stage1ProducerMode(WorkMode):
             self.logger
         )
 
+    def _calculate_stage1_params(self, work: Dict[str, Any]) -> tuple:
+        """
+        Calculate optimal B1/curves for stage 1 based on t-level info.
+
+        If --b1 and --curves are specified, uses those.
+        Otherwise picks appropriate B1 for current t-level and runs one GPU batch.
+
+        For stage1-only mode, the goal is simple:
+        - Pick the right B1 for where we are
+        - Run one batch (GPU batch size)
+        - Let server track actual t-level achieved
+
+        Returns:
+            Tuple of (b1, curves)
+        """
+        # If B1 is explicitly specified, use it
+        if self.args.b1 is not None:
+            curves = self.args.curves if self.args.curves is not None else \
+                     self.wrapper.config['programs']['gmp_ecm']['default_curves']
+            return self.args.b1, curves
+
+        # Get current t-level to determine appropriate B1
+        current_t = work.get('current_t_level', 0.0) or 0.0
+
+        # Get optimal B1 for the current t-level (rounds up to next standard level)
+        # e.g., t54.7 -> use B1 for t55
+        target_for_b1 = max(20, int(current_t) + 1)  # At least t20
+        b1, _ = get_optimal_b1_for_tlevel(target_for_b1)
+
+        # Use GPU batch size for curves (one batch per work unit)
+        # Check args.curves first, then config, then default
+        if self.args.curves is not None:
+            curves = self.args.curves
+        else:
+            gpu_config = self.wrapper.config.get('programs', {}).get('gmp_ecm', {}).get('gpu', {})
+            curves = gpu_config.get('curves_per_batch', 3072)
+
+        self.logger.info(f"Stage 1: t{current_t:.1f} using B1={b1}, curves={curves} (one batch)")
+        return b1, curves
+
     def on_work_started(self, work: Dict[str, Any]) -> None:
         super().on_work_started(work)
 
-        # Resolve GPU settings
-        use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(self.args, self.wrapper.config)
+        # Store work for execute_work to use
+        self._current_work = work
 
-        # Determine curves
-        curves = self.args.curves if self.args.curves is not None else \
-                 self.wrapper.config['programs']['gmp_ecm']['default_curves']
+        # Calculate B1/curves (may use t-level info)
+        b1, curves = self._calculate_stage1_params(work)
+        self._stage1_b1 = b1
+        self._stage1_curves = curves
 
         print_work_header(
             work_id=self.current_work_id,
             composite=work['composite'],
             digit_length=work['digit_length'],
-            params={'B1': self.args.b1, 'curves': curves}
+            params={'B1': b1, 'curves': curves,
+                    'T-level': f"{work.get('current_t_level', 0):.1f} -> {work.get('target_t_level', 0):.1f}"}
         )
 
     def execute_work(self, work: Dict[str, Any]) -> FactorResult:
         composite = work['composite']
 
+        # Use pre-calculated B1/curves from on_work_started
+        b1 = self._stage1_b1
+        curves = self._stage1_curves
+
         # Resolve GPU settings
         use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(self.args, self.wrapper.config)
-
-        # Determine curves
-        curves = self.args.curves if self.args.curves is not None else \
-                 self.wrapper.config['programs']['gmp_ecm']['default_curves']
 
         # Generate residue file path
         residue_dir = Path(self.wrapper.config['execution'].get('residue_dir', 'data/residues'))
@@ -424,13 +467,13 @@ class Stage1ProducerMode(WorkMode):
         sigma = parse_sigma_arg(self.args)
         param = resolve_param(self.args, use_gpu)
 
-        print(f"Running ECM stage 1 (B1={self.args.b1}, curves={curves})...")
+        print(f"Running ECM stage 1 (B1={b1}, curves={curves})...")
         print(f"Saving residues to: {self.residue_file}")
 
         # Run stage 1
         success, factor, actual_curves, raw_output, all_factors = self.wrapper._run_stage1(
             composite=composite,
-            b1=self.args.b1,
+            b1=b1,
             curves=curves,
             residue_file=self.residue_file,
             sigma=sigma,
@@ -466,8 +509,8 @@ class Stage1ProducerMode(WorkMode):
 
         composite = work['composite']
 
-        # Build results using ResultsBuilder
-        builder = (results_for_stage1(composite, self.args.b1, self._last_curves, self._last_param)
+        # Build results using ResultsBuilder (use pre-calculated B1)
+        builder = (results_for_stage1(composite, self._stage1_b1, self._last_curves, self._last_param)
             .with_curves(self._last_curves, self._last_curves)
             .with_factors(self._last_all_factors)
             .add_raw_output(self._last_output)

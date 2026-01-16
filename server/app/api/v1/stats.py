@@ -118,12 +118,18 @@ async def get_batch_composite_status(
     Returns current and target t-levels for each composite number.
     If a composite is not found in the database, returns found=False.
     """
+    # Fetch all matching composites in a single query
+    composites = db.query(Composite).filter(
+        Composite.number.in_(request.numbers)
+    ).all()
+
+    # Build lookup dict by number
+    comp_by_number = {c.number: c for c in composites}
+
+    # Build results preserving original order
     results = []
-
     for number in request.numbers:
-        # Try to find composite by number
-        comp = db.query(Composite).filter(Composite.number == number).first()
-
+        comp = comp_by_number.get(number)
         if comp:
             results.append(CompositeBatchStatus(
                 number=number,

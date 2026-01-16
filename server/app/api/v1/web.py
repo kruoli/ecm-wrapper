@@ -493,30 +493,40 @@ async def leaderboard(
         ECMAttempt.superseded_by.is_(None)
     ).scalar() or 0
 
-    # Activity by day (last 14 days for chart)
+    # Activity by day (last 14 days for chart) - 2 queries instead of 28
+    lookback_days = min(14, days)
+    chart_since = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=lookback_days - 1)
+
+    # Get curves by day in single query
+    curves_by_day = db.query(
+        func.date(ECMAttempt.created_at).label('day'),
+        func.sum(ECMAttempt.curves_completed).label('curves')
+    ).filter(
+        ECMAttempt.created_at >= chart_since,
+        ECMAttempt.superseded_by.is_(None)
+    ).group_by(func.date(ECMAttempt.created_at)).all()
+
+    # Get factors by day in single query
+    factors_by_day = db.query(
+        func.date(Factor.created_at).label('day'),
+        func.count(Factor.id).label('factors')
+    ).filter(
+        Factor.created_at >= chart_since
+    ).group_by(func.date(Factor.created_at)).all()
+
+    # Build lookup dicts
+    curves_lookup = {str(row.day): int(row.curves or 0) for row in curves_by_day}
+    factors_lookup = {str(row.day): int(row.factors or 0) for row in factors_by_day}
+
+    # Build daily activity list (oldest first)
     daily_activity = []
-    for i in range(min(14, days)):
-        day_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=i)
-        day_end = day_start + timedelta(days=1)
-
-        day_curves = db.query(func.sum(ECMAttempt.curves_completed)).filter(
-            ECMAttempt.created_at >= day_start,
-            ECMAttempt.created_at < day_end,
-            ECMAttempt.superseded_by.is_(None)
-        ).scalar() or 0
-
-        day_factors = db.query(func.count(Factor.id)).filter(
-            Factor.created_at >= day_start,
-            Factor.created_at < day_end
-        ).scalar() or 0
-
+    for i in range(lookback_days - 1, -1, -1):
+        day = (datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=i)).strftime('%Y-%m-%d')
         daily_activity.append({
-            'date': day_start.strftime('%Y-%m-%d'),
-            'curves': int(day_curves),
-            'factors': int(day_factors)
+            'date': day,
+            'curves': curves_lookup.get(day, 0),
+            'factors': factors_lookup.get(day, 0)
         })
-
-    daily_activity.reverse()  # Oldest first for chart
 
     return templates.TemplateResponse("public/leaderboard.html", {
         "request": request,

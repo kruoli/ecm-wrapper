@@ -186,8 +186,7 @@ def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] 
     from ..models.composites import Composite
     from ..models.factors import Factor
 
-    # Get composites with recent attempts, ordered by most recent activity
-    # Use GROUP BY with MAX to get the latest attempt time per composite
+    # Query 1: Get composite IDs with recent attempts, ordered by most recent activity
     query = db.query(
         ECMAttempt.composite_id,
         func.max(ECMAttempt.created_at).label('latest_attempt')
@@ -203,24 +202,52 @@ def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] 
         query = query.filter(ECMAttempt.method == method)
 
     # Order by most recent activity
-    composite_ids = query.order_by(desc('latest_attempt')).limit(limit).all()
-    composite_ids = [cid[0] for cid in composite_ids]  # Extract just the composite_id
+    composite_id_rows = query.order_by(desc('latest_attempt')).limit(limit).all()
+    composite_ids = [row[0] for row in composite_id_rows]
 
+    if not composite_ids:
+        return []
+
+    # Query 2: Batch fetch all composites
+    composites = db.query(Composite).filter(Composite.id.in_(composite_ids)).all()
+    composites_by_id = {c.id: c for c in composites}
+
+    # Query 3: Batch fetch all attempts for these composites
+    attempts_query = db.query(ECMAttempt).filter(
+        ECMAttempt.composite_id.in_(composite_ids)
+    )
+    if method:
+        attempts_query = attempts_query.filter(ECMAttempt.method == method)
+    all_attempts = attempts_query.order_by(desc(ECMAttempt.created_at)).all()
+
+    # Group attempts by composite_id
+    attempts_by_composite: dict[int, list] = {}
+    all_attempt_ids = []
+    for attempt in all_attempts:
+        if attempt.composite_id not in attempts_by_composite:
+            attempts_by_composite[attempt.composite_id] = []
+        attempts_by_composite[attempt.composite_id].append(attempt)
+        all_attempt_ids.append(attempt.id)
+
+    # Query 4: Batch fetch all factors for these attempts
+    factors_by_attempt: dict[int, list] = {}
+    if all_attempt_ids:
+        all_factors = db.query(Factor).filter(
+            Factor.found_by_attempt_id.in_(all_attempt_ids)
+        ).all()
+        for factor in all_factors:
+            if factor.found_by_attempt_id not in factors_by_attempt:
+                factors_by_attempt[factor.found_by_attempt_id] = []
+            factors_by_attempt[factor.found_by_attempt_id].append(factor)
+
+    # Build aggregated results preserving order from original query
     aggregated = []
     for composite_id in composite_ids:
-        composite = db.query(Composite).filter(Composite.id == composite_id).first()
+        composite = composites_by_id.get(composite_id)
         if not composite:
             continue
 
-        # Get all attempts for this composite
-        attempts_query = db.query(ECMAttempt).filter(
-            ECMAttempt.composite_id == composite_id
-        )
-        if method:
-            attempts_query = attempts_query.filter(ECMAttempt.method == method)
-
-        attempts = attempts_query.order_by(desc(ECMAttempt.created_at)).all()
-
+        attempts = attempts_by_composite.get(composite_id, [])
         if not attempts:
             continue
 
@@ -230,10 +257,10 @@ def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] 
         earliest = min(a.created_at for a in attempts if a.created_at)
         latest = max(a.created_at for a in attempts if a.created_at)
 
-        # Get unique factors found across all attempts
-        factors = db.query(Factor).filter(
-            Factor.found_by_attempt_id.in_([a.id for a in attempts])
-        ).all()
+        # Collect factors from all attempts
+        factors = []
+        for attempt in attempts:
+            factors.extend(factors_by_attempt.get(attempt.id, []))
 
         aggregated.append({
             'composite': composite,

@@ -419,11 +419,14 @@ class Stage1ProducerMode(WorkMode):
 
         # Use GPU batch size for curves (one batch per work unit)
         # Check args.curves first, then config, then default
+        # NOTE: GMP-ECM GPU rounds up to its natural batch size (e.g., 2304, 3072).
+        # If we request MORE than the batch size, it runs multiple full batches.
+        # Default to 1000 which is always <= any GPU batch size, ensuring exactly one batch.
         if self.args.curves is not None:
             curves = self.args.curves
         else:
             gpu_config = self.wrapper.config.get('programs', {}).get('gmp_ecm', {}).get('gpu', {})
-            curves = gpu_config.get('curves_per_batch', 3072)
+            curves = gpu_config.get('curves_per_batch', 1000)
 
         self.logger.info(f"Stage 1: t{current_t:.1f} using B1={b1}, curves={curves} (one batch)")
         return b1, curves

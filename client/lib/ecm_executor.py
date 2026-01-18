@@ -1317,10 +1317,12 @@ class ECMWrapper(BaseWrapper):
             curves_completed = curves  # Default fallback
             if use_gpu:
                 # GPU mode: extract actual curve count from output
-                curve_match = ECMPatterns.CURVE_COUNT.search(raw_output)
-                if curve_match:
-                    curves_completed = int(curve_match.group(1))
-                    self.logger.debug(f"GPU completed {curves_completed} curves (requested {curves})")
+                # Use findall to capture ALL batches (GPU may run multiple batches)
+                # Each batch prints "(N curves)" - sum them all for total
+                curve_matches = ECMPatterns.CURVE_COUNT.findall(raw_output)
+                if curve_matches:
+                    curves_completed = sum(int(m) for m in curve_matches)
+                    self.logger.debug(f"GPU completed {curves_completed} curves across {len(curve_matches)} batch(es) (requested {curves})")
 
             return {
                 'success': success,

@@ -572,6 +572,10 @@ class Stage2ConsumerMode(WorkMode):
         super().__init__(ctx)
         self.local_residue_file: Optional[Path] = None
         self._residue_checksum: Optional[str] = None
+        # Track curves for completion validation
+        self._expected_curves: int = 0
+        self._curves_completed: int = 0
+        self._found_factor: bool = False
         # Import here to avoid circular dependency
         from .stage2_executor import Stage2Executor
         self.Stage2Executor = Stage2Executor
@@ -605,6 +609,11 @@ class Stage2ConsumerMode(WorkMode):
     def on_work_started(self, work: Dict[str, Any]) -> None:
         self.current_residue_id = work['residue_id']
         self.current_work_id = None  # Stage 2 uses residue_id, not work_id
+
+        # Track expected curves for completion validation
+        self._expected_curves = work['curve_count']
+        self._curves_completed = 0
+        self._found_factor = False
 
         b1 = work['b1']
 
@@ -689,10 +698,12 @@ class Stage2ConsumerMode(WorkMode):
             for f in all_factors:
                 result.add_factor(f, sigma)
 
-        # Store for submit_results
+        # Store for submit_results and complete_work
         self._work = work
         self._factor = factor
         self._sigma = sigma
+        self._curves_completed = curves
+        self._found_factor = bool(all_factors)
 
         return result
 
@@ -738,20 +749,32 @@ class Stage2ConsumerMode(WorkMode):
         return True
 
     def complete_work(self, work: Dict[str, Any]) -> None:
-        print("Completing residue work...")
         assert self.current_residue_id is not None  # Set in on_work_started
-        complete_result = self.api_client.complete_residue(
-            client_id=self.ctx.client_id,
-            residue_id=self.current_residue_id,
-            stage2_attempt_id=self._stage2_attempt_id
-        )
 
-        if complete_result:
-            new_t_level = complete_result.get('new_t_level')
-            if new_t_level is not None:
-                print(f"T-level updated to {new_t_level:.2f}")
+        # Server requires 75% completion if no factor found
+        # If we didn't complete enough curves (e.g., graceful shutdown), abandon instead
+        completion_ratio = self._curves_completed / self._expected_curves if self._expected_curves > 0 else 0
+        min_completion = 0.75
+
+        if not self._found_factor and completion_ratio < min_completion:
+            # Not enough curves completed - abandon to release back to pool
+            print(f"Abandoning residue (only {self._curves_completed}/{self._expected_curves} curves = {completion_ratio:.1%}, need {min_completion:.0%})")
+            self.api_client.abandon_residue(self.ctx.client_id, self.current_residue_id)
         else:
-            self.logger.warning("Failed to complete residue on server")
+            # Completed enough curves or found a factor - mark as complete
+            print("Completing residue work...")
+            complete_result = self.api_client.complete_residue(
+                client_id=self.ctx.client_id,
+                residue_id=self.current_residue_id,
+                stage2_attempt_id=self._stage2_attempt_id
+            )
+
+            if complete_result:
+                new_t_level = complete_result.get('new_t_level')
+                if new_t_level is not None:
+                    print(f"T-level updated to {new_t_level:.2f}")
+            else:
+                self.logger.warning("Failed to complete residue on server")
 
         # Clean up local residue file
         if self.local_residue_file and self.local_residue_file.exists():

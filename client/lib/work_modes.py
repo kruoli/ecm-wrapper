@@ -388,6 +388,10 @@ class Stage1ProducerMode(WorkMode):
             self.logger
         )
 
+    # Minimum B1 for stage1-only mode to prevent overloading server with too-fast submissions
+    # Low B1 values (e.g., 11000 for t20) complete in seconds on GPU, causing submission spam
+    MIN_STAGE1_B1 = 250000  # ~t30 level
+
     def _calculate_stage1_params(self, work: Dict[str, Any]) -> tuple:
         """
         Calculate optimal B1/curves for stage 1 based on t-level info.
@@ -403,11 +407,15 @@ class Stage1ProducerMode(WorkMode):
         Returns:
             Tuple of (b1, curves)
         """
-        # If B1 is explicitly specified, use it
+        # If B1 is explicitly specified, use it (but still enforce minimum)
         if self.args.b1 is not None:
+            b1 = self.args.b1
+            if b1 < self.MIN_STAGE1_B1:
+                self.logger.warning(f"B1={b1} below minimum {self.MIN_STAGE1_B1} for stage1-only, using minimum")
+                b1 = self.MIN_STAGE1_B1
             curves = self.args.curves if self.args.curves is not None else \
                      self.wrapper.config['programs']['gmp_ecm']['default_curves']
-            return self.args.b1, curves
+            return b1, curves
 
         # Get current t-level to determine appropriate B1
         current_t = work.get('current_t_level', 0.0) or 0.0
@@ -416,6 +424,11 @@ class Stage1ProducerMode(WorkMode):
         # e.g., t54.7 -> use B1 for t55
         target_for_b1 = max(20, int(current_t) + 1)  # At least t20
         b1, _ = get_optimal_b1_for_tlevel(target_for_b1)
+
+        # Enforce minimum B1 to prevent submission spam from too-fast GPU runs
+        if b1 < self.MIN_STAGE1_B1:
+            self.logger.info(f"B1={b1} (t{target_for_b1}) below minimum, using B1={self.MIN_STAGE1_B1}")
+            b1 = self.MIN_STAGE1_B1
 
         # Use GPU batch size for curves (one batch per work unit)
         # Check args.curves first, then config, then default

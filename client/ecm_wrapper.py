@@ -394,17 +394,25 @@ def main():
     # Two-stage Mode
     elif args.two_stage:
         # Two-stage mode always uses GPU for stage 1 (that's the whole point)
+        # Calculate B2 from multiplier if not explicitly specified
+        if args.b2 is not None:
+            two_stage_b2 = args.b2
+        elif hasattr(args, 'b2_multiplier') and args.b2_multiplier is not None:
+            two_stage_b2 = int(b1 * args.b2_multiplier)
+        else:
+            two_stage_b2 = None  # Use GMP-ECM default
+
         output.mode_header("Two-stage Mode", {
             "Pipeline": "GPU stage 1 + CPU stage 2",
             "Composite": args.composite,
             "B1": b1,
-            "B2": args.b2 if args.b2 is not None else "default"
+            "B2": two_stage_b2 if two_stage_b2 is not None else "default"
         })
 
         config = TwoStageConfig(
             composite=args.composite,
             b1=b1,
-            b2=args.b2,
+            b2=two_stage_b2,
             stage1_curves=args.curves or 100,  # Use --curves for stage 1
             stage2_curves_per_residue=1000,     # Default for stage 2
             stage1_device="GPU",  # Two-stage always uses GPU for stage 1

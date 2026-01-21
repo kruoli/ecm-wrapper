@@ -72,7 +72,8 @@ class AliquotWrapper(BaseWrapper):
 
     def __init__(self, config_path: str, factorizer: str = 'cado', hybrid_threshold: int = 100,
                  siqs_threshold: int = 100, ecm_program: str = 'gmp-ecm', threads: Optional[int] = None,
-                 verbose: bool = False, use_two_stage: bool = False, max_batch_curves: Optional[int] = None):
+                 verbose: bool = False, use_two_stage: bool = False, max_batch_curves: Optional[int] = None,
+                 progress_interval: int = 0):
         """Initialize aliquot wrapper with specified factorization engine.
 
         Args:
@@ -85,6 +86,7 @@ class AliquotWrapper(BaseWrapper):
             verbose: Enable verbose output from factorization programs
             use_two_stage: Use GPU two-stage mode for ECM (GPU stage 1 + CPU stage 2, default: False)
             max_batch_curves: Max curves per GPU batch in two-stage t-level mode (default: None = use config)
+            progress_interval: Show progress every N completed curves (0 = disabled)
         """
         super().__init__(config_path)
         self.config_path = config_path  # Store for lazy initialization of sub-wrappers
@@ -96,6 +98,7 @@ class AliquotWrapper(BaseWrapper):
         self.verbose = verbose
         self.use_two_stage = use_two_stage
         self.max_batch_curves = max_batch_curves
+        self.progress_interval = progress_interval
 
         # Lazy initialization of factorizers (created on first access)
         self._cado = None
@@ -333,6 +336,7 @@ class AliquotWrapper(BaseWrapper):
                     verbose=self.verbose,
                     use_two_stage=self.use_two_stage,  # GPU two-stage mode if enabled
                     max_batch_curves=max_batch,  # Enable batching for pipelined GPU/CPU execution
+                    progress_interval=self.progress_interval,
                     no_submit=True  # Aliquot handles its own submissions
                 )
                 ecm_result = self.ecm.run_tlevel_v2(config)
@@ -920,6 +924,9 @@ Examples:
   # Verbose mode (show detailed output from ECM and CADO-NFS)
   python3 aliquot_wrapper.py --start 276 -v --workers 8
 
+  # Show progress every 100 curves
+  python3 aliquot_wrapper.py --start 276 --two-stage --workers 8 --progress-interval 100
+
 Common test sequences:
   276 → 396 → 696 → 1104 → 1872 → 3770 → ... (terminates at 1)
   220 → 284 → 220 (amicable pair, cycle of length 2)
@@ -965,6 +972,8 @@ Common test sequences:
                        help='Max curves per GPU batch in two-stage t-level mode (enables chunking for earlier factor discovery)')
     parser.add_argument('-v', '--verbose', action='store_true',
                        help='Enable verbose output from factorization programs (ECM, CADO-NFS)')
+    parser.add_argument('--progress-interval', type=int, default=0,
+                       help='Show progress updates every N completed curves (0 = disabled)')
 
     args = parser.parse_args()
 
@@ -976,7 +985,7 @@ Common test sequences:
     wrapper = AliquotWrapper(args.config, factorizer=args.factorizer, hybrid_threshold=args.hybrid_threshold,
                             siqs_threshold=args.siqs_threshold, ecm_program=args.ecm_program,
                             threads=args.workers, verbose=args.verbose, use_two_stage=args.two_stage,
-                            max_batch_curves=args.max_batch)
+                            max_batch_curves=args.max_batch, progress_interval=args.progress_interval)
 
     # Override factor logging config if requested
     if args.quiet_factors:

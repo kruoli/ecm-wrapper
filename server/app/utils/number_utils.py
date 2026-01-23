@@ -173,3 +173,61 @@ def is_probably_prime(n: str, trials: int = 10) -> bool:
             return False  # Definitely composite
 
     return True  # Probably prime
+
+
+from typing import Tuple, Optional
+
+
+def parse_sigma_with_parametrization(
+    sigma_str: Optional[str],
+    default_parametrization: int = 3
+) -> Tuple[Optional[str], Optional[int]]:
+    """
+    Parse a sigma string that may include parametrization prefix.
+
+    ECM sigma values can be formatted as:
+    - "123456" (plain sigma value)
+    - "3:123456" (parametrization:sigma format)
+
+    Args:
+        sigma_str: Sigma string to parse, or None
+        default_parametrization: Parametrization to use if not specified in sigma string (default: 3)
+
+    Returns:
+        Tuple of (sigma, parametrization) where:
+        - sigma: The sigma value as a string (supports large numbers), or None if input was None
+        - parametrization: The parametrization (0-3), or None if input was None
+
+    Raises:
+        ValueError: If parametrization is not in valid range (0-3)
+
+    Examples:
+        >>> parse_sigma_with_parametrization("3:123456")
+        ('123456', 3)
+        >>> parse_sigma_with_parametrization("987654")
+        ('987654', 3)
+        >>> parse_sigma_with_parametrization("1:42")
+        ('42', 1)
+        >>> parse_sigma_with_parametrization(None)
+        (None, None)
+    """
+    if sigma_str is None:
+        return None, None
+
+    sigma_str = str(sigma_str)
+
+    if ':' in sigma_str:
+        parts = sigma_str.split(':', 1)
+        parametrization = int(parts[0])
+        sigma = parts[1]
+    else:
+        sigma = sigma_str
+        parametrization = default_parametrization
+
+    # Validate parametrization
+    if parametrization not in [0, 1, 2, 3]:
+        raise ValueError(
+            f"Invalid parametrization {parametrization}. Must be 0, 1, 2, or 3."
+        )
+
+    return sigma, parametrization

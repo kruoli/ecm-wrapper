@@ -17,7 +17,8 @@ from ....utils.query_helpers import (
     get_inactive_composites,
     get_outstanding_work_assignments,
     get_recently_added_composites,
-    get_residues_filtered
+    get_residues_filtered,
+    calculate_pagination
 )
 
 router = APIRouter()
@@ -41,25 +42,12 @@ async def inactive_composites_dashboard(
         return get_unauthorized_redirect_html()
 
     composites, total = get_inactive_composites(db, limit=limit, offset=offset)
-
-    # Calculate pagination metadata
-    page = (offset // limit) + 1 if limit > 0 else 1
-    total_pages = (total + limit - 1) // limit if limit > 0 else 1
-    showing_from = offset + 1 if total > 0 else 0
-    showing_to = min(offset + limit, total)
+    pagination = calculate_pagination(offset, limit, total)
 
     return templates.TemplateResponse("admin/inactive_composites.html", {
         "request": request,
         "composites": composites,
-        "total": total,
-        "page": page,
-        "total_pages": total_pages,
-        "limit": limit,
-        "offset": offset,
-        "showing_from": showing_from,
-        "showing_to": showing_to,
-        "has_prev": offset > 0,
-        "has_next": offset + limit < total
+        **pagination.to_dict()
     })
 
 
@@ -91,25 +79,12 @@ async def outstanding_work_dashboard(
         status_filter=status,
         method_filter=method
     )
-
-    # Calculate pagination metadata
-    page = (offset // limit) + 1 if limit > 0 else 1
-    total_pages = (total + limit - 1) // limit if limit > 0 else 1
-    showing_from = offset + 1 if total > 0 else 0
-    showing_to = min(offset + limit, total)
+    pagination = calculate_pagination(offset, limit, total)
 
     return templates.TemplateResponse("admin/outstanding_work.html", {
         "request": request,
         "assignments": assignments,
-        "total": total,
-        "page": page,
-        "total_pages": total_pages,
-        "limit": limit,
-        "offset": offset,
-        "showing_from": showing_from,
-        "showing_to": showing_to,
-        "has_prev": offset > 0,
-        "has_next": offset + limit < total,
+        **pagination.to_dict(),
         # Filter values for form state
         "filter_client_id": client_id,
         "filter_status": status,
@@ -137,25 +112,12 @@ async def recent_composites_dashboard(
         return get_unauthorized_redirect_html()
 
     composites, total = get_recently_added_composites(db, days=days, limit=limit, offset=offset)
-
-    # Calculate pagination metadata
-    page = (offset // limit) + 1 if limit > 0 else 1
-    total_pages = (total + limit - 1) // limit if limit > 0 else 1
-    showing_from = offset + 1 if total > 0 else 0
-    showing_to = min(offset + limit, total)
+    pagination = calculate_pagination(offset, limit, total)
 
     return templates.TemplateResponse("admin/recent_composites.html", {
         "request": request,
         "composites": composites,
-        "total": total,
-        "page": page,
-        "total_pages": total_pages,
-        "limit": limit,
-        "offset": offset,
-        "showing_from": showing_from,
-        "showing_to": showing_to,
-        "has_prev": offset > 0,
-        "has_next": offset + limit < total,
+        **pagination.to_dict(),
         "days": days
     })
 
@@ -197,25 +159,12 @@ async def residue_status_dashboard(
 
     # Get summary statistics
     stats = residue_manager.get_stats(db)
-
-    # Calculate pagination metadata
-    page = (offset // limit) + 1 if limit > 0 else 1
-    total_pages = (total + limit - 1) // limit if limit > 0 else 1
-    showing_from = offset + 1 if total > 0 else 0
-    showing_to = min(offset + limit, total)
+    pagination = calculate_pagination(offset, limit, total)
 
     return templates.TemplateResponse("admin/residue_status.html", {
         "request": request,
         "residues": residues,
-        "total": total,
-        "page": page,
-        "total_pages": total_pages,
-        "limit": limit,
-        "offset": offset,
-        "showing_from": showing_from,
-        "showing_to": showing_to,
-        "has_prev": offset > 0,
-        "has_next": offset + limit < total,
+        **pagination.to_dict(),
         # Filter values for form state
         "filter_status": status,
         "filter_client_id": client_id,

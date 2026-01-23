@@ -2,13 +2,86 @@
 Common database query patterns to reduce duplication across routes.
 Centralizes frequently-used queries for composites, work assignments, and related entities.
 """
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Optional, Any, List
+from typing import Optional, Any, List, Dict
 
 from sqlalchemy import and_, desc, func, distinct
 from sqlalchemy.orm import Session
 
 from .calculations import CompositeCalculations
+
+
+@dataclass
+class PaginationMetadata:
+    """Pagination metadata for paginated responses."""
+    page: int
+    total_pages: int
+    showing_from: int
+    showing_to: int
+    has_prev: bool
+    has_next: bool
+    limit: int
+    offset: int
+    total: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for template context."""
+        return {
+            "page": self.page,
+            "total_pages": self.total_pages,
+            "showing_from": self.showing_from,
+            "showing_to": self.showing_to,
+            "has_prev": self.has_prev,
+            "has_next": self.has_next,
+            "limit": self.limit,
+            "offset": self.offset,
+            "total": self.total
+        }
+
+
+def calculate_pagination(offset: int, limit: int, total: int) -> PaginationMetadata:
+    """
+    Calculate pagination metadata for paginated responses.
+
+    This centralizes the pagination logic used across dashboard endpoints
+    to ensure consistency and reduce code duplication.
+
+    Args:
+        offset: Current offset into results
+        limit: Number of items per page
+        total: Total number of items available
+
+    Returns:
+        PaginationMetadata with all calculated values
+
+    Example:
+        >>> pagination = calculate_pagination(offset=20, limit=10, total=55)
+        >>> pagination.page
+        3
+        >>> pagination.total_pages
+        6
+        >>> pagination.has_next
+        True
+    """
+    page = (offset // limit) + 1 if limit > 0 else 1
+    total_pages = (total + limit - 1) // limit if limit > 0 else 1
+    showing_from = offset + 1 if total > 0 else 0
+    showing_to = min(offset + limit, total)
+    has_prev = offset > 0
+    has_next = offset + limit < total
+
+    return PaginationMetadata(
+        page=page,
+        total_pages=total_pages,
+        showing_from=showing_from,
+        showing_to=showing_to,
+        has_prev=has_prev,
+        has_next=has_next,
+        limit=limit,
+        offset=offset,
+        total=total
+    )
 
 
 def get_recent_work_assignments(
@@ -502,6 +575,50 @@ def get_recently_added_composites(
     ).offset(offset).limit(limit).all()
 
     return composites, total
+
+
+def batch_fetch_attempts_by_composite(
+    db: Session,
+    composite_ids: List[int],
+    exclude_superseded: bool = True
+) -> dict[int, list]:
+    """
+    Batch fetch ECM attempts for multiple composites in a single query.
+
+    This eliminates N+1 query patterns when processing multiple composites.
+
+    Args:
+        db: Database session
+        composite_ids: List of composite IDs to fetch attempts for
+        exclude_superseded: If True, exclude attempts that have been superseded
+                           (for accurate t-level calculations)
+
+    Returns:
+        Dictionary mapping composite_id to list of ECMAttempt objects
+    """
+    from ..models.attempts import ECMAttempt
+
+    if not composite_ids:
+        return {}
+
+    query = db.query(ECMAttempt).filter(
+        ECMAttempt.composite_id.in_(composite_ids)
+    )
+
+    # Exclude superseded attempts for t-level calculations
+    if exclude_superseded:
+        query = query.filter(ECMAttempt.superseded_by.is_(None))
+
+    all_attempts = query.all()
+
+    # Group by composite_id
+    attempts_by_composite: dict[int, list] = {}
+    for attempt in all_attempts:
+        if attempt.composite_id not in attempts_by_composite:
+            attempts_by_composite[attempt.composite_id] = []
+        attempts_by_composite[attempt.composite_id].append(attempt)
+
+    return attempts_by_composite
 
 
 def get_residues_filtered(

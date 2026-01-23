@@ -12,7 +12,7 @@ from ...models import Composite, ECMAttempt, Factor
 from ...models.residues import ECMResidue
 from ...services.composites import CompositeService
 from ...services.factors import FactorService
-from ...utils.number_utils import is_trivial_factor, verify_factor_divides
+from ...utils.number_utils import is_trivial_factor, verify_factor_divides, parse_sigma_with_parametrization
 from ...utils.transactions import transaction_scope
 
 logger = logging.getLogger(__name__)
@@ -66,28 +66,19 @@ async def submit_result(
                 )
 
             # Get parametrization from explicit parameter or parse from sigma string
-            parametrization = result_request.parameters.parametrization
+            explicit_parametrization = result_request.parameters.parametrization
             sigma = None
+            parametrization = explicit_parametrization
 
             # Parse sigma string (format: "3:123456" or just "123456")
             if result_request.parameters.sigma:
-                sigma_str = str(result_request.parameters.sigma)
-                if ':' in sigma_str:
-                    parts = sigma_str.split(':', 1)
-                    # If parametrization not explicitly provided, extract from sigma
-                    if parametrization is None:
-                        parametrization = int(parts[0])
-                        # Validate parametrization from sigma string
-                        if parametrization not in [0, 1, 2, 3]:
-                            raise ValueError(f"Invalid parametrization {parametrization} in sigma string. Must be 0, 1, 2, or 3.")
-                    # Keep sigma as string to support large parametrization 0 values
-                    sigma = parts[1]
-                else:
-                    # Plain sigma value - keep as string
-                    sigma = sigma_str
-                    # Default to param 3 if not explicitly provided
-                    if parametrization is None:
-                        parametrization = 3
+                sigma, parsed_param = parse_sigma_with_parametrization(
+                    result_request.parameters.sigma,
+                    default_parametrization=3
+                )
+                # Use explicit parametrization if provided, otherwise use parsed value
+                if explicit_parametrization is None:
+                    parametrization = parsed_param
 
             # Final validation of parametrization
             if parametrization is not None and parametrization not in [0, 1, 2, 3]:

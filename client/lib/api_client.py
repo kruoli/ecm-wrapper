@@ -128,47 +128,24 @@ class APIClient:
             self.logger.debug(f"Submitting to {url}")
             self.logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
 
-        for attempt in range(self.retry_attempts):
+        # Use centralized retry logic
+        response = self._retry_with_exponential_backoff(
+            "Result submission",
+            lambda: requests.post(url, json=payload, timeout=self.timeout)
+        )
+
+        if response is not None:
             try:
-                response = requests.post(
-                    url,
-                    json=payload,
-                    timeout=self.timeout
-                )
-
-                if response.status_code != 200:
-                    self.logger.error(
-                        f"Server response ({response.status_code}): {response.text}"
-                    )
-
-                response.raise_for_status()
                 response_data = response.json()
                 self.logger.info(f"Successfully submitted results: {response_data}")
                 return response_data
+            except (json.JSONDecodeError, ValueError) as e:
+                self.logger.error(f"Failed to parse response JSON: {e}")
 
-            except requests.exceptions.RequestException as e:
-                error_details = ""
-                if hasattr(e, 'response') and e.response is not None:
-                    try:
-                        error_details = f" - Response: {e.response.text}"
-                    except (AttributeError, ValueError, UnicodeDecodeError):
-                        pass
-
-                self.logger.error(
-                    f"API submission failed (attempt {attempt + 1}): {e}{error_details}"
-                )
-
-                if attempt < self.retry_attempts - 1:
-                    # Exponential backoff
-                    backoff_time = 2 ** attempt
-                    self.logger.debug(f"Retrying in {backoff_time} seconds...")
-                    time.sleep(backoff_time)
-
-        # All retry attempts failed
+        # Submission failed - save for later retry if requested
         if save_on_failure and results_context:
             self.save_failed_submission(results_context, payload)
 
-        self.logger.error(f"Failed to submit results after {self.retry_attempts} attempts")
         return None
 
     def save_failed_submission(

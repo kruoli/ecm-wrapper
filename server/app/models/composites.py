@@ -1,5 +1,5 @@
 from typing import Optional
-from sqlalchemy import String, Boolean, Text, Float, Index
+from sqlalchemy import String, Boolean, Text, Float, Index, Computed
 from sqlalchemy.orm import Mapped, mapped_column
 from .base import Base, TimestampMixin
 
@@ -25,6 +25,12 @@ class Composite(Base, TimestampMixin):
     target_t_level: Mapped[Optional[float]] = mapped_column(Float, nullable=True, index=True)  # Target t-level to achieve
     current_t_level: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)  # Current t-level achieved (includes prior_t_level if set)
     prior_t_level: Mapped[Optional[float]] = mapped_column(Float, nullable=True, index=True)  # T-level from work done before import
+    ecm_progress: Mapped[Optional[float]] = mapped_column(
+        Float,
+        Computed("current_t_level / NULLIF(target_t_level, 0)"),
+        nullable=True,
+        index=True
+    )  # Generated column: current/target ratio (NULL if no target). Read-only.
 
     # Work priority
     priority: Mapped[int] = mapped_column(default=0, nullable=False, index=True)

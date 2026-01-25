@@ -182,9 +182,8 @@ async def testing_status(
         pm1_count = counts['pm1_count']
         pp1_count = counts['pp1_count']
 
-        # Calculate progress percentage
-        target_t = comp.target_t_level if comp.target_t_level is not None else 0
-        progress_pct = (current_t / target_t * 100) if target_t > 0 else 0
+        # Use pre-computed ecm_progress column (indexed, auto-updated)
+        progress_pct = (comp.ecm_progress or 0) * 100
 
         composite_data.append({
             'id': comp.id,

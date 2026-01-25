@@ -295,7 +295,7 @@
                     {% for composite in composites %}
                     {% set composite_display = composite.number[:30] + '...' if composite.number|length > 30 else composite.number %}
                     {% set created_str = composite.created_at.strftime('%Y-%m-%d %H:%M') if composite.created_at else 'Unknown' %}
-                    {% set t_data = calc_t_progress(composite.current_t_level, composite.target_t_level) %}
+                    {% set t_data = calc_t_progress(composite.current_t_level, composite.target_t_level, composite.ecm_progress) %}
                     <tr>
                         <td>{{ composite.id }}</td>
                         <td><span class="number">{{ esc(composite_display) }}</span></td>
@@ -419,7 +419,7 @@
                     {% for agg in recent_attempts %}
                     {% set comp = agg.composite %}
                     {% set comp_display = (comp.number[:30] + '...') if comp.number|length > 30 else comp.number %}
-                    {% set t_data = calc_t_progress(comp.current_t_level, comp.target_t_level) %}
+                    {% set t_data = calc_t_progress(comp.current_t_level, comp.target_t_level, comp.ecm_progress) %}
                     {% set comp_digits = comp.current_composite|length if comp.current_composite else 0 %}
                     {% set comp_bits = (comp_digits * 3.322)|int if comp_digits > 0 else 0 %}
                     <!-- Main aggregated row -->

@@ -589,6 +589,7 @@ class Stage2ConsumerMode(WorkMode):
         self._expected_curves: int = 0
         self._curves_completed: int = 0
         self._found_factor: bool = False
+        self._raw_output: str = ""  # Aggregated ECM output from workers
         # Import here to avoid circular dependency
         from .stage2_executor import Stage2Executor
         self.Stage2Executor = Stage2Executor
@@ -627,6 +628,7 @@ class Stage2ConsumerMode(WorkMode):
         self._expected_curves = work['curve_count']
         self._curves_completed = 0
         self._found_factor = False
+        self._raw_output = ""
 
         b1 = work['b1']
 
@@ -717,6 +719,7 @@ class Stage2ConsumerMode(WorkMode):
         self._sigma = sigma
         self._curves_completed = curves
         self._found_factor = bool(all_factors)
+        self._raw_output = executor.raw_output  # Aggregated output from all workers
 
         return result
 
@@ -735,7 +738,7 @@ class Stage2ConsumerMode(WorkMode):
             'factors_found': result.factors,
             'factor_found': self._factor,
             'sigma': self._sigma,
-            'raw_output': f"Stage 2 from residue {self.current_residue_id}",
+            'raw_output': self._raw_output or f"Stage 2 from residue {self.current_residue_id}",
             'method': 'ecm',
             'parametrization': work.get('parametrization', 3),
             'execution_time': result.execution_time,

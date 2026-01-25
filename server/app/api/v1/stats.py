@@ -14,7 +14,7 @@ from ...schemas.composites import (
 from ...models import Composite, ECMAttempt, Factor, ProjectComposite, Project
 from ...services.composites import CompositeService
 from ...utils.errors import get_or_404, not_found_error
-from ...utils.calculations import CompositeCalculations, ECMCalculations
+from ...utils.calculations import ECMCalculations
 
 router = APIRouter()
 
@@ -228,12 +228,16 @@ async def get_top_composites_by_progress(
         ).filter(ProjectComposite.project_id == project.id)
 
     # Apply filters
-    composites = query.filter(and_(*filters)).all()
+    query = query.filter(and_(*filters))
 
-    # Calculate completion percentage and sort
-    composites = CompositeCalculations.sort_composites_by_progress(composites, reverse=True)
-    total = len(composites)
-    composites = composites[:limit]
+    # Get total count before pagination
+    total = query.count()
+
+    # Sort by ecm_progress (pre-computed column) and apply limit at DB level
+    # This is much faster than loading all composites and sorting in Python
+    composites = query.order_by(
+        Composite.ecm_progress.desc().nulls_last()
+    ).limit(limit).all()
 
     # Get project associations for each composite
     result_items = []
@@ -258,7 +262,7 @@ async def get_top_composites_by_progress(
             snfs_difficulty=comp.snfs_difficulty,
             target_t_level=comp.target_t_level,
             current_t_level=comp.current_t_level,
-            completion_pct=CompositeCalculations.get_completion_percentage(comp),
+            completion_pct=(comp.ecm_progress or 0) * 100,  # Use pre-computed column
             priority=comp.priority,
             is_fully_factored=comp.is_fully_factored,
             is_active=comp.is_active,

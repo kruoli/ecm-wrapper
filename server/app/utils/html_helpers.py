@@ -36,13 +36,16 @@ def format_composite_display(number: str, max_length: int = 50) -> str:
 
 
 def calculate_t_level_progress(current_t: Optional[float],
-                               target_t: Optional[float]) -> Dict[str, Any]:
+                               target_t: Optional[float],
+                               ecm_progress: Optional[float] = None) -> Dict[str, Any]:
     """
     Calculate t-level progress metrics for display.
 
     Args:
         current_t: Current t-level value
         target_t: Target t-level value
+        ecm_progress: Optional pre-computed progress ratio (0.0-1.0+).
+                      If provided, skips division calculation.
 
     Returns:
         Dictionary with progress percentage and color
@@ -50,7 +53,10 @@ def calculate_t_level_progress(current_t: Optional[float],
     current = current_t or 0.0
     target = target_t or 0.0
 
-    if target > 0:
+    # Use pre-computed ecm_progress if available, otherwise calculate
+    if ecm_progress is not None:
+        progress_pct = ecm_progress * 100
+    elif target > 0:
         progress_pct = (current / target) * 100
     else:
         progress_pct = 0

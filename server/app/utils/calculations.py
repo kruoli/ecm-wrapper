@@ -16,10 +16,12 @@ class CompositeCalculations:
     @staticmethod
     def get_completion_percentage(composite: Composite) -> float:
         """
-        Calculate completion percentage for a composite based on t-level progress.
+        Get completion percentage for a composite based on t-level progress.
+
+        Uses the pre-computed ecm_progress column when available for efficiency.
 
         Args:
-            composite: Composite instance with target_t_level and current_t_level
+            composite: Composite instance with ecm_progress (or target_t_level/current_t_level)
 
         Returns:
             Completion percentage (0-100). Returns 0 if no target is set.
@@ -29,9 +31,9 @@ class CompositeCalculations:
             >>> CompositeCalculations.get_completion_percentage(comp)
             50.0
         """
-        if composite.target_t_level and composite.target_t_level > 0:
-            current_t = composite.current_t_level or 0.0
-            return (current_t / composite.target_t_level) * 100
+        # Use pre-computed ecm_progress column (ratio of current/target)
+        if composite.ecm_progress is not None:
+            return composite.ecm_progress * 100
         return 0.0
 
     @staticmethod

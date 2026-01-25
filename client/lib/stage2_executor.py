@@ -61,6 +61,9 @@ class Stage2Executor:
         self.process_lock = threading.Lock()
         self.curves_completed_total = 0
         self.curves_lock = threading.Lock()
+        # Aggregated raw output from all workers
+        self.raw_output: str = ""
+        self.output_lock = threading.Lock()
 
     def execute(self, early_termination: bool = True,
                 progress_interval: int = 0) -> Tuple[Optional[str], List[str], int, float, Optional[str]]:
@@ -85,6 +88,7 @@ class Stage2Executor:
         # This prevents a factor found in a previous run from stopping this run
         self.stop_event.clear()
         self.factor_found = None  # Also reset factor state
+        self.raw_output = ""  # Reset aggregated output
 
         # Extract B1 from residue file to ensure consistency
         residue_info = self.wrapper._parse_residue_file(self.residue_file)
@@ -233,6 +237,14 @@ class Stage2Executor:
             # Add to total curves completed (thread-safe)
             with self.curves_lock:
                 self.curves_completed_total += curves_completed
+
+            # Aggregate raw output (thread-safe)
+            with self.output_lock:
+                if self.raw_output:
+                    self.raw_output += f"\n\n=== Worker {worker_id} ===\n"
+                else:
+                    self.raw_output = f"=== Worker {worker_id} ===\n"
+                self.raw_output += full_output
 
             # Progress reporting in verbose mode
             if self.verbose and total_lines > 0:

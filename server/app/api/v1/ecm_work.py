@@ -91,13 +91,14 @@ async def get_ecm_work(
 
         # Build query for suitable composites
         # current_t_level now includes prior_t_level (calculated using -w flag)
+        # Use ecm_progress < 1.0 which leverages the indexed generated column
         query = db.query(Composite).filter(
             and_(
                 Composite.is_active == True,  # Only assign active composites
                 Composite.is_fully_factored == False,
                 or_(Composite.is_complete.is_(None), Composite.is_complete == False),
-                Composite.target_t_level.isnot(None),
-                Composite.current_t_level < Composite.target_t_level
+                Composite.ecm_progress.isnot(None),  # Has a target set
+                Composite.ecm_progress < 1.0  # Not yet complete (indexed)
             )
         )
 

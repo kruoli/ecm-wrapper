@@ -25,5 +25,9 @@ COPY bin/group.gp /app/bin/group.gp
 RUN chmod +x /app/bin/t-level
 
 # Run database migrations on startup
-# Single worker for 1GB memory droplet (4 workers caused OOM/swapping)
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# Memory-optimized settings for 1GB RAM droplet:
+# - Single worker (multiple workers caused OOM/swapping)
+# - limit-concurrency: Max simultaneous requests to prevent memory exhaustion
+# - limit-max-requests: Restart worker after N requests to prevent memory leaks
+# - timeout-keep-alive: Shorter keepalive to free connections faster
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --limit-concurrency 20 --limit-max-requests 5000 --timeout-keep-alive 5"]

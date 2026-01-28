@@ -1,16 +1,55 @@
+import asyncio
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import get_settings
 from .database import engine
 from .models.base import Base
 from .api.v1.router import v1_router
+
+
+class TimeoutMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware to add request timeouts and prevent slow requests from accumulating.
+
+    For memory-constrained environments, this prevents a few slow requests
+    from tying up all available connections/memory.
+
+    Admin endpoints get a longer timeout since some operations (like t-level
+    recalculation) can take longer.
+    """
+
+    def __init__(self, app, timeout_seconds: int = 60, admin_timeout_seconds: int = 300):
+        super().__init__(app)
+        self.timeout_seconds = timeout_seconds
+        self.admin_timeout_seconds = admin_timeout_seconds
+
+    async def dispatch(self, request: Request, call_next):
+        # Admin endpoints get longer timeout (5 min vs 60s)
+        path = request.url.path
+        if "/admin/" in path:
+            timeout = self.admin_timeout_seconds
+        else:
+            timeout = self.timeout_seconds
+
+        try:
+            return await asyncio.wait_for(
+                call_next(request),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logging.warning(f"Request timeout ({timeout}s): {request.method} {path}")
+            return JSONResponse(
+                status_code=504,
+                content={"detail": "Request timeout - please try again"}
+            )
 
 # Configure logging
 logging.basicConfig(
@@ -48,6 +87,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add timeout middleware to prevent slow requests from tying up resources
+# 60 second timeout is generous but prevents runaway requests
+app.add_middleware(TimeoutMiddleware, timeout_seconds=60)
 
 # Include API routers
 app.include_router(v1_router, prefix="/api")

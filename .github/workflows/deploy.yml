@@ -126,6 +126,14 @@ jobs:
           # Display status
           echo "📊 Service status:"
           $DOCKER_COMPOSE -f docker-compose.prod.yml.active ps
+
+          # Clean up old Docker resources to prevent disk filling up
+          # Run AFTER new containers are up to avoid removing needed images
+          echo "🧹 Cleaning up unused Docker resources..."
+          docker system prune -af --filter "until=24h"
+          docker volume prune -f --filter "dangling=true"
+          echo "✅ Cleanup complete"
+          df -h / | tail -1
         ENDSSH
 
     - name: Verify deployment

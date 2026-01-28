@@ -9,6 +9,14 @@ services:
       - "5434:5432"  # Expose on host port 5434 (5432=existing PG, 5433=your tunnel)
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgresql-lowmem.conf:/etc/postgresql/conf.d/lowmem.conf:ro
+    command: >
+      postgres
+      -c shared_buffers=128MB
+      -c effective_cache_size=256MB
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
+      -c max_connections=20
     networks:
       - ecm_network
     secrets:
@@ -19,6 +27,10 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    # Memory limits for 1GB droplet - leave room for API and OS
+    # Note: mem_limit works with plain docker-compose; deploy.resources needs Swarm
+    mem_limit: 400m
+    memswap_limit: 400m  # Prevent swap usage
 
   api:
     build:
@@ -48,6 +60,10 @@ services:
       - api_secret_key
       - admin_api_key
     restart: unless-stopped
+    # Memory limits for 1GB droplet
+    # Note: mem_limit works with plain docker-compose; deploy.resources needs Swarm
+    mem_limit: 350m
+    memswap_limit: 350m  # Prevent swap usage
 
 networks:
   ecm_network:

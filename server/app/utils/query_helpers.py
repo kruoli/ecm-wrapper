@@ -9,8 +9,6 @@ from typing import Optional, Any, List, Dict
 from sqlalchemy import and_, desc, func, distinct
 from sqlalchemy.orm import Session
 
-from .calculations import CompositeCalculations
-
 
 @dataclass
 class PaginationMetadata:
@@ -160,11 +158,11 @@ def get_composites_by_completion(
     if not include_factored:
         filters.append(Composite.is_fully_factored == False)
 
-    composites = query.filter(and_(*filters)).all()
-
-    # Sort by completion percentage using centralized calculation
-    composites = CompositeCalculations.sort_composites_by_progress(composites, reverse=True)
-    return composites[:limit]
+    # Use indexed ecm_progress column for efficient sorting in SQL
+    # ecm_progress is a generated column: current_t_level / target_t_level
+    return query.filter(and_(*filters)).order_by(
+        Composite.ecm_progress.desc().nulls_last()
+    ).limit(limit).all()
 
 
 def get_recent_clients(db: Session, limit: int = 10, days: int = 7):

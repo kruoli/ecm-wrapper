@@ -69,6 +69,8 @@ async def dashboard(
         "fully_factored": fully_factored,
         "priority": priority,
         "db": db,
+        "Composite": Composite,
+        "ECMAttempt": ECMAttempt,
         "Factor": Factor
     })
 

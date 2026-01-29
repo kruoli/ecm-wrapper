@@ -298,28 +298,18 @@ def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] 
     agg_rows = agg_query.group_by(ECMAttempt.composite_id).all()
     stats_by_composite = {row.composite_id: row for row in agg_rows}
 
-    # Query 4: Recent attempts for expandable detail rows (limited per composite)
-    # Use window function to get only the N most recent per composite
-    row_num = func.row_number().over(
-        partition_by=ECMAttempt.composite_id,
-        order_by=ECMAttempt.created_at.desc()
-    ).label('rn')
-
-    attempts_subq = db.query(
-        ECMAttempt.id.label('attempt_id'),
-        row_num
-    ).filter(
+    # Query 4: Recent attempts for expandable detail rows (limited)
+    # Cap total loaded attempts to avoid memory issues on large datasets.
+    # Most recent attempts across all composites - simple and fast.
+    max_detail_attempts = limit * attempts_per_composite
+    attempts_query = db.query(ECMAttempt).filter(
         ECMAttempt.composite_id.in_(composite_ids)
     )
     if method:
-        attempts_subq = attempts_subq.filter(ECMAttempt.method == method)
-    attempts_subq = attempts_subq.subquery()
-
-    detail_attempts = db.query(ECMAttempt).join(
-        attempts_subq, ECMAttempt.id == attempts_subq.c.attempt_id
-    ).filter(
-        attempts_subq.c.rn <= attempts_per_composite
-    ).order_by(desc(ECMAttempt.created_at)).all()
+        attempts_query = attempts_query.filter(ECMAttempt.method == method)
+    detail_attempts = attempts_query.order_by(
+        desc(ECMAttempt.created_at)
+    ).limit(max_detail_attempts).all()
 
     # Group detail attempts by composite_id
     attempts_by_composite: dict[int, list] = {}

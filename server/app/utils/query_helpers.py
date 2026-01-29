@@ -232,23 +232,22 @@ def get_recent_attempts(db: Session, limit: int = 100, method: Optional[str] = N
     return query.order_by(desc(ECMAttempt.created_at)).limit(limit).all()
 
 
-def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] = None, priority: Optional[int] = None):
+def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] = None, priority: Optional[int] = None, attempts_per_composite: int = 25):
     """
     Get recent ECM attempts aggregated by composite.
 
     For each composite with recent work, returns:
     - Composite information
-    - Total curves run
-    - Number of attempts (batches)
-    - Date range
-    - Factors found
-    - List of individual attempts for expansion
+    - Aggregate stats (computed in SQL, not by loading all attempts)
+    - Factor count
+    - List of recent individual attempts for expansion (limited per composite)
 
     Args:
         db: Database session
         limit: Maximum number of composites to return
         method: Filter by method (ecm, pm1, pp1, etc.)
         priority: Filter by composite priority level
+        attempts_per_composite: Max detail attempts to load per composite
 
     Returns:
         List of dicts with aggregated attempt data per composite
@@ -279,37 +278,64 @@ def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] 
     if not composite_ids:
         return []
 
-    # Query 2: Batch fetch all composites
+    # Query 2: Batch fetch composites
     composites = db.query(Composite).filter(Composite.id.in_(composite_ids)).all()
     composites_by_id = {c.id: c for c in composites}
 
-    # Query 3: Batch fetch all attempts for these composites
-    attempts_query = db.query(ECMAttempt).filter(
+    # Query 3: Aggregate stats in SQL (no ORM object loading needed)
+    agg_query = db.query(
+        ECMAttempt.composite_id,
+        func.count(ECMAttempt.id).label('attempt_count'),
+        func.coalesce(func.sum(ECMAttempt.curves_completed), 0).label('total_curves'),
+        func.coalesce(func.sum(ECMAttempt.execution_time_seconds), 0.0).label('total_time'),
+        func.min(ECMAttempt.created_at).label('earliest_attempt'),
+        func.max(ECMAttempt.created_at).label('latest_attempt'),
+    ).filter(
         ECMAttempt.composite_id.in_(composite_ids)
     )
     if method:
-        attempts_query = attempts_query.filter(ECMAttempt.method == method)
-    all_attempts = attempts_query.order_by(desc(ECMAttempt.created_at)).all()
+        agg_query = agg_query.filter(ECMAttempt.method == method)
+    agg_rows = agg_query.group_by(ECMAttempt.composite_id).all()
+    stats_by_composite = {row.composite_id: row for row in agg_rows}
 
-    # Group attempts by composite_id
+    # Query 4: Recent attempts for expandable detail rows (limited per composite)
+    # Use window function to get only the N most recent per composite
+    row_num = func.row_number().over(
+        partition_by=ECMAttempt.composite_id,
+        order_by=ECMAttempt.created_at.desc()
+    ).label('rn')
+
+    attempts_subq = db.query(
+        ECMAttempt.id.label('attempt_id'),
+        row_num
+    ).filter(
+        ECMAttempt.composite_id.in_(composite_ids)
+    )
+    if method:
+        attempts_subq = attempts_subq.filter(ECMAttempt.method == method)
+    attempts_subq = attempts_subq.subquery()
+
+    detail_attempts = db.query(ECMAttempt).join(
+        attempts_subq, ECMAttempt.id == attempts_subq.c.attempt_id
+    ).filter(
+        attempts_subq.c.rn <= attempts_per_composite
+    ).order_by(desc(ECMAttempt.created_at)).all()
+
+    # Group detail attempts by composite_id
     attempts_by_composite: dict[int, list] = {}
-    all_attempt_ids = []
-    for attempt in all_attempts:
+    for attempt in detail_attempts:
         if attempt.composite_id not in attempts_by_composite:
             attempts_by_composite[attempt.composite_id] = []
         attempts_by_composite[attempt.composite_id].append(attempt)
-        all_attempt_ids.append(attempt.id)
 
-    # Query 4: Batch fetch all factors for these attempts
-    factors_by_attempt: dict[int, list] = {}
-    if all_attempt_ids:
-        all_factors = db.query(Factor).filter(
-            Factor.found_by_attempt_id.in_(all_attempt_ids)
-        ).all()
-        for factor in all_factors:
-            if factor.found_by_attempt_id not in factors_by_attempt:
-                factors_by_attempt[factor.found_by_attempt_id] = []
-            factors_by_attempt[factor.found_by_attempt_id].append(factor)
+    # Query 5: Factor counts per composite (templates only need the count)
+    factor_count_rows = db.query(
+        Factor.composite_id,
+        func.count(Factor.id).label('factor_count')
+    ).filter(
+        Factor.composite_id.in_(composite_ids)
+    ).group_by(Factor.composite_id).all()
+    factor_count_by_composite = {row.composite_id: row.factor_count for row in factor_count_rows}
 
     # Build aggregated results preserving order from original query
     aggregated = []
@@ -318,33 +344,58 @@ def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] 
         if not composite:
             continue
 
-        attempts = attempts_by_composite.get(composite_id, [])
-        if not attempts:
+        stats = stats_by_composite.get(composite_id)
+        if not stats:
             continue
-
-        # Aggregate statistics
-        total_curves = sum(a.curves_completed or 0 for a in attempts)
-        total_time = sum(a.execution_time_seconds or 0 for a in attempts)
-        earliest = min(a.created_at for a in attempts if a.created_at)
-        latest = max(a.created_at for a in attempts if a.created_at)
-
-        # Collect factors from all attempts
-        factors = []
-        for attempt in attempts:
-            factors.extend(factors_by_attempt.get(attempt.id, []))
 
         aggregated.append({
             'composite': composite,
-            'attempt_count': len(attempts),
-            'total_curves': total_curves,
-            'total_time': total_time,
-            'earliest_attempt': earliest,
-            'latest_attempt': latest,
-            'factors': factors,
-            'attempts': attempts  # Full list for expansion
+            'attempt_count': stats.attempt_count,
+            'total_curves': stats.total_curves,
+            'total_time': stats.total_time,
+            'earliest_attempt': stats.earliest_attempt,
+            'latest_attempt': stats.latest_attempt,
+            'factor_count': factor_count_by_composite.get(composite_id, 0),
+            'attempts': attempts_by_composite.get(composite_id, [])
         })
 
     return aggregated
+
+
+def prefetch_factor_counts_for_attempts(db: Session, aggregated_results: list) -> Dict[int, int]:
+    """
+    Pre-fetch factor counts per attempt to avoid N+1 queries in templates.
+
+    Templates need to know how many factors each attempt found (for [+N more] badges).
+    Instead of querying per-attempt inside Jinja2, batch fetch all counts upfront.
+
+    Args:
+        db: Database session
+        aggregated_results: List of dicts from get_aggregated_attempts()
+
+    Returns:
+        Dict mapping attempt_id to factor count
+    """
+    from ..models.factors import Factor
+
+    # Collect attempt IDs that found factors (only those need counts)
+    attempt_ids = []
+    for agg in aggregated_results:
+        for attempt in agg['attempts']:
+            if attempt.factor_found:
+                attempt_ids.append(attempt.id)
+
+    if not attempt_ids:
+        return {}
+
+    rows = db.query(
+        Factor.found_by_attempt_id,
+        func.count(Factor.id).label('factor_count')
+    ).filter(
+        Factor.found_by_attempt_id.in_(attempt_ids)
+    ).group_by(Factor.found_by_attempt_id).all()
+
+    return {row.found_by_attempt_id: row.factor_count for row in rows}
 
 
 def get_expired_work_assignments(db: Session):

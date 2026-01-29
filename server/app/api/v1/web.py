@@ -10,7 +10,7 @@ from ...dependencies import get_composite_service
 from ...models import Composite, ECMAttempt, Factor
 from ...services.composites import CompositeService
 from ...templates import templates
-from ...utils.query_helpers import get_aggregated_attempts
+from ...utils.query_helpers import get_aggregated_attempts, prefetch_factor_counts_for_attempts
 
 router = APIRouter()
 
@@ -33,6 +33,9 @@ async def dashboard(
 
     # Get recent attempts (aggregated by composite), filtered by priority
     attempts = get_aggregated_attempts(db, limit=50, priority=priority)
+
+    # Pre-fetch factor counts for attempt detail rows (eliminates N+1 queries in template)
+    factor_counts_by_attempt = prefetch_factor_counts_for_attempts(db, attempts)
 
     # Get recent factors (limited for main page)
     factors = db.query(Factor).order_by(desc(Factor.created_at)).limit(25).all()
@@ -59,14 +62,13 @@ async def dashboard(
         "composites": composites,
         "attempts": attempts,
         "factors": factors,
+        "factor_counts_by_attempt": factor_counts_by_attempt,
         "total_composites": total_composites,
         "total_attempts": total_attempts,
         "total_factors": total_factors,
         "fully_factored": fully_factored,
         "priority": priority,
         "db": db,
-        "Composite": Composite,
-        "ECMAttempt": ECMAttempt,
         "Factor": Factor
     })
 
@@ -338,6 +340,9 @@ async def recent_curves(
         # Apply pagination to aggregated results
         total = len(all_aggregated)
         attempts = all_aggregated[offset:offset + limit]
+
+        # Pre-fetch factor counts for attempt detail rows (eliminates N+1 queries in template)
+        factor_counts_by_attempt = prefetch_factor_counts_for_attempts(db, attempts)
     else:
         # Get individual attempts
         query = db.query(ECMAttempt).filter(ECMAttempt.superseded_by.is_(None))
@@ -347,6 +352,7 @@ async def recent_curves(
 
         total = query.count()
         attempts = query.order_by(desc(ECMAttempt.created_at)).offset(offset).limit(limit).all()
+        factor_counts_by_attempt = {}
 
     # Get list of active clients for filter dropdown
     clients_rows = db.query(distinct(ECMAttempt.client_id)).filter(
@@ -362,6 +368,7 @@ async def recent_curves(
         "request": request,
         "attempts": attempts,
         "group_by_composite": group_by_composite,
+        "factor_counts_by_attempt": factor_counts_by_attempt,
         "total": total,
         "page": page,
         "total_pages": total_pages,
@@ -372,7 +379,6 @@ async def recent_curves(
         "client_id": client_id,
         "clients": clients,
         "db": db,
-        "Composite": Composite,
         "Factor": Factor
     })
 

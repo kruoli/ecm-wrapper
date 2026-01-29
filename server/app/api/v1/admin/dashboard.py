@@ -12,8 +12,6 @@ from sqlalchemy.orm import Session
 from ....config import get_settings
 from ....database import get_db
 from ....dependencies import verify_admin_key
-from ....models import Composite, ECMAttempt
-from ....models.factors import Factor
 from ....templates import templates
 from ....utils.html_helpers import get_unauthorized_redirect_html
 from ....utils.query_helpers import (
@@ -21,7 +19,7 @@ from ....utils.query_helpers import (
     get_recent_clients,
     get_recent_factors,
     get_recent_work_assignments,
-    get_recent_attempts,
+    prefetch_factor_counts_for_attempts,
     get_aggregated_attempts
 )
 
@@ -141,6 +139,9 @@ async def admin_dashboard(
     recent_factors = get_recent_factors(db, limit=10)
     recent_attempts = get_aggregated_attempts(db, limit=50)
 
+    # Pre-fetch factor counts for attempt detail rows (eliminates N+1 queries in template)
+    factor_counts_by_attempt = prefetch_factor_counts_for_attempts(db, recent_attempts)
+
     # Return template response
     return templates.TemplateResponse("admin/dashboard.html", {
         "request": request,
@@ -150,9 +151,6 @@ async def admin_dashboard(
         "recent_clients": recent_clients,
         "recent_factors": recent_factors,
         "recent_attempts": recent_attempts,
+        "factor_counts_by_attempt": factor_counts_by_attempt,
         "now": datetime.utcnow(),
-        "db": db,
-        "Composite": Composite,
-        "ECMAttempt": ECMAttempt,
-        "Factor": Factor
     })

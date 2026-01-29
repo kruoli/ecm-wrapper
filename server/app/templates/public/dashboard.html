@@ -147,8 +147,8 @@
                         <td><strong>{{ agg.attempt_count }}</strong></td>
                         <td><strong>{{ "{:,}".format(agg.total_curves) }}</strong></td>
                         <td>
-                            {% if agg.factors %}
-                            <span class="factor" style="font-weight: bold;">{{ agg.factors|length }} factor{{ 's' if agg.factors|length > 1 else '' }}</span>
+                            {% if agg.factor_count > 0 %}
+                            <span class="factor" style="font-weight: bold;">{{ agg.factor_count }} factor{{ 's' if agg.factor_count > 1 else '' }}</span>
                             {% else %}
                             None
                             {% endif %}
@@ -171,9 +171,9 @@
                         <td class="small-text">{{ attempt.curves_completed }} curves</td>
                         <td>
                             {% if attempt.factor_found %}
-                            {% set attempt_factors = db.query(Factor).filter(Factor.found_by_attempt_id == attempt.id).all() %}
-                            {% if attempt_factors|length > 1 %}
-                            <span class="factor small-text">{{ attempt.factor_found[:15] }}... <strong style="color: #2ecc71;">[+{{ attempt_factors|length - 1 }}]</strong></span>
+                            {% set fc = factor_counts_by_attempt.get(attempt.id, 1) %}
+                            {% if fc > 1 %}
+                            <span class="factor small-text">{{ attempt.factor_found[:15] }}... <strong style="color: #2ecc71;">[+{{ fc - 1 }}]</strong></span>
                             {% else %}
                             <span class="factor small-text">{{ attempt.factor_found[:20] }}{{ '...' if attempt.factor_found|length > 20 else '' }}</span>
                             {% endif %}

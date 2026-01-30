@@ -232,7 +232,11 @@ def get_recent_attempts(db: Session, limit: int = 100, method: Optional[str] = N
     return query.order_by(desc(ECMAttempt.created_at)).limit(limit).all()
 
 
-def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] = None, priority: Optional[int] = None, attempts_per_composite: int = 25):
+def get_aggregated_attempts(
+    db: Session, limit: int = 50, offset: int = 0,
+    method: Optional[str] = None, priority: Optional[int] = None,
+    client_id: Optional[str] = None, attempts_per_composite: int = 25
+):
     """
     Get recent ECM attempts aggregated by composite.
 
@@ -245,12 +249,14 @@ def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] 
     Args:
         db: Database session
         limit: Maximum number of composites to return
+        offset: Number of composites to skip (for pagination)
         method: Filter by method (ecm, pm1, pp1, etc.)
         priority: Filter by composite priority level
+        client_id: Filter to composites where this client has attempts
         attempts_per_composite: Max detail attempts to load per composite
 
     Returns:
-        List of dicts with aggregated attempt data per composite
+        Tuple of (list of dicts with aggregated attempt data, total composite count)
     """
     from ..models.attempts import ECMAttempt
     from ..models.composites import Composite
@@ -266,17 +272,25 @@ def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] 
     if priority is not None:
         query = query.join(Composite).filter(Composite.priority == priority)
 
+    if client_id:
+        query = query.filter(ECMAttempt.client_id == client_id)
+
     query = query.group_by(ECMAttempt.composite_id)
 
     if method:
         query = query.filter(ECMAttempt.method == method)
 
-    # Order by most recent activity
-    composite_id_rows = query.order_by(desc('latest_attempt')).limit(limit).all()
+    ordered_query = query.order_by(desc('latest_attempt'))
+
+    # Get total count for pagination
+    total = ordered_query.count()
+
+    # Apply pagination
+    composite_id_rows = ordered_query.offset(offset).limit(limit).all()
     composite_ids = [row[0] for row in composite_id_rows]
 
     if not composite_ids:
-        return []
+        return [], total
 
     # Query 2: Batch fetch composites
     composites = db.query(Composite).filter(Composite.id.in_(composite_ids)).all()
@@ -349,7 +363,7 @@ def get_aggregated_attempts(db: Session, limit: int = 50, method: Optional[str] 
             'attempts': attempts_by_composite.get(composite_id, [])
         })
 
-    return aggregated
+    return aggregated, total
 
 
 def prefetch_factor_counts_for_attempts(db: Session, aggregated_results: list) -> Dict[int, int]:

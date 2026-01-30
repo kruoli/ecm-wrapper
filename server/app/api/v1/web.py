@@ -32,7 +32,7 @@ async def dashboard(
     composites = composites_query.order_by(desc(Composite.created_at)).limit(50).all()
 
     # Get recent attempts (aggregated by composite), filtered by priority
-    attempts = get_aggregated_attempts(db, limit=50, priority=priority)
+    attempts, _ = get_aggregated_attempts(db, limit=50, priority=priority)
 
     # Pre-fetch factor counts for attempt detail rows (eliminates N+1 queries in template)
     factor_counts_by_attempt = prefetch_factor_counts_for_attempts(db, attempts)
@@ -318,30 +318,10 @@ async def recent_curves(
     Public page showing recent ECM curves with filtering and pagination.
     """
     if group_by_composite:
-        # Get aggregated attempts - fetch all for proper pagination
-        all_aggregated = get_aggregated_attempts(db, limit=500)  # Higher limit for aggregation
-
-        # Filter by client if specified (filter the individual attempts)
-        if client_id:
-            filtered_attempts = []
-            for agg in all_aggregated:
-                client_attempts = [a for a in agg['attempts'] if a.client_id == client_id]
-                if client_attempts:
-                    # Recalculate aggregates for filtered attempts
-                    total_curves = sum(a.curves_completed or 0 for a in client_attempts)
-                    total_time = sum(a.execution_time_seconds or 0 for a in client_attempts)
-                    filtered_attempts.append({
-                        **agg,
-                        'attempts': client_attempts,
-                        'attempt_count': len(client_attempts),
-                        'total_curves': total_curves,
-                        'total_time': total_time,
-                    })
-            all_aggregated = filtered_attempts
-
-        # Apply pagination to aggregated results
-        total = len(all_aggregated)
-        attempts = all_aggregated[offset:offset + limit]
+        # SQL-level pagination and filtering - no large in-memory loads
+        attempts, total = get_aggregated_attempts(
+            db, limit=limit, offset=offset, client_id=client_id
+        )
 
         # Pre-fetch factor counts for attempt detail rows (eliminates N+1 queries in template)
         factor_counts_by_attempt = prefetch_factor_counts_for_attempts(db, attempts)

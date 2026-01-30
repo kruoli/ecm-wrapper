@@ -48,10 +48,6 @@ services:
       - api_secret_key
       - admin_api_key
     restart: unless-stopped
-    # Memory limits for 1GB droplet
-    # Note: mem_limit works with plain docker-compose; deploy.resources needs Swarm
-    mem_limit: 350m
-    memswap_limit: 500m  # Allow 150MB swap as buffer for query spikes
 
 networks:
   ecm_network:

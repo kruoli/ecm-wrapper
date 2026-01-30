@@ -40,6 +40,20 @@ async def dashboard(
     # Get recent factors (limited for main page)
     factors = db.query(Factor).order_by(desc(Factor.created_at)).limit(25).all()
 
+    # Pre-fetch composites and attempts for factor rows (eliminates N+1 template queries)
+    factor_composite_ids = list({f.composite_id for f in factors if f.composite_id})
+    factor_attempt_ids = list({f.found_by_attempt_id for f in factors if f.found_by_attempt_id})
+
+    factor_composites_by_id = {}
+    if factor_composite_ids:
+        factor_composites = db.query(Composite).filter(Composite.id.in_(factor_composite_ids)).all()
+        factor_composites_by_id = {c.id: c for c in factor_composites}
+
+    factor_attempts_by_id = {}
+    if factor_attempt_ids:
+        factor_attempts = db.query(ECMAttempt).filter(ECMAttempt.id.in_(factor_attempt_ids)).all()
+        factor_attempts_by_id = {a.id: a for a in factor_attempts}
+
     # Build summary stats (filtered by priority if specified)
     stats_query = db.query(Composite)
     if priority is not None:
@@ -63,15 +77,13 @@ async def dashboard(
         "attempts": attempts,
         "factors": factors,
         "factor_counts_by_attempt": factor_counts_by_attempt,
+        "factor_composites": factor_composites_by_id,
+        "factor_attempts": factor_attempts_by_id,
         "total_composites": total_composites,
         "total_attempts": total_attempts,
         "total_factors": total_factors,
         "fully_factored": fully_factored,
         "priority": priority,
-        "db": db,
-        "Composite": Composite,
-        "ECMAttempt": ECMAttempt,
-        "Factor": Factor
     })
 
 
@@ -336,6 +348,14 @@ async def recent_curves(
         attempts = query.order_by(desc(ECMAttempt.created_at)).offset(offset).limit(limit).all()
         factor_counts_by_attempt = {}
 
+    # Pre-fetch composites for non-grouped mode (eliminates N+1 template queries)
+    attempt_composites_by_id = {}
+    if not group_by_composite and attempts:
+        comp_ids = list({a.composite_id for a in attempts if a.composite_id})
+        if comp_ids:
+            comps = db.query(Composite).filter(Composite.id.in_(comp_ids)).all()
+            attempt_composites_by_id = {c.id: c for c in comps}
+
     # Get list of active clients for filter dropdown
     clients_rows = db.query(distinct(ECMAttempt.client_id)).filter(
         ECMAttempt.client_id.isnot(None)
@@ -351,6 +371,7 @@ async def recent_curves(
         "attempts": attempts,
         "group_by_composite": group_by_composite,
         "factor_counts_by_attempt": factor_counts_by_attempt,
+        "attempt_composites": attempt_composites_by_id,
         "total": total,
         "page": page,
         "total_pages": total_pages,
@@ -360,8 +381,6 @@ async def recent_curves(
         "has_next": offset + limit < total,
         "client_id": client_id,
         "clients": clients,
-        "db": db,
-        "Factor": Factor
     })
 
 
@@ -396,6 +415,20 @@ async def recent_factors(
     total = query.count()
     factors = query.order_by(desc(Factor.created_at)).offset(offset).limit(limit).all()
 
+    # Pre-fetch composites and attempts for factor rows (eliminates N+1 template queries)
+    factor_composite_ids = list({f.composite_id for f in factors if f.composite_id})
+    factor_attempt_ids = list({f.found_by_attempt_id for f in factors if f.found_by_attempt_id})
+
+    factor_composites_by_id = {}
+    if factor_composite_ids:
+        fc = db.query(Composite).filter(Composite.id.in_(factor_composite_ids)).all()
+        factor_composites_by_id = {c.id: c for c in fc}
+
+    factor_attempts_by_id = {}
+    if factor_attempt_ids:
+        fa = db.query(ECMAttempt).filter(ECMAttempt.id.in_(factor_attempt_ids)).all()
+        factor_attempts_by_id = {a.id: a for a in fa}
+
     # Get list of clients who have found factors for filter dropdown
     clients_rows = db.query(distinct(ECMAttempt.client_id)).join(
         Factor, Factor.found_by_attempt_id == ECMAttempt.id
@@ -409,6 +442,8 @@ async def recent_factors(
     return templates.TemplateResponse("public/recent_factors.html", {
         "request": request,
         "factors": factors,
+        "factor_composites": factor_composites_by_id,
+        "factor_attempts": factor_attempts_by_id,
         "total": total,
         "page": page,
         "total_pages": total_pages,
@@ -420,9 +455,6 @@ async def recent_factors(
         "min_digits": min_digits,
         "max_digits": max_digits,
         "clients": clients,
-        "db": db,
-        "Composite": Composite,
-        "ECMAttempt": ECMAttempt
     })
 
 

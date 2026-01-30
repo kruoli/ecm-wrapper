@@ -100,8 +100,8 @@
                 </thead>
                 <tbody>
                     {% for factor in factors %}
-                    {% set comp = db.query(Composite).filter(Composite.id == factor.composite_id).first() %}
-                    {% set attempt = db.query(ECMAttempt).filter(ECMAttempt.id == factor.found_by_attempt_id).first() %}
+                    {% set comp = factor_composites.get(factor.composite_id) %}
+                    {% set attempt = factor_attempts.get(factor.found_by_attempt_id) %}
                     {% set comp_display = (comp.number[:35] + '...') if (comp and comp.number|length > 35) else (comp.number if comp else 'Unknown') %}
                     {% set method = attempt.method if attempt else 'Unknown' %}
                     {% set param = attempt.parametrization if attempt and attempt.parametrization is not none else '' %}

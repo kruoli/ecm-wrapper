@@ -184,7 +184,7 @@
                     {% endfor %}
                     {% else %}
                     {% for attempt in attempts %}
-                    {% set comp = db.query(Composite).filter(Composite.id == attempt.composite_id).first() %}
+                    {% set comp = attempt_composites.get(attempt.composite_id) %}
                     {% set comp_display = (comp.number[:25] + '...') if (comp and comp.number|length > 25) else (comp.number if comp else 'Unknown') %}
                     <tr>
                         <td class="number">

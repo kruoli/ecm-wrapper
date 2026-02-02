@@ -451,7 +451,7 @@ class TLevelCalculator:
             def __init__(self, curves, b1, parametrization, source_desc):
                 self.curves_completed = curves
                 self.b1 = b1
-                self.b2 = None  # B1-only (no stage 2)
+                self.b2 = 0  # B1-only (no stage 2)
                 self.parametrization = parametrization
                 self.method = 'ecm'
                 self._source = source_desc  # For logging

@@ -466,18 +466,9 @@ class CompositeService:
             if not composite:
                 return False
 
-            # Get all ECM attempts for this composite (exclude superseded stage 1)
-            ecm_attempts = db.query(ECMAttempt).filter(
-                ECMAttempt.composite_id == composite_id,
-                ECMAttempt.method == 'ecm',
-                ECMAttempt.superseded_by.is_(None)
-            ).all()
-
-            # Calculate current t-level, starting from prior_t_level if set
-            starting_t = composite.prior_t_level or 0.0
-            current_t_level = self.t_level_calculator.get_current_t_level_from_attempts(
-                ecm_attempts, starting_t_level=starting_t
-            )
+            # Use recalculate_composite_t_level which handles partial supersession
+            # (leftover curves from stage 1 when stage 2 completed fewer curves)
+            self.t_level_calculator.recalculate_composite_t_level(db, composite)
 
             # Recalculate target t-level based on current composite length and SNFS data
             target_t_level = self.t_level_calculator.calculate_target_t_level(
@@ -485,10 +476,9 @@ class CompositeService:
                 snfs_difficulty=composite.snfs_difficulty
             )
 
-            # Update the composite
-            composite.current_t_level = current_t_level
+            # Update target (current_t_level already set by recalculate_composite_t_level)
             composite.target_t_level = target_t_level
-            db.flush()  # Make changes visible within transaction
+            db.flush()
 
             return True
 

@@ -75,7 +75,8 @@ def execute_subprocess(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1  # Line buffered
+            bufsize=1,  # Line buffered
+            start_new_session=True  # Isolate from terminal SIGINT so Ctrl+C doesn't kill workers
         )
 
         # Send composite to stdin if provided (and not empty)

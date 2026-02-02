@@ -68,6 +68,11 @@ def handle_shutdown(
     if local_residue_file and local_residue_file.exists():
         local_residue_file.unlink()
 
+    # Terminate any running subprocesses (GPU processes, etc.)
+    # Subprocesses started with start_new_session=True won't die on their own
+    if hasattr(wrapper, '_terminate_all_subprocesses'):
+        wrapper._terminate_all_subprocesses()
+
     # Print completion summary
     output.info(f"{mode_name} stopped - completed {completed_count} assignment(s)")
     sys.exit(0)

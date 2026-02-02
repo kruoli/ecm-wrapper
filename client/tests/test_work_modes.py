@@ -31,6 +31,7 @@ class MockWrapper:
     """Mock wrapper for testing WorkLoopContext."""
 
     def __init__(self):
+        import threading
         self.config = {
             'programs': {'gmp_ecm': {'default_curves': 100}},
             'execution': {'residue_dir': 'data/residues'}
@@ -38,8 +39,11 @@ class MockWrapper:
         self.logger = Mock()
         self.interrupted = False
         self.graceful_shutdown_requested = False
+        self.shutdown_level = 0
+        self.stop_event = threading.Event()
         self._api_clients_initialized = False
         self.api_client = Mock()
+        self.submission_queue = Mock()
 
     def _ensure_api_clients(self):
         self._api_clients_initialized = True

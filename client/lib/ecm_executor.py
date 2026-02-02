@@ -173,17 +173,20 @@ class ECMWrapper(BaseWrapper):
         # Install graceful shutdown signal handler (3 levels)
         def graceful_sigint_handler(signum, frame):
             """Handle Ctrl+C gracefully with 3 levels:
-            1st: Complete current batch (workers finish their chunks)
+            1st: Flag shutdown requested (let entire assignment finish), then exit after
             2nd: Complete current curve then stop
             3rd: Immediate abort
             """
             self.shutdown_level += 1
             if self.shutdown_level == 1:
-                self.graceful_shutdown_requested = True
-                print("\n[Ctrl+C] Graceful shutdown - completing current batch...")
+                # Level 1: Do NOT set graceful_shutdown_requested - let the full assignment complete.
+                # The work mode loop will check shutdown_level after execute_work() returns
+                # and set finish_after_current to prevent requesting new work.
+                print("\n[Ctrl+C] Will complete after this assignment finishes...")
                 print("[Ctrl+C] Press again to stop after current curve, twice more to abort")
-                self.logger.info("Shutdown level 1: completing current batch")
+                self.logger.info("Shutdown level 1: will complete current assignment")
             elif self.shutdown_level == 2:
+                self.graceful_shutdown_requested = True
                 self.stop_event.set()  # Signal workers to stop after current curve
                 print("\n[Ctrl+C] Stopping after current curve...")
                 print("[Ctrl+C] Press again to abort immediately")
@@ -280,8 +283,8 @@ class ECMWrapper(BaseWrapper):
             result.execution_time = time.time() - start_time
             result.success = len(all_factors) > 0
 
-            # Check if execution was gracefully shutdown
-            if self.graceful_shutdown_requested:
+            # Check if execution was gracefully shutdown (any level of Ctrl+C)
+            if self.shutdown_level >= 1:
                 result.interrupted = True
                 self.logger.info(f"Graceful shutdown completed - processed {curves_completed} curves")
 
@@ -835,9 +838,20 @@ class ECMWrapper(BaseWrapper):
         gpu_thread.start()
         cpu_thread.start()
 
-        # Wait for completion
-        gpu_thread.join()
-        cpu_thread.join()
+        # Wait for completion, ensuring subprocesses are cleaned up on abort
+        try:
+            gpu_thread.join()
+            cpu_thread.join()
+        except (KeyboardInterrupt, SystemExit):
+            self.logger.info("Pipelined execution interrupted - terminating subprocesses...")
+            self.interrupted = True
+            shutdown_event.set()  # Signal threads to stop
+            # Kill any running subprocesses (GPU ecm process, etc.)
+            self._terminate_all_subprocesses()
+            # Give threads a moment to notice their subprocess died and exit
+            gpu_thread.join(timeout=5)
+            cpu_thread.join(timeout=5)
+            raise
 
         # Build result
         result = FactorResult()
@@ -1561,11 +1575,15 @@ class ECMWrapper(BaseWrapper):
                       f"{upload_result['curve_count']} curves")
                 return upload_result
             else:
-                self.logger.error("Failed to upload residue file")
+                self.logger.error("Failed to upload residue file - queuing for retry")
 
-                # Preserve failed upload if configured
-                if self.config['execution'].get('preserve_failed_uploads', False):
-                    self._preserve_failed_upload(residue_file)
+                # Preserve residue file in submission queue for automatic retry
+                self.submission_queue.enqueue_residue_upload(
+                    residue_file=residue_file,
+                    client_id=client_id,
+                    stage1_attempt_id=stage1_attempt_id,
+                    expiry_days=7
+                )
 
                 return None
         elif factor_found:

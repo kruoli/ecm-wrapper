@@ -2,9 +2,11 @@
 """
 Base wrapper class containing shared functionality for ECM and YAFU wrappers.
 """
+import atexit
 import datetime
 import logging
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable, TYPE_CHECKING
@@ -12,6 +14,7 @@ from typing import Dict, Any, Optional, List, Callable, TYPE_CHECKING
 from .config_manager import ConfigManager
 from .api_client import APIClient
 from .file_utils import save_json, load_json
+from .submission_queue import SubmissionQueue
 
 if TYPE_CHECKING:
     from .typed_config import AppConfig
@@ -41,6 +44,18 @@ class BaseWrapper:
         # Defer API client initialization until first use (lazy loading)
         self.api_clients = None
         self.api_client = None
+
+        # Persistent submission queue for automatic retry of failed API operations
+        self.submission_queue = SubmissionQueue(
+            queue_dir=self.config.get('execution', {}).get('queue_dir', 'data/queue')
+        )
+
+        # Track running subprocesses for cleanup on exit
+        # Subprocesses started with start_new_session=True won't receive terminal SIGINT,
+        # so we must explicitly terminate them when the Python process exits.
+        self._running_subprocesses: List[subprocess.Popen] = []
+        self._subprocess_lock = threading.Lock()
+        atexit.register(self._terminate_all_subprocesses)
 
     @property
     def typed_config(self) -> 'AppConfig':
@@ -284,6 +299,10 @@ class BaseWrapper:
             total_count = len(submission_results)
             self.logger.info(f"Submission summary: {success_count}/{total_count} endpoints succeeded")
 
+        # If all submissions failed, enqueue for automatic retry
+        if first_success_response is None and save_on_failure:
+            self.submission_queue.enqueue_result(payload, results_context)
+
         # Return first successful response (or None if all failed)
         return first_success_response
 
@@ -458,6 +477,44 @@ class BaseWrapper:
         results['execution_time'] = time.time() - start_time
         return results
 
+    def _terminate_all_subprocesses(self) -> None:
+        """
+        Terminate all tracked subprocesses.
+
+        Called by atexit handler and explicit cleanup paths to ensure no orphaned
+        child processes are left running when the Python process exits.
+        Subprocesses started with start_new_session=True won't receive terminal
+        SIGINT, so this explicit cleanup is essential.
+        """
+        with self._subprocess_lock:
+            processes_to_kill = [p for p in self._running_subprocesses if p.poll() is None]
+            if not processes_to_kill:
+                return
+
+            logger = getattr(self, 'logger', None)
+            if logger:
+                logger.info(f"Terminating {len(processes_to_kill)} running subprocess(es)...")
+
+            for process in processes_to_kill:
+                try:
+                    process.terminate()
+                except OSError:
+                    pass  # Process may have already exited
+
+            # Give processes a moment to exit gracefully
+            for process in processes_to_kill:
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    # Force kill if terminate didn't work
+                    try:
+                        process.kill()
+                        process.wait(timeout=2)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass  # Best effort
+
+            self._running_subprocesses.clear()
+
     def _stream_subprocess_output(self, cmd: List[str], composite: Optional[str],
                                    log_prefix: str, line_callback: Optional[Callable] = None) -> tuple[subprocess.Popen, List[str]]:
         """
@@ -477,8 +534,13 @@ class BaseWrapper:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True
+            text=True,
+            start_new_session=True  # Isolate from terminal SIGINT so Ctrl+C doesn't kill workers
         )
+
+        # Track subprocess for cleanup on exit
+        with self._subprocess_lock:
+            self._running_subprocesses.append(process)
 
         # Send composite to stdin if provided
         if composite and process.stdin:
@@ -489,6 +551,10 @@ class BaseWrapper:
         # Stream output
         output_lines: List[str] = []
         if not process.stdout:
+            # Untrack before returning
+            with self._subprocess_lock:
+                if process in self._running_subprocesses:
+                    self._running_subprocesses.remove(process)
             return process, output_lines
 
         try:
@@ -518,6 +584,11 @@ class BaseWrapper:
             if hasattr(self, 'interrupted'):
                 self.interrupted = True
             raise  # Re-raise to let caller know about the interrupt
+        finally:
+            # Untrack subprocess after it completes or is terminated
+            with self._subprocess_lock:
+                if process in self._running_subprocesses:
+                    self._running_subprocesses.remove(process)
 
         return process, output_lines
 

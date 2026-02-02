@@ -213,7 +213,8 @@ class Stage2Executor:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True
+                text=True,
+                start_new_session=True  # Isolate from terminal SIGINT so Ctrl+C doesn't kill workers
             )
 
             # Register process for potential termination

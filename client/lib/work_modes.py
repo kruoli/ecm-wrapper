@@ -100,8 +100,9 @@ class WorkMode(ABC):
         self.completed_count: int = 0
         self.consecutive_failures: int = 0
 
-        # Graceful shutdown state
+        # Graceful shutdown state (3-level)
         self._first_interrupt_received: bool = False
+        self._second_interrupt_received: bool = False
         self._original_sigint_handler: Any = None
 
     @abstractmethod
@@ -193,43 +194,65 @@ class WorkMode(ABC):
         self.current_work_id = None
         self.completed_count += 1
         self.consecutive_failures = 0
-        # Reset graceful shutdown flag after each work unit completes
+        # Reset graceful shutdown flags after each work unit completes
         # (in case finish_after_current is cleared and loop continues)
         self.wrapper.graceful_shutdown_requested = False
+        self.wrapper.shutdown_level = 0
+        self.wrapper.stop_event.clear()
 
     def _setup_signal_handler(self) -> None:
         """
-        Install signal handler for graceful shutdown.
+        Install signal handler for graceful shutdown (3 levels).
 
-        First Ctrl+C: Set finish_after_current flag (complete current work, then exit)
-                     Also sets graceful_shutdown_requested for curve-level completion
-        Second Ctrl+C: Raise KeyboardInterrupt for immediate abort
+        1st Ctrl+C: Set finish_after_current flag - let the entire current
+                    assignment finish (all remaining curves), submit results, then exit.
+                    Does NOT interrupt execution in progress.
+        2nd Ctrl+C: Signal workers to finish current curve then stop.
+                    Sets graceful_shutdown_requested + stop_event.
+        3rd Ctrl+C: Raise KeyboardInterrupt for immediate abort.
         """
         def handler(signum, frame):
             if not self._first_interrupt_received:
-                # First interrupt: graceful shutdown at both work and curve level
+                # First interrupt: finish entire current assignment, then exit
                 self._first_interrupt_received = True
                 self.ctx.finish_after_current = True
-                self.wrapper.graceful_shutdown_requested = True  # Signal stage 2 workers to finish current curves
+                # Do NOT set graceful_shutdown_requested - let the full assignment complete
                 print("\n")
                 print("=" * 60)
-                print("Finishing current work unit, then exiting...")
-                print("(Stage 2 workers will complete their current curves)")
-                print("Press Ctrl+C again to abort immediately")
+                print("Will complete current assignment, then exit.")
+                print("Press Ctrl+C again to stop after current curve.")
+                print("=" * 60)
+            elif not self._second_interrupt_received:
+                # Second interrupt: stop after current curve
+                self._second_interrupt_received = True
+                self.wrapper.graceful_shutdown_requested = True
+                self.wrapper.stop_event.set()
+                print("\n")
+                print("=" * 60)
+                print("Stopping after current curve...")
+                print("Press Ctrl+C again to abort immediately.")
                 print("=" * 60)
             else:
-                # Second interrupt: immediate abort
+                # Third interrupt: immediate abort
                 raise KeyboardInterrupt()
 
         self._original_sigint_handler = signal.signal(signal.SIGINT, handler)
 
     def _restore_signal_handler(self) -> None:
-        """Restore original signal handler and reset graceful shutdown flag."""
+        """Restore original signal handler and reset graceful shutdown flags."""
         if self._original_sigint_handler is not None:
             signal.signal(signal.SIGINT, self._original_sigint_handler)
             self._original_sigint_handler = None
-        # Reset graceful shutdown flag for wrapper
+        # Reset graceful shutdown flags for wrapper
         self.wrapper.graceful_shutdown_requested = False
+        self.wrapper.shutdown_level = 0
+        self.wrapper.stop_event.clear()
+
+    def _drain_queue(self) -> None:
+        """Drain the submission queue, retrying any pending items."""
+        queue = self.wrapper.submission_queue
+        if queue.count() > 0:
+            queue.drain(self.api_client)
 
     def should_continue(self) -> bool:
         """
@@ -265,8 +288,14 @@ class WorkMode(ABC):
         self._print_startup_banner()
         self._setup_signal_handler()
 
+        # Drain submission queue on startup (retry any pending items from previous runs)
+        self._drain_queue()
+
         try:
             while self.should_continue():
+                # Drain submission queue before each work request
+                self._drain_queue()
+
                 # Request work from server
                 work = self.request_work()
                 if not work:
@@ -278,6 +307,12 @@ class WorkMode(ABC):
                 try:
                     # Execute factorization
                     result = self.execute_work(work)
+
+                    # After execution returns, check if Ctrl+C was pressed during execution.
+                    # The executor's signal handler sets shutdown_level but does NOT set
+                    # finish_after_current (which is a work-loop concern). Sync the state here.
+                    if self.wrapper.shutdown_level >= 1 and not self.ctx.finish_after_current:
+                        self.ctx.finish_after_current = True
 
                     # Check for hard interruption during execution
                     if self.wrapper.interrupted:
@@ -338,8 +373,9 @@ class WorkMode(ABC):
             print(f"{self.mode_name} - will process {self.ctx.work_count_limit} assignment(s)")
         else:
             print(f"{self.mode_name} - requesting work from server")
-        print("Ctrl+C once: finish current work, then exit")
-        print("Ctrl+C twice: abort immediately")
+        print("Ctrl+C once: finish current assignment, then exit")
+        print("Ctrl+C twice: stop after current curve")
+        print("Ctrl+C three times: abort immediately")
         print("=" * 60)
         print()
 
@@ -372,6 +408,10 @@ class Stage1ProducerMode(WorkMode):
     2. Runs stage 1 only (B2=0) to generate residues
     3. Submits stage 1 results
     4. Uploads residue file for stage 2 consumers
+
+    GPU-specific Ctrl+C handling (2 levels):
+    - 1st Ctrl+C: Print message, GPU keeps running. Submit + upload when done, then exit.
+    - 2nd Ctrl+C: Immediate abort.
     """
 
     mode_name = "Stage 1 Producer (GPU)"
@@ -379,6 +419,41 @@ class Stage1ProducerMode(WorkMode):
     def __init__(self, ctx: WorkLoopContext):
         super().__init__(ctx)
         self.residue_file: Optional[Path] = None
+
+    def _setup_signal_handler(self) -> None:
+        """
+        GPU-specific signal handler with 2 levels.
+
+        GPU can't be interrupted mid-batch, so level 1 just flags for exit after
+        GPU finishes. Level 2 aborts immediately.
+        """
+        def handler(signum, frame):
+            if not self._first_interrupt_received:
+                # First interrupt: GPU keeps running, submit when done, then exit
+                self._first_interrupt_received = True
+                self.ctx.finish_after_current = True
+                print("\n")
+                print("=" * 60)
+                print("GPU batch will complete. Results will be submitted, then exit.")
+                print("Press Ctrl+C again to abort immediately.")
+                print("=" * 60)
+            else:
+                # Second interrupt: immediate abort
+                raise KeyboardInterrupt()
+
+        self._original_sigint_handler = signal.signal(signal.SIGINT, handler)
+
+    def _print_startup_banner(self) -> None:
+        """Print GPU mode startup banner."""
+        print("=" * 60)
+        if self.ctx.work_count_limit:
+            print(f"{self.mode_name} - will process {self.ctx.work_count_limit} assignment(s)")
+        else:
+            print(f"{self.mode_name} - requesting work from server")
+        print("Ctrl+C once: finish GPU batch, submit results, then exit")
+        print("Ctrl+C twice: abort immediately")
+        print("=" * 60)
+        print()
 
     def request_work(self) -> Optional[Dict[str, Any]]:
         return request_ecm_work(
@@ -554,7 +629,10 @@ class Stage1ProducerMode(WorkMode):
 
     def complete_work(self, work: Dict[str, Any]) -> None:
         assert self.current_work_id is not None  # Set in on_work_started
-        self.api_client.complete_work(self.current_work_id, self.ctx.client_id)
+        if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
+            self.wrapper.submission_queue.enqueue_work_completion(
+                self.current_work_id, self.ctx.client_id
+            )
 
     def cleanup_on_failure(self, work: Optional[Dict[str, Any]], error: BaseException) -> None:
         if self.current_work_id:
@@ -790,7 +868,12 @@ class Stage2ConsumerMode(WorkMode):
                 if new_t_level is not None:
                     print(f"T-level updated to {new_t_level:.2f}")
             else:
-                self.logger.warning("Failed to complete residue on server")
+                self.logger.warning("Failed to complete residue on server - queuing for retry")
+                self.wrapper.submission_queue.enqueue_residue_completion(
+                    residue_id=self.current_residue_id,
+                    client_id=self.ctx.client_id,
+                    stage2_attempt_id=self._stage2_attempt_id
+                )
 
         # Clean up local residue file
         if self.local_residue_file and self.local_residue_file.exists():
@@ -1022,7 +1105,10 @@ class StandardAutoWorkMode(WorkMode):
 
     def complete_work(self, work: Dict[str, Any]) -> None:
         assert self.current_work_id is not None  # Set in on_work_started
-        self.api_client.complete_work(self.current_work_id, self.ctx.client_id)
+        if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
+            self.wrapper.submission_queue.enqueue_work_completion(
+                self.current_work_id, self.ctx.client_id
+            )
 
 
 class CompositeTargetMode(StandardAutoWorkMode):

@@ -21,7 +21,8 @@ def execute_subprocess(
     progress_interval: int = 0,
     line_callback: Optional[Callable[[str, List[str]], None]] = None,
     log_prefix: str = "",
-    stop_event: Optional[Any] = None
+    stop_event: Optional[Any] = None,
+    start_new_session: bool = True
 ) -> Dict[str, Any]:
     """
     Unified subprocess execution with flexible output handling.
@@ -43,6 +44,10 @@ def execute_subprocess(
         line_callback: Optional function called for each line: callback(line, all_lines_so_far)
         log_prefix: Prefix for log messages (e.g., "Worker 1", "Stage1")
         stop_event: Optional multiprocessing.Event for early termination
+        start_new_session: If True (default), run subprocess in a new session to isolate
+            from terminal SIGINT. Set to False when the caller has already created a
+            dedicated process group (e.g., multiprocessing workers using os.setpgrp())
+            so that the subprocess inherits the caller's group and can be killed together.
 
     Returns:
         Dictionary with:
@@ -76,7 +81,7 @@ def execute_subprocess(
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,  # Line buffered
-            start_new_session=True  # Isolate from terminal SIGINT so Ctrl+C doesn't kill workers
+            start_new_session=start_new_session
         )
 
         # Send composite to stdin if provided (and not empty)
@@ -121,8 +126,17 @@ def execute_subprocess(
                     if line_callback:
                         line_callback(line, output_lines)
 
-        # Wait for process to complete (no timeout - ECM can run indefinitely)
-        process.wait()
+        # Wait for process to complete
+        if terminated_early:
+            # Give the process a few seconds to exit after SIGTERM, then escalate
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()  # SIGKILL
+                process.wait(timeout=5)
+        else:
+            # No timeout - ECM can run indefinitely
+            process.wait()
 
         stdout = '\n'.join(output_lines)
 

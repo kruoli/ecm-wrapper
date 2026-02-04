@@ -18,7 +18,7 @@ while IFS= read -r number <&3; do
     count=$((count + 1))
     echo "[$count/$total] Starting P-1 on $(echo $number | cut -c1-20)...$(echo $number | cut -c-20) ($(echo ${#number}) digits)"
 
-    python3 ecm_wrapper.py --composite "$number" --method pm1 -v
+    python3 ecm_wrapper.py --composite "$number" --method pm1 -v --submit
 
     echo "[$count/$total] Completed P-1 test"
     echo "---"

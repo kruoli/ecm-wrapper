@@ -9,6 +9,7 @@ Design note: multiprocessing requires pickleable functions, so we provide both:
 - A class-based implementation (testable, maintainable)
 - A thin global function wrapper (for multiprocessing compatibility)
 """
+import os
 import signal
 from typing import Optional, Dict, Any
 from .parsing_utils import parse_ecm_output, ECMPatterns
@@ -134,13 +135,17 @@ class ECMWorkerProcess:
                         sigma_found = current_curve_sigma
 
             # Execute subprocess using unified utility
+            # start_new_session=False so the ECM binary inherits this worker's
+            # process group (set via os.setpgrp() in run_worker_ecm_process).
+            # This allows the parent to kill the entire group with os.killpg().
             result = execute_subprocess(
                 cmd=cmd,
                 composite=self.composite,
                 verbose=self.verbose,
                 line_callback=process_line,
                 log_prefix=f"Worker {self.worker_id}",
-                stop_event=stop_event
+                stop_event=stop_event,
+                start_new_session=False
             )
 
             # If no factor found during streaming, check full output
@@ -197,6 +202,11 @@ def run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optional
     """
     # Ignore SIGINT in worker processes - parent handles it via stop_event
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    # Create a new process group for this worker (worker PID = PGID).
+    # Child subprocesses (ECM binaries) inherit this group when spawned with
+    # start_new_session=False, so os.killpg() from the parent kills the entire group.
+    os.setpgrp()
 
     try:
         worker = ECMWorkerProcess(worker_id, composite, b1, b2, curves, verbose, method, ecm_path,

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import subprocess
 import time
 import sys
@@ -410,24 +411,45 @@ class ECMWrapper(BaseWrapper):
             except Exception:
                 pass  # Manager connection may be broken
 
-        # Wait for all processes to finish
+        # Wait for all processes to finish.
+        # Use os.killpg() to kill the entire process group (worker + ECM binary)
+        # since each worker calls os.setpgrp() and ECM inherits that group.
         for p in processes:
             try:
-                p.join(timeout=2)
+                p.join(timeout=10)
             except Exception:
                 pass
             if p.is_alive():
-                p.terminate()
+                # SIGTERM the entire process group (worker + its ECM child)
                 try:
-                    p.join(timeout=1)
+                    os.killpg(p.pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                try:
+                    p.join(timeout=5)
+                except Exception:
+                    pass
+            if p.is_alive():
+                # Escalate to SIGKILL if SIGTERM didn't work
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                try:
+                    p.join(timeout=2)
                 except Exception:
                     pass
 
-        # Shutdown the manager
-        try:
-            manager.shutdown()
-        except Exception:
-            pass
+        # Shutdown the manager in a daemon thread to avoid hanging
+        def _shutdown_manager():
+            try:
+                manager.shutdown()
+            except Exception:
+                pass
+
+        shutdown_thread = threading.Thread(target=_shutdown_manager, daemon=True)
+        shutdown_thread.start()
+        shutdown_thread.join(timeout=5)
 
         if self.interrupted:
             print(f"\nMultiprocess ECM stopped. Completed {total_curves_completed} curves before interrupt.")
@@ -658,9 +680,22 @@ class ECMWrapper(BaseWrapper):
                     shutdown_event.set()
                     break
 
-                # Get next work item
+                # Get next work item (poll with timeout so we can check for shutdown)
                 self.logger.info("[CPU Thread] Waiting for next work item from queue...")
-                work_item = residue_queue.get()
+                work_item = None
+                got_item = False
+                while not got_item:
+                    if self.interrupted or shutdown_event.is_set():
+                        self.logger.info("[CPU Thread] Shutdown detected while waiting for work")
+                        break
+                    try:
+                        work_item = residue_queue.get(timeout=1.0)
+                        got_item = True
+                    except queue.Empty:
+                        continue
+
+                if not got_item:
+                    break
 
                 # Check for sentinel
                 if work_item is None:
@@ -851,7 +886,7 @@ class ECMWrapper(BaseWrapper):
             # Give threads a moment to notice their subprocess died and exit
             gpu_thread.join(timeout=5)
             cpu_thread.join(timeout=5)
-            raise
+            # Fall through to build partial result (don't re-raise)
 
         # Build result
         result = FactorResult()

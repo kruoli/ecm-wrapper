@@ -2,7 +2,7 @@ import math
 import re
 import random
 
-def validate_integer(number_str: str) -> bool:
+def validate_integer(number_str) -> bool:
     """Validate that string represents a positive integer."""
     if not isinstance(number_str, str):
         return False

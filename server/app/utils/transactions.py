@@ -253,9 +253,9 @@ def transactional(func: Callable[..., T]) -> Callable[..., T]:
     # Return appropriate wrapper based on whether function is async
     import inspect
     if inspect.iscoroutinefunction(func):
-        return async_wrapper
+        return async_wrapper  # type: ignore[return-value]
     else:
-        return sync_wrapper
+        return sync_wrapper  # type: ignore[return-value]
 
 
 class TransactionManager:

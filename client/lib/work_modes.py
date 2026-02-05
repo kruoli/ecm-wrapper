@@ -911,6 +911,111 @@ class Stage2ConsumerMode(WorkMode):
         )
 
 
+class PM1WorkMode(WorkMode):
+    """
+    P-1 auto-work mode: Request and execute PM1 factorization work.
+
+    PM1 characteristics:
+    - Single attempt per B1 level (curves=1)
+    - Deterministic (no t-level tracking)
+    - Good for factors with smooth p-1
+    - Server determines optimal B1/B2 based on digit length
+
+    This mode:
+    1. Requests PM1 work from server via /work?methods=pm1
+    2. Executes P-1 factorization with server-provided B1/B2
+    3. Submits results to server
+    4. Completes work assignment
+    """
+
+    mode_name = "P-1 Auto-work"
+
+    def request_work(self) -> Optional[Dict[str, Any]]:
+        work = self.api_client.get_pm1_work(
+            client_id=self.ctx.client_id,
+            min_digits=getattr(self.args, 'min_digits', None),
+            max_digits=getattr(self.args, 'max_digits', None),
+        )
+
+        if not work:
+            self.logger.info("No PM1 work available, waiting 30 seconds before retry...")
+            time.sleep(30)
+
+        return work
+
+    def on_work_started(self, work: Dict[str, Any]) -> None:
+        super().on_work_started(work)
+
+        params = work.get('parameters', {})
+        composite = work.get('composite', '')
+        digit_length = len(composite)
+
+        print_work_header(
+            work_id=self.current_work_id,
+            composite=composite,
+            digit_length=digit_length,
+            params={
+                'method': 'P-1',
+                'B1': params.get('b1'),
+                'B2': params.get('b2'),
+            }
+        )
+
+    def execute_work(self, work: Dict[str, Any]) -> FactorResult:
+        composite = work['composite']
+        params = work.get('parameters', {})
+        b1 = params.get('b1')
+        b2 = params.get('b2')
+        curves = params.get('curves', 1)
+
+        print(f"Running P-1 (B1={b1}, B2={b2})...")
+
+        config = ECMConfig(
+            composite=composite,
+            b1=b1,
+            b2=b2,
+            curves=curves,
+            method='pm1',
+            parametrization=1,
+            verbose=self.args.verbose,
+            progress_interval=getattr(self.args, 'progress_interval', 0),
+        )
+
+        result = self.wrapper.run_ecm_v2(config)
+
+        # Store for submit_results
+        self._results_dict = result.to_dict(composite, 'pm1')
+        self._results_dict['b1'] = b1
+        self._results_dict['b2'] = b2
+        self._results_dict['curves_requested'] = curves
+        self._results_dict['parametrization'] = 1
+
+        return result
+
+    def submit_results(self, work: Dict[str, Any], result: FactorResult) -> bool:
+        if result.curves_run > 0:
+            self._results_dict['work_id'] = self.current_work_id
+            program_name = 'gmp-ecm-pm1'
+            submit_response = self.wrapper.submit_result(
+                self._results_dict,
+                self.args.project,
+                program_name
+            )
+
+            if not submit_response:
+                self.logger.error("Failed to submit PM1 results, abandoning work assignment")
+                return False
+
+        return True
+
+    def complete_work(self, work: Dict[str, Any]) -> None:
+        assert self.current_work_id is not None
+        if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
+            self.wrapper.submission_queue.enqueue_work_completion(
+                self.current_work_id, self.ctx.client_id
+            )
+
+
 class StandardAutoWorkMode(WorkMode):
     """
     Standard auto-work mode: T-level or B1/B2 based execution.
@@ -1216,6 +1321,8 @@ def get_work_mode(ctx: WorkLoopContext) -> WorkMode:
 
     if getattr(args, 'composite', None):
         return CompositeTargetMode(ctx)
+    elif getattr(args, 'pm1', False):
+        return PM1WorkMode(ctx)
     elif getattr(args, 'stage1_only', False):
         return Stage1ProducerMode(ctx)
     elif getattr(args, 'stage2_only', False):

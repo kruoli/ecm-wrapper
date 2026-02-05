@@ -55,6 +55,7 @@ def get_test_engine():
             cursor.close()
 
         _TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
+    assert _TestingSessionLocal is not None
     return _engine, _TestingSessionLocal
 
 

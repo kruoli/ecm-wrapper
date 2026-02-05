@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func, case, distinct
-from typing import List, Optional
+from typing import Any, List, Optional
 from datetime import datetime, timedelta
 
 from ...database import get_db
@@ -357,7 +357,7 @@ async def recent_curves(
             attempt_composites_by_id = {c.id: c for c in comps}
 
     # Get list of active clients for filter dropdown
-    clients_rows = db.query(distinct(ECMAttempt.client_id)).filter(
+    clients_rows: List[Any] = db.query(distinct(ECMAttempt.client_id)).filter(
         ECMAttempt.client_id.isnot(None)
     ).order_by(ECMAttempt.client_id).limit(100).all()
     clients: List[str] = [c[0] for c in clients_rows if c[0]]
@@ -430,7 +430,7 @@ async def recent_factors(
         factor_attempts_by_id = {a.id: a for a in fa}
 
     # Get list of clients who have found factors for filter dropdown
-    clients_rows = db.query(distinct(ECMAttempt.client_id)).join(
+    clients_rows: List[Any] = db.query(distinct(ECMAttempt.client_id)).join(
         Factor, Factor.found_by_attempt_id == ECMAttempt.id
     ).filter(ECMAttempt.client_id.isnot(None)).order_by(ECMAttempt.client_id).limit(100).all()
     clients: List[str] = [c[0] for c in clients_rows if c[0]]

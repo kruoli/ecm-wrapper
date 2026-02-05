@@ -181,6 +181,7 @@ logging:
             wrapper = BaseWrapper(str(config_file))
             wrapper._ensure_api_clients()
 
+            assert wrapper.api_client is not None
             assert wrapper.api_client.timeout == 60
             assert wrapper.api_client.retry_attempts == 5
 
@@ -355,6 +356,7 @@ class TestFailedSubmissionRecovery:
                 output_dir=tmpdir
             )
 
+            assert saved_path is not None
             with open(saved_path, 'r') as f:
                 saved_data = json.load(f)
 

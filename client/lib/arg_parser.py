@@ -156,6 +156,10 @@ Examples:
                        help='Minimum target t-level (filter work by difficulty)')
     parser.add_argument('--max-target-tlevel', type=float,
                        help='Maximum target t-level (filter work by difficulty)')
+    parser.add_argument('--min-digits', type=int,
+                       help='Minimum composite digit length')
+    parser.add_argument('--max-digits', type=int,
+                       help='Maximum composite digit length')
     parser.add_argument('--priority', type=int,
                        help='Minimum priority level')
     parser.add_argument('--work-type', choices=['standard', 'progressive'], default='standard',
@@ -185,8 +189,10 @@ Examples:
     parser.add_argument('--two-stage', action='store_true',
                        help='Use two-stage GPU+CPU mode')
 
-    # Decoupled two-stage modes (mutually exclusive)
+    # Decoupled two-stage and PM1 modes (mutually exclusive)
     stage_group = parser.add_mutually_exclusive_group()
+    stage_group.add_argument('--pm1', action='store_true',
+                            help='Request P-1 factorization work from server')
     stage_group.add_argument('--stage1-only', action='store_true',
                             help='Stage 1 only: upload residue to server')
     stage_group.add_argument('--stage2-only', action='store_true',

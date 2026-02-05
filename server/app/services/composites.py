@@ -632,14 +632,14 @@ class CompositeService:
 
             numbers_data: List[Dict[str, Any]]
             if source_type == 'file':
-                numbers_data = [{'number': n} for n in self.loader.from_text_file(data_source)]
+                numbers_data = [{'number': n} for n in self.loader.from_text_file(cast(str, data_source))]
             elif source_type == 'csv':
-                numbers_data = self.loader.from_csv_content(data_source)
+                numbers_data = self.loader.from_csv_content(cast(str, data_source))
             elif source_type == 'list':
                 if isinstance(data_source[0], dict):
                     numbers_data = cast(List[Dict[str, Any]], data_source)
                 else:
-                    numbers_data = [{'number': n} for n in self.loader.from_number_list(data_source)]
+                    numbers_data = [{'number': n} for n in self.loader.from_number_list(cast(List[str], data_source))]
             else:
                 raise ValueError(f"Unknown source type: {source_type}")
 

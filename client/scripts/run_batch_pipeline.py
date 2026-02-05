@@ -172,6 +172,7 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
             residue_queue.task_done()
             break
 
+        residue_file = None
         try:
             number = work_item['number']
             residue_file = work_item['residue_file']
@@ -320,7 +321,7 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
             logger.error(f"[CPU Thread] Error processing work item: {e}")
             # Try to cleanup residue file even on error
             try:
-                if 'residue_file' in locals() and residue_file and residue_file.exists():
+                if residue_file is not None and residue_file.exists():
                     residue_file.unlink()
                     logger.debug(f"[CPU Thread] Cleaned up residue file after error: {residue_file.name}")
             except:

@@ -170,7 +170,7 @@ class ExternalProgramExecutor:
         return True, lines[-1]
 
     @staticmethod
-    def _decode_output(output: Optional[bytes]) -> Optional[str]:
+    def _decode_output(output: Optional[Union[str, bytes]]) -> Optional[str]:
         """
         Decode bytes output to string, handling various encodings.
 

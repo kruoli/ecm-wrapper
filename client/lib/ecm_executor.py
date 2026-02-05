@@ -422,7 +422,8 @@ class ECMWrapper(BaseWrapper):
             if p.is_alive():
                 # SIGTERM the entire process group (worker + its ECM child)
                 try:
-                    os.killpg(p.pid, signal.SIGTERM)
+                    if p.pid is not None:
+                        os.killpg(p.pid, signal.SIGTERM)
                 except (ProcessLookupError, PermissionError):
                     pass
                 try:
@@ -432,7 +433,8 @@ class ECMWrapper(BaseWrapper):
             if p.is_alive():
                 # Escalate to SIGKILL if SIGTERM didn't work
                 try:
-                    os.killpg(p.pid, signal.SIGKILL)
+                    if p.pid is not None:
+                        os.killpg(p.pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
                     pass
                 try:
@@ -492,7 +494,7 @@ class ECMWrapper(BaseWrapper):
         start_time = time.time()
 
         # Shared state between threads
-        residue_queue = queue.Queue(maxsize=2)  # Small queue for backpressure
+        residue_queue: queue.Queue[Any] = queue.Queue(maxsize=2)  # Small queue for backpressure
         shutdown_event = threading.Event()
 
         # Results accumulation (protected by lock)

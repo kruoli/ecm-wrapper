@@ -14,7 +14,7 @@ Design Decisions:
 - Merge _build_stage1_results() functionality
 """
 
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Sequence, Tuple
 
 
 class ResultsBuilder:
@@ -70,7 +70,7 @@ class ResultsBuilder:
         return self
 
     # Factor methods (merged from _build_stage1_results)
-    def with_factors(self, all_factors: List[Tuple[str, Optional[str]]]) -> 'ResultsBuilder':
+    def with_factors(self, all_factors: Sequence[Tuple[str, Optional[str]]]) -> 'ResultsBuilder':
         """
         Add factors from list of (factor, sigma) tuples.
         Automatically builds factors_found list and factor_sigmas dict.

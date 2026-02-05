@@ -23,6 +23,8 @@ from lib.ecm_config import ECMConfig
 
 class TestFactorizationParsing(unittest.TestCase):
     """Test factorization parsing for ECM and YAFU."""
+    expected_factors: dict
+    test_composite: str
 
     @classmethod
     def setUpClass(cls):
@@ -243,6 +245,7 @@ P31 = 1040100281593968479843247348533
 
         # Check raw output contains [P-1] not [ECM]
         # This verifies GMP-ECM actually ran in P-1 mode
+        assert result.raw_output is not None, "P-1 should produce raw output"
         self.assertIn('[P-1]', result.raw_output,
                      "Output should contain [P-1] marker, indicating P-1 mode was used")
         self.assertNotIn('[ECM]', result.raw_output,

@@ -108,3 +108,44 @@ def request_ecm_work(api_client, client_id: str, args: argparse.Namespace,
         time.sleep(30)
 
     return work
+
+
+def request_p1_work(api_client, client_id: str, args: argparse.Namespace,
+                    logger) -> Optional[Dict[str, Any]]:
+    """
+    Request P-1/P+1 work from server with automatic retry on failure.
+
+    Calls the /p1-work endpoint which only assigns composites that haven't
+    had PM1/PP1 done at the required B1 level.
+
+    Args:
+        api_client: API client instance
+        client_id: Client identifier
+        args: Command-line arguments containing filter parameters and method flags
+        logger: Logger instance for info messages
+
+    Returns:
+        Work assignment dictionary or None if no work available after retry
+    """
+    # Determine method from args
+    if getattr(args, 'pm1', False):
+        method = 'pm1'
+    elif getattr(args, 'pp1', False):
+        method = 'pp1'
+    else:
+        method = 'p1'
+
+    work = api_client.get_p1_work(
+        client_id=client_id,
+        method=method,
+        min_target_tlevel=args.min_target_tlevel if hasattr(args, 'min_target_tlevel') else None,
+        max_target_tlevel=args.max_target_tlevel if hasattr(args, 'max_target_tlevel') else None,
+        priority=args.priority if hasattr(args, 'priority') else None,
+        work_type=args.work_type if hasattr(args, 'work_type') else 'standard'
+    )
+
+    if not work:
+        logger.info("No P1 work available, waiting 30 seconds before retry...")
+        time.sleep(30)
+
+    return work

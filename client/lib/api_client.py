@@ -425,6 +425,77 @@ class APIClient:
             self.logger.error(f"Failed to request PM1 work: {e}")
             return None
 
+    def get_p1_work(
+        self,
+        client_id: str,
+        method: str = "p1",
+        min_target_tlevel: Optional[float] = None,
+        max_target_tlevel: Optional[float] = None,
+        priority: Optional[int] = None,
+        timeout_days: int = 1,
+        work_type: str = "standard"
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Request P-1/P+1 work assignment from server.
+
+        Calls the /p1-work endpoint which only assigns composites that haven't
+        had PM1/PP1 done at the required B1 level.
+
+        Args:
+            client_id: Client identifier
+            method: "pm1" (P-1 only), "pp1" (P+1 only), or "p1" (both)
+            min_target_tlevel: Minimum target t-level filter
+            max_target_tlevel: Maximum target t-level filter
+            priority: Minimum priority filter
+            timeout_days: Work assignment expiration in days
+            work_type: "standard" or "progressive"
+
+        Returns:
+            Work assignment dictionary with keys:
+                - work_id, composite_id, composite, digit_length
+                - current_t_level, target_t_level
+                - pm1_b1, pp1_b1: Server-computed B1 values
+                - expires_at
+            Returns None if no work available or on error
+        """
+        url = f"{self.api_endpoint}/p1-work"
+
+        params: Dict[str, Any] = {
+            'client_id': client_id,
+            'method': method,
+            'timeout_days': timeout_days,
+            'work_type': work_type,
+        }
+        if min_target_tlevel is not None:
+            params['min_target_tlevel'] = min_target_tlevel
+        if max_target_tlevel is not None:
+            params['max_target_tlevel'] = max_target_tlevel
+        if priority is not None:
+            params['priority'] = priority
+
+        try:
+            response = requests.get(url, params=params, timeout=self.timeout)
+            response.raise_for_status()
+
+            data = response.json()
+
+            if data.get('work_id'):
+                self.logger.info(
+                    f"Received P1 work assignment: composite {data['composite'][:30]}... "
+                    f"({data['digit_length']} digits, method={method}, "
+                    f"pm1_b1={data.get('pm1_b1')}, pp1_b1={data.get('pp1_b1')}, "
+                    f"work_id={data['work_id']})"
+                )
+                return data
+            else:
+                message = data.get('message', 'No P1 work available')
+                self.logger.info(f"No P1 work available: {message}")
+                return None
+
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Failed to request P1 work: {e}")
+            return None
+
     def complete_work(self, work_id: str, client_id: str) -> bool:
         """
         Mark work assignment as completed.

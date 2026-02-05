@@ -17,7 +17,7 @@ from ...models.residues import ECMResidue
 from ...services.t_level_calculator import TLevelCalculator
 from ...utils.transactions import transaction_scope
 from ...config import get_settings
-from ...constants import ECM_BOUNDS
+from ...constants import ECM_BOUNDS, OPTIMAL_B1_TABLE, get_b1_above_tlevel
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -248,3 +248,216 @@ def _get_escalated_parameters(digit_length: int, previous_attempts: list) -> tup
 
     # Fallback to highest available
     return ECM_BOUNDS[-1][1], ECM_BOUNDS[-1][2], 100
+
+
+@router.get("/p1-work")
+async def get_p1_work(
+    client_id: str,
+    method: str = "p1",
+    priority: Optional[int] = None,
+    min_target_tlevel: Optional[float] = None,
+    max_target_tlevel: Optional[float] = None,
+    timeout_days: int = 1,
+    work_type: str = "standard",
+    db: Session = Depends(get_db),
+):
+    """
+    Get P-1/P+1 work assignment.
+
+    Assigns composites that haven't had PM1/PP1 done at the required B1 level.
+    B1 is calculated as one step above the composite's target t-level in the
+    optimal B1 table.
+
+    Unlike /ecm-work, this endpoint does NOT filter by ecm_progress < 1.0,
+    since PM1/PP1 sweeps are valuable even on composites that have reached
+    their ECM target.
+
+    Args:
+        client_id: Unique identifier for the requesting client
+        method: Which methods to check - "pm1" (P-1 only), "pp1" (P+1 only),
+                or "p1" (both P-1 and P+1, default)
+        priority: Minimum priority level
+        min_target_tlevel: Minimum target t-level filter
+        max_target_tlevel: Maximum target t-level filter
+        timeout_days: Work assignment expiration in days (default: 1)
+        work_type: "standard" (easiest first) or "progressive" (least work first)
+
+    Returns:
+        JSON response with work assignment details including pm1_b1/pp1_b1
+    """
+    with transaction_scope(db, "get_p1_work"):
+        # Validate parameters
+        if method not in ("pm1", "pp1", "p1"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid method: {method}. Must be 'pm1', 'pp1', or 'p1'"
+            )
+        if work_type not in ("standard", "progressive"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid work_type: {work_type}. Must be 'standard' or 'progressive'"
+            )
+
+        check_pm1 = method in ("pm1", "p1")
+        check_pp1 = method in ("pp1", "p1")
+
+        # Check active work limit
+        active_work_count = db.query(WorkAssignment).filter(
+            and_(
+                WorkAssignment.client_id == client_id,
+                WorkAssignment.status.in_(['assigned', 'claimed', 'running']),
+                WorkAssignment.expires_at > datetime.utcnow()
+            )
+        ).count()
+
+        if active_work_count >= settings.max_work_items_per_client:
+            response_data: Dict[str, Any] = {
+                "work_id": None,
+                "composite_id": None,
+                "composite": None,
+                "digit_length": None,
+                "current_t_level": None,
+                "target_t_level": None,
+                "pm1_b1": None,
+                "pp1_b1": None,
+                "expires_at": None,
+                "message": f"Client has {active_work_count} active work assignments (max: {settings.max_work_items_per_client})"
+            }
+            content = json.dumps(response_data, default=str) + "\n"
+            return Response(content=content, media_type="application/json")
+
+        # Build candidate query - no ecm_progress filter (PM1/PP1 valuable regardless)
+        query = db.query(Composite).filter(
+            and_(
+                Composite.is_active == True,
+                Composite.is_fully_factored == False,
+                or_(Composite.is_complete.is_(None), Composite.is_complete == False),
+                Composite.target_t_level.isnot(None),
+            )
+        )
+
+        if priority is not None:
+            query = query.filter(Composite.priority >= priority)
+        if min_target_tlevel is not None:
+            query = query.filter(Composite.target_t_level >= min_target_tlevel)
+        if max_target_tlevel is not None:
+            query = query.filter(Composite.target_t_level <= max_target_tlevel)
+
+        # Exclude composites with active work assignments
+        active_work_composites = db.query(WorkAssignment.composite_id).filter(
+            WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+        ).subquery()
+        query = query.filter(~Composite.id.in_(active_work_composites))  # type: ignore[arg-type]
+
+        # Apply sorting strategy
+        if work_type == "progressive":
+            query = query.order_by(
+                Composite.current_t_level.asc(),
+                Composite.target_t_level.asc(),
+                Composite.digit_length.asc()
+            )
+        else:
+            query = query.order_by(
+                Composite.target_t_level.asc(),
+                Composite.created_at.asc()
+            )
+
+        # Fetch a batch of candidates and check each for PM1/PP1 coverage
+        candidates = query.limit(50).all()
+
+        assigned_composite = None
+        computed_b1 = 0
+
+        for composite in candidates:
+            b1 = get_b1_above_tlevel(composite.target_t_level or 35.0)
+            needs_work = False
+
+            if check_pm1:
+                # Check if there's a PM1 attempt with b1 >= computed b1
+                has_pm1 = db.query(
+                    db.query(ECMAttempt).filter(
+                        and_(
+                            ECMAttempt.composite_id == composite.id,
+                            ECMAttempt.method == 'pm1',
+                            ECMAttempt.b1 >= b1,
+                        )
+                    ).exists()
+                ).scalar()
+                if not has_pm1:
+                    needs_work = True
+
+            if check_pp1 and not needs_work:
+                # Check if there's a PP1 attempt with b1 >= computed b1
+                has_pp1 = db.query(
+                    db.query(ECMAttempt).filter(
+                        and_(
+                            ECMAttempt.composite_id == composite.id,
+                            ECMAttempt.method == 'pp1',
+                            ECMAttempt.b1 >= b1,
+                        )
+                    ).exists()
+                ).scalar()
+                if not has_pp1:
+                    needs_work = True
+
+            if needs_work:
+                assigned_composite = composite
+                computed_b1 = b1
+                break
+
+        if not assigned_composite:
+            response_data = {
+                "work_id": None,
+                "composite_id": None,
+                "composite": None,
+                "digit_length": None,
+                "current_t_level": None,
+                "target_t_level": None,
+                "pm1_b1": None,
+                "pp1_b1": None,
+                "expires_at": None,
+                "message": "No composites need P-1/P+1 work matching criteria"
+            }
+            content = json.dumps(response_data, default=str) + "\n"
+            return Response(content=content, media_type="application/json")
+
+        # Create work assignment
+        work_id = str(uuid.uuid4())
+        expires_at = datetime.utcnow() + timedelta(days=timeout_days)
+
+        work_assignment = WorkAssignment(
+            id=work_id,
+            composite_id=assigned_composite.id,
+            client_id=client_id,
+            method=method,
+            b1=computed_b1,
+            b2=0,  # PM1/PP1 uses GMP-ECM default B2
+            curves_requested=1,  # Client decides actual curve count
+            expires_at=expires_at,
+            status='assigned'
+        )
+
+        db.add(work_assignment)
+        db.flush()
+
+        logger.info(
+            f"Created P1 work assignment {work_id} for client {client_id}: "
+            f"{assigned_composite.digit_length}-digit composite, "
+            f"method={method}, B1={computed_b1}, "
+            f"target_t={assigned_composite.target_t_level:.1f}"
+        )
+
+        response_data = {
+            "work_id": work_id,
+            "composite_id": assigned_composite.id,
+            "composite": assigned_composite.current_composite,
+            "digit_length": assigned_composite.digit_length,
+            "current_t_level": assigned_composite.current_t_level,
+            "target_t_level": assigned_composite.target_t_level,
+            "pm1_b1": computed_b1 if check_pm1 else None,
+            "pp1_b1": computed_b1 if check_pp1 else None,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+            "message": f"Assigned {assigned_composite.digit_length}-digit composite for {method.upper()} sweep (B1={computed_b1})"
+        }
+        content = json.dumps(response_data, default=str) + "\n"
+        return Response(content=content, media_type="application/json")

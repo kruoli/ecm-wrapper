@@ -28,8 +28,8 @@ import time
 from .ecm_config import (
     ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
 )
-from .ecm_math import get_optimal_b1_for_tlevel, get_b1_above_tlevel
-from .work_helpers import print_work_header, print_work_status, request_ecm_work
+from .ecm_math import get_optimal_b1_for_tlevel
+from .work_helpers import print_work_header, print_work_status, request_ecm_work, request_p1_work
 from .stage1_helpers import submit_stage1_complete_workflow
 from .error_helpers import check_work_limit_reached
 from .cleanup_helpers import handle_shutdown
@@ -959,17 +959,12 @@ class P1WorkMode(WorkMode):
         self._pp1_b1: int = 0
 
     def request_work(self) -> Optional[Dict[str, Any]]:
-        return request_ecm_work(
+        return request_p1_work(
             self.api_client,
             self.ctx.client_id,
             self.args,
             self.logger
         )
-
-    def _calculate_b1(self, work: Dict[str, Any]) -> int:
-        """Calculate B1 one step above target t-level."""
-        target_t = work.get('target_t_level', 35.0) or 35.0
-        return get_b1_above_tlevel(target_t)
 
     def on_work_started(self, work: Dict[str, Any]) -> None:
         super().on_work_started(work)
@@ -978,11 +973,12 @@ class P1WorkMode(WorkMode):
         self._pm1_result = None
         self._pp1_result = None
 
-        # Calculate B1 from target t-level
-        base_b1 = self._calculate_b1(work)
+        # Read B1 from server response, cap by config values
+        server_pm1_b1 = work.get('pm1_b1') or 0
+        server_pp1_b1 = work.get('pp1_b1') or 0
 
-        self._pm1_b1 = min(base_b1, self._pm1_b1_cap) if self._run_pm1 else 0
-        self._pp1_b1 = min(base_b1, self._pp1_b1_cap) if self._run_pp1 else 0
+        self._pm1_b1 = min(server_pm1_b1, self._pm1_b1_cap) if self._run_pm1 and server_pm1_b1 else 0
+        self._pp1_b1 = min(server_pp1_b1, self._pp1_b1_cap) if self._run_pp1 and server_pp1_b1 else 0
 
         # Build params display
         params: Dict[str, Any] = {
@@ -1101,6 +1097,7 @@ class P1WorkMode(WorkMode):
             self.wrapper.submission_queue.enqueue_work_completion(
                 self.current_work_id, self.ctx.client_id
             )
+
 
 
 class StandardAutoWorkMode(WorkMode):

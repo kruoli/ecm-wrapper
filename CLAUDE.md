@@ -44,6 +44,13 @@ python3 client/ecm_client.py --two-stage --b1 50000 --b2 5000000   # GPU two-sta
 python3 client/ecm_client.py --multiprocess --workers 8            # Multiprocess mode
 python3 client/ecm_client.py --min-digits 60 --max-digits 80       # Filter by size
 
+# P-1/P+1 sweep mode - run PM1/PP1 across composites
+python3 client/ecm_client.py --pm1                               # P-1 only (1 curve per composite)
+python3 client/ecm_client.py --pp1                               # P+1 only (3 curves per composite)
+python3 client/ecm_client.py --p1                                # P-1 + P+1 per composite
+python3 client/ecm_client.py --p1 --work-count 10                # Process 10 composites then exit
+python3 client/ecm_client.py --pp1 --pp1-curves 5                # Custom P+1 curve count
+
 # Decoupled two-stage mode - separate GPU and CPU workers
 python3 client/ecm_client.py --stage1-only --b1 110000000 --curves 3000 --gpu  # GPU producer
 python3 client/ecm_client.py --stage2-only --b2 11000000000000 --workers 8  # CPU consumer
@@ -178,6 +185,11 @@ python3 ecm_client.py --work-count 10
 
 # Custom params with multiprocess
 python3 ecm_client.py --tlevel 35 --multiprocess --workers 8
+
+# P-1/P+1 sweep (B1 auto-calculated from target t-level)
+python3 ecm_client.py --pm1                 # P-1 only
+python3 ecm_client.py --pp1                 # P+1 only (3 curves)
+python3 ecm_client.py --p1 --work-count 10  # Both, 10 composites
 ```
 
 ### Decoupled Two-Stage ECM (2025-11)
@@ -516,6 +528,7 @@ All config classes inherit from `ECMConfigValidation` mixin which provides share
 
 Auto-work mode (`ecm_client.py`) uses a Strategy pattern for different work modes:
 - **StandardAutoWorkMode** - Regular ECM work from server assignments
+- **P1WorkMode** - P-1/P+1 sweep across composites (`--pm1`, `--pp1`, `--p1`)
 - **Stage1ProducerMode** - GPU stage 1 only, uploads residues to server
 - **Stage2ConsumerMode** - Downloads residues from server, runs stage 2
 
@@ -659,6 +672,26 @@ pylint *.py
 **Important**: `py_compile` alone is insufficient - it does not validate type hints or catch undefined names in type annotations. Always use mypy or pylint for thorough validation, especially after refactoring.
 
 ## Recent Bug Fixes and Improvements
+
+### P-1/P+1 Sweep Mode (2026-02)
+Redesigned P-1/P+1 support for `ecm_client.py` auto-work mode:
+
+**Problem solved**: Old `PM1WorkMode` used `/work?methods=pm1` server endpoint which only offered PM1 for composites ≤50 digits with no prior PM1. When PM1 wasn't applicable, the server returned no work (client loops forever) or fell back to ECM.
+
+**New design** (`P1WorkMode` in `lib/work_modes.py`):
+- Three mutually exclusive flags: `--pm1`, `--pp1`, `--p1`
+- Uses `/ecm-work` endpoint (same as standard ECM mode) for reliable work assignment
+- B1 calculated one step above composite's target t-level in the optimal B1 table
+  - Example: target_t=48 → next entry ≥ 48 is t50 (B1=43M) → one above = t55 → B1=110M
+  - Capped by config `pm1_b1` / `pp1_b1` values
+- B2 omitted (GMP-ECM uses its default ratio, appropriate for the B1 level)
+- Per composite: PM1 runs 1 curve, PP1 runs N curves (default 3, configurable with `--pp1-curves`)
+- If PM1 finds a factor, PP1 is skipped
+- PM1 and PP1 results submitted separately with correct `program_name`
+
+**B1 lookup**: `get_b1_above_tlevel()` in `lib/ecm_math.py`
+
+**Config values**: `typed_config.py` now safely handles scientific notation strings (e.g., `pm1_b1: 25e9`) via `_safe_int()` helper in `TypedConfigLoader`
 
 ### Graceful Shutdown (2026-01)
 Multi-level Ctrl+C handling for Stage 2 and CPU Stage 1 execution:
@@ -818,6 +851,9 @@ The client has two entry points for different use cases:
 **`ecm_client.py`** - Server-coordinated modes:
 - Auto-work: Continuously requests work from server
 - `--composite`: Target specific composite (server provides t-level info)
+- `--pm1`: P-1 sweep (1 curve per composite, B1 from target t-level)
+- `--pp1`: P+1 sweep (3 curves per composite, configurable with `--pp1-curves`)
+- `--p1`: Combined P-1 + P+1 sweep per composite
 - `--stage1-only`: Upload residues to server
 - `--stage2-only`: Download residues from server (with `--min-b1`/`--max-b1` filters)
 

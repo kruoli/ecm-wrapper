@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, case
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 import uuid
@@ -250,6 +250,48 @@ def _get_escalated_parameters(digit_length: int, previous_attempts: list) -> tup
     return ECM_BOUNDS[-1][1], ECM_BOUNDS[-1][2], 100
 
 
+def _build_required_b1_case():
+    """
+    Build a SQL CASE expression mapping target_t_level to required B1
+    for PM1/PP1 sweeps (one step above target in the optimal B1 table).
+
+    Returns a SQLAlchemy case() expression usable in queries/filters.
+    """
+    whens = []
+    for i, (t_level, _b1) in enumerate(OPTIMAL_B1_TABLE):
+        if i + 1 < len(OPTIMAL_B1_TABLE):
+            next_b1 = OPTIMAL_B1_TABLE[i + 1][1]
+        else:
+            next_b1 = OPTIMAL_B1_TABLE[-1][1]
+        whens.append((Composite.target_t_level <= t_level, next_b1))
+    return case(*whens, else_=OPTIMAL_B1_TABLE[-1][1])
+
+
+def _pm1pp1_exists_subquery(db: Session, method_name: str, required_b1_expr):
+    """
+    Build a correlated EXISTS subquery checking if a composite already has
+    a PM1 or PP1 attempt at the required B1 level.
+
+    Args:
+        db: Database session
+        method_name: 'pm1' or 'pp1'
+        required_b1_expr: SQL CASE expression for the required B1
+
+    Returns:
+        SQLAlchemy exists() clause usable in .filter()
+    """
+    return (
+        db.query(ECMAttempt.id)
+        .filter(
+            ECMAttempt.composite_id == Composite.id,
+            ECMAttempt.method == method_name,
+            ECMAttempt.b1 >= required_b1_expr,
+        )
+        .correlate(Composite)
+        .exists()
+    )
+
+
 @router.get("/p1-work")
 async def get_p1_work(
     client_id: str,
@@ -349,6 +391,24 @@ async def get_p1_work(
         ).subquery()
         query = query.filter(~Composite.id.in_(active_work_composites))  # type: ignore[arg-type]
 
+        # Build SQL CASE expression: map target_t_level -> required B1
+        # (one step above target in the optimal B1 table)
+        required_b1 = _build_required_b1_case()
+
+        # Filter to composites that still need PM1/PP1 at the required B1
+        # Uses correlated NOT EXISTS against ecm_attempts (hits composite_id,method index)
+        if check_pm1 and check_pp1:
+            # method='p1': needs work if EITHER pm1 OR pp1 is missing
+            pm1_covered = _pm1pp1_exists_subquery(db, 'pm1', required_b1)
+            pp1_covered = _pm1pp1_exists_subquery(db, 'pp1', required_b1)
+            query = query.filter(or_(~pm1_covered, ~pp1_covered))
+        elif check_pm1:
+            pm1_covered = _pm1pp1_exists_subquery(db, 'pm1', required_b1)
+            query = query.filter(~pm1_covered)
+        else:
+            pp1_covered = _pm1pp1_exists_subquery(db, 'pp1', required_b1)
+            query = query.filter(~pp1_covered)
+
         # Apply sorting strategy
         if work_type == "progressive":
             query = query.order_by(
@@ -362,48 +422,7 @@ async def get_p1_work(
                 Composite.created_at.asc()
             )
 
-        # Fetch a batch of candidates and check each for PM1/PP1 coverage
-        candidates = query.limit(50).all()
-
-        assigned_composite = None
-        computed_b1 = 0
-
-        for composite in candidates:
-            b1 = get_b1_above_tlevel(composite.target_t_level or 35.0)
-            needs_work = False
-
-            if check_pm1:
-                # Check if there's a PM1 attempt with b1 >= computed b1
-                has_pm1 = db.query(
-                    db.query(ECMAttempt).filter(
-                        and_(
-                            ECMAttempt.composite_id == composite.id,
-                            ECMAttempt.method == 'pm1',
-                            ECMAttempt.b1 >= b1,
-                        )
-                    ).exists()
-                ).scalar()
-                if not has_pm1:
-                    needs_work = True
-
-            if check_pp1 and not needs_work:
-                # Check if there's a PP1 attempt with b1 >= computed b1
-                has_pp1 = db.query(
-                    db.query(ECMAttempt).filter(
-                        and_(
-                            ECMAttempt.composite_id == composite.id,
-                            ECMAttempt.method == 'pp1',
-                            ECMAttempt.b1 >= b1,
-                        )
-                    ).exists()
-                ).scalar()
-                if not has_pp1:
-                    needs_work = True
-
-            if needs_work:
-                assigned_composite = composite
-                computed_b1 = b1
-                break
+        assigned_composite = query.first()
 
         if not assigned_composite:
             response_data = {
@@ -420,6 +439,9 @@ async def get_p1_work(
             }
             content = json.dumps(response_data, default=str) + "\n"
             return Response(content=content, media_type="application/json")
+
+        # Compute B1 for the assigned composite
+        computed_b1 = get_b1_above_tlevel(assigned_composite.target_t_level or 35.0)
 
         # Create work assignment
         work_id = str(uuid.uuid4())

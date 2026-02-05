@@ -442,6 +442,52 @@ def get_optimal_b1_for_tlevel(target_tlevel: float) -> Tuple[int, int]:
     return OPTIMAL_B1_TABLE[-1][1], OPTIMAL_B1_TABLE[-1][2]
 
 
+def get_b1_above_tlevel(target_t_level: float) -> int:
+    """
+    Get B1 one step above the target t-level for PM1/PP1 sweeps.
+
+    Finds the smallest entry in OPTIMAL_B1_TABLE where digits >= target_t_level,
+    then returns the B1 of the next entry (one step above). This ensures PM1/PP1
+    runs at a B1 slightly beyond what ECM has already covered.
+
+    Args:
+        target_t_level: The composite's target t-level
+
+    Returns:
+        B1 value one step above the target t-level
+
+    Example:
+        >>> get_b1_above_tlevel(48)  # Next >= 48 is t50 (B1=43M), one above = t55
+        110000000
+        >>> get_b1_above_tlevel(55)  # Next >= 55 is t55 (B1=110M), one above = t60
+        260000000
+    """
+    # Zimmermann's optimal B1 table (same as in get_optimal_b1_for_tlevel)
+    TABLE = [
+        (20, 11000),
+        (25, 50000),
+        (30, 250000),
+        (35, 1000000),
+        (40, 3000000),
+        (45, 11000000),
+        (50, 43000000),
+        (55, 110000000),
+        (60, 260000000),
+        (65, 850000000),
+        (70, 2900000000),
+        (75, 7600000000),
+        (80, 25000000000),
+    ]
+
+    for i, (digits, b1) in enumerate(TABLE):
+        if target_t_level <= digits:
+            # Return next entry's B1 if available, else this one
+            if i + 1 < len(TABLE):
+                return TABLE[i + 1][1]
+            return b1
+    return TABLE[-1][1]
+
+
 def calculate_target_tlevel(digit_length: int) -> float:
     """
     Calculate target t-level for a composite based on its digit length.

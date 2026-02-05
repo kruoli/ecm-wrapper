@@ -28,7 +28,7 @@ import time
 from .ecm_config import (
     ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
 )
-from .ecm_math import get_optimal_b1_for_tlevel
+from .ecm_math import get_optimal_b1_for_tlevel, get_b1_above_tlevel
 from .work_helpers import print_work_header, print_work_status, request_ecm_work
 from .stage1_helpers import submit_stage1_complete_workflow
 from .error_helpers import check_work_limit_reached
@@ -911,102 +911,189 @@ class Stage2ConsumerMode(WorkMode):
         )
 
 
-class PM1WorkMode(WorkMode):
+class P1WorkMode(WorkMode):
     """
-    P-1 auto-work mode: Request and execute PM1 factorization work.
+    P-1/P+1 sweep mode: Run PM1 and/or PP1 across composites from server.
 
-    PM1 characteristics:
-    - Single attempt per B1 level (curves=1)
-    - Deterministic (no t-level tracking)
-    - Good for factors with smooth p-1
-    - Server determines optimal B1/B2 based on digit length
+    Uses the /ecm-work endpoint (same as standard ECM), calculates B1 one step
+    above the composite's target t-level, and sweeps across composites (one
+    composite per work assignment).
 
-    This mode:
-    1. Requests PM1 work from server via /work?methods=pm1
-    2. Executes P-1 factorization with server-provided B1/B2
-    3. Submits results to server
-    4. Completes work assignment
+    Supports three flags (mutually exclusive):
+    - --pm1: Run P-1 only (1 curve per composite)
+    - --pp1: Run P+1 only (N curves per composite, default 3)
+    - --p1:  Run P-1 (1 curve) + P+1 (N curves) per composite
+
+    B1 calculation: One step above the target t-level in the optimal B1 table,
+    capped by config pm1_b1/pp1_b1.
+    B2: Omitted (let GMP-ECM use its default ratio).
     """
 
-    mode_name = "P-1 Auto-work"
+    mode_name = "P-1/P+1 Sweep"
+
+    def __init__(self, ctx: WorkLoopContext):
+        super().__init__(ctx)
+
+        # Determine which methods to run
+        self._run_pm1 = getattr(self.args, 'pm1', False) or getattr(self.args, 'p1', False)
+        self._run_pp1 = getattr(self.args, 'pp1', False) or getattr(self.args, 'p1', False)
+        self._pp1_curves = getattr(self.args, 'pp1_curves', 3)
+
+        # Set human-readable mode name
+        if self._run_pm1 and self._run_pp1:
+            self.mode_name = "P-1/P+1 Sweep"
+        elif self._run_pm1:
+            self.mode_name = "P-1 Sweep"
+        else:
+            self.mode_name = "P+1 Sweep"
+
+        # Get B1 caps from typed config (handles scientific notation safely)
+        gmp = self.wrapper.typed_config.programs.gmp_ecm
+        self._pm1_b1_cap = gmp.pm1_b1
+        self._pp1_b1_cap = gmp.pp1_b1
+
+        # Per-assignment state
+        self._pm1_result: Optional[FactorResult] = None
+        self._pp1_result: Optional[FactorResult] = None
+        self._pm1_b1: int = 0
+        self._pp1_b1: int = 0
 
     def request_work(self) -> Optional[Dict[str, Any]]:
-        work = self.api_client.get_pm1_work(
-            client_id=self.ctx.client_id,
-            min_digits=getattr(self.args, 'min_digits', None),
-            max_digits=getattr(self.args, 'max_digits', None),
+        return request_ecm_work(
+            self.api_client,
+            self.ctx.client_id,
+            self.args,
+            self.logger
         )
 
-        if not work:
-            self.logger.info("No PM1 work available, waiting 30 seconds before retry...")
-            time.sleep(30)
-
-        return work
+    def _calculate_b1(self, work: Dict[str, Any]) -> int:
+        """Calculate B1 one step above target t-level."""
+        target_t = work.get('target_t_level', 35.0) or 35.0
+        return get_b1_above_tlevel(target_t)
 
     def on_work_started(self, work: Dict[str, Any]) -> None:
         super().on_work_started(work)
 
-        params = work.get('parameters', {})
-        composite = work.get('composite', '')
-        digit_length = len(composite)
+        # Reset per-assignment state
+        self._pm1_result = None
+        self._pp1_result = None
+
+        # Calculate B1 from target t-level
+        base_b1 = self._calculate_b1(work)
+
+        self._pm1_b1 = min(base_b1, self._pm1_b1_cap) if self._run_pm1 else 0
+        self._pp1_b1 = min(base_b1, self._pp1_b1_cap) if self._run_pp1 else 0
+
+        # Build params display
+        params: Dict[str, Any] = {
+            'T-level': f"{work.get('current_t_level', 0):.1f} -> {work.get('target_t_level', 0):.1f}",
+        }
+        methods = []
+        if self._run_pm1:
+            params['PM1 B1'] = self._pm1_b1
+            methods.append("P-1 (1 curve)")
+        if self._run_pp1:
+            params['PP1 B1'] = self._pp1_b1
+            methods.append(f"P+1 ({self._pp1_curves} curves)")
+        params['Methods'] = ' + '.join(methods)
 
         print_work_header(
             work_id=self.current_work_id,
-            composite=composite,
-            digit_length=digit_length,
-            params={
-                'method': 'P-1',
-                'B1': params.get('b1'),
-                'B2': params.get('b2'),
-            }
+            composite=work['composite'],
+            digit_length=work['digit_length'],
+            params=params
         )
 
     def execute_work(self, work: Dict[str, Any]) -> FactorResult:
         composite = work['composite']
-        params = work.get('parameters', {})
-        b1 = params.get('b1')
-        b2 = params.get('b2')
-        curves = params.get('curves', 1)
+        combined_result = FactorResult()
+        combined_result.success = True
+        factor_found = False
 
-        print(f"Running P-1 (B1={b1}, B2={b2})...")
+        # Run PM1 if applicable
+        if self._run_pm1 and not factor_found:
+            print(f"Running P-1 (B1={self._pm1_b1}, B2=GMP-ECM default, 1 curve)...")
+            pm1_config = ECMConfig(
+                composite=composite,
+                b1=self._pm1_b1,
+                b2=None,  # Let GMP-ECM use default
+                curves=1,
+                method='pm1',
+                parametrization=1,
+                verbose=self.args.verbose,
+                progress_interval=getattr(self.args, 'progress_interval', 0),
+            )
+            self._pm1_result = self.wrapper.run_ecm_v2(pm1_config)
+            combined_result.curves_run += self._pm1_result.curves_run
+            combined_result.execution_time += self._pm1_result.execution_time
 
-        config = ECMConfig(
-            composite=composite,
-            b1=b1,
-            b2=b2,
-            curves=curves,
-            method='pm1',
-            parametrization=1,
-            verbose=self.args.verbose,
-            progress_interval=getattr(self.args, 'progress_interval', 0),
-        )
+            if self._pm1_result.factors:
+                for f, s in self._pm1_result.factor_sigma_pairs:
+                    combined_result.add_factor(f, s)
+                factor_found = True
+                print(f"Factor found by P-1: {self._pm1_result.factors[0]}")
 
-        result = self.wrapper.run_ecm_v2(config)
+        # Run PP1 if applicable and no factor found yet
+        if self._run_pp1 and not factor_found:
+            print(f"Running P+1 (B1={self._pp1_b1}, B2=GMP-ECM default, {self._pp1_curves} curves)...")
+            pp1_config = ECMConfig(
+                composite=composite,
+                b1=self._pp1_b1,
+                b2=None,  # Let GMP-ECM use default
+                curves=self._pp1_curves,
+                method='pp1',
+                parametrization=1,
+                verbose=self.args.verbose,
+                progress_interval=getattr(self.args, 'progress_interval', 0),
+            )
+            self._pp1_result = self.wrapper.run_ecm_v2(pp1_config)
+            combined_result.curves_run += self._pp1_result.curves_run
+            combined_result.execution_time += self._pp1_result.execution_time
 
-        # Store for submit_results
-        self._results_dict = result.to_dict(composite, 'pm1')
-        self._results_dict['b1'] = b1
-        self._results_dict['b2'] = b2
-        self._results_dict['curves_requested'] = curves
-        self._results_dict['parametrization'] = 1
+            if self._pp1_result.factors:
+                for f, s in self._pp1_result.factor_sigma_pairs:
+                    combined_result.add_factor(f, s)
+                print(f"Factor found by P+1: {self._pp1_result.factors[0]}")
 
-        return result
+        return combined_result
 
     def submit_results(self, work: Dict[str, Any], result: FactorResult) -> bool:
-        if result.curves_run > 0:
-            self._results_dict['work_id'] = self.current_work_id
-            program_name = 'gmp-ecm-pm1'
+        composite = work['composite']
+        success = True
+
+        # Submit PM1 results if we ran PM1
+        if self._pm1_result and self._pm1_result.curves_run > 0:
+            pm1_dict = self._pm1_result.to_dict(composite, 'pm1')
+            pm1_dict['b1'] = self._pm1_b1
+            pm1_dict['b2'] = None  # Used GMP-ECM default
+            pm1_dict['curves_requested'] = 1
+            pm1_dict['parametrization'] = 1
+            pm1_dict['work_id'] = self.current_work_id
+
             submit_response = self.wrapper.submit_result(
-                self._results_dict,
-                self.args.project,
-                program_name
+                pm1_dict, self.args.project, 'gmp-ecm-pm1'
             )
-
             if not submit_response:
-                self.logger.error("Failed to submit PM1 results, abandoning work assignment")
-                return False
+                self.logger.error("Failed to submit PM1 results")
+                success = False
 
-        return True
+        # Submit PP1 results if we ran PP1
+        if self._pp1_result and self._pp1_result.curves_run > 0:
+            pp1_dict = self._pp1_result.to_dict(composite, 'pp1')
+            pp1_dict['b1'] = self._pp1_b1
+            pp1_dict['b2'] = None  # Used GMP-ECM default
+            pp1_dict['curves_requested'] = self._pp1_curves
+            pp1_dict['parametrization'] = 1
+            pp1_dict['work_id'] = self.current_work_id
+
+            submit_response = self.wrapper.submit_result(
+                pp1_dict, self.args.project, 'gmp-ecm-pp1'
+            )
+            if not submit_response:
+                self.logger.error("Failed to submit PP1 results")
+                success = False
+
+        return success
 
     def complete_work(self, work: Dict[str, Any]) -> None:
         assert self.current_work_id is not None
@@ -1321,8 +1408,8 @@ def get_work_mode(ctx: WorkLoopContext) -> WorkMode:
 
     if getattr(args, 'composite', None):
         return CompositeTargetMode(ctx)
-    elif getattr(args, 'pm1', False):
-        return PM1WorkMode(ctx)
+    elif getattr(args, 'pm1', False) or getattr(args, 'pp1', False) or getattr(args, 'p1', False):
+        return P1WorkMode(ctx)
     elif getattr(args, 'stage1_only', False):
         return Stage1ProducerMode(ctx)
     elif getattr(args, 'stage2_only', False):

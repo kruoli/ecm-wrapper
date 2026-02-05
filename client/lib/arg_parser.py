@@ -189,14 +189,22 @@ Examples:
     parser.add_argument('--two-stage', action='store_true',
                        help='Use two-stage GPU+CPU mode')
 
-    # Decoupled two-stage and PM1 modes (mutually exclusive)
+    # Decoupled two-stage and P-1/P+1 modes (mutually exclusive)
     stage_group = parser.add_mutually_exclusive_group()
     stage_group.add_argument('--pm1', action='store_true',
-                            help='Request P-1 factorization work from server')
+                            help='Run P-1 factorization (1 curve per composite)')
+    stage_group.add_argument('--pp1', action='store_true',
+                            help='Run P+1 factorization (3 curves per composite)')
+    stage_group.add_argument('--p1', action='store_true',
+                            help='Run P-1 (1 curve) + P+1 (3 curves) per composite')
     stage_group.add_argument('--stage1-only', action='store_true',
                             help='Stage 1 only: upload residue to server')
     stage_group.add_argument('--stage2-only', action='store_true',
                             help='Stage 2 only: download residue from server')
+
+    # P+1 options
+    parser.add_argument('--pp1-curves', type=int, default=3,
+                       help='Number of P+1 curves per composite (default: 3)')
 
     # Stage 2 filtering (for --stage2-only mode)
     parser.add_argument('--min-b1', type=parse_int_with_scientific,

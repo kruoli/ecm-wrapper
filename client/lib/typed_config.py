@@ -302,22 +302,36 @@ class TypedConfigLoader:
             t_level=self._parse_tlevel(raw.get('t_level', {})),
         )
 
+    @staticmethod
+    def _safe_int(value: Any, default: int) -> int:
+        """Safely convert a config value to int, handling scientific notation strings."""
+        if value is None:
+            return default
+        return int(float(value))
+
+    @staticmethod
+    def _safe_optional_int(value: Any) -> Optional[int]:
+        """Safely convert a config value to Optional[int], handling scientific notation."""
+        if value is None:
+            return None
+        return int(float(value))
+
     def _parse_gmp_ecm(self, raw: Dict[str, Any]) -> GMPECMConfig:
-        """Parse GMP-ECM configuration."""
+        """Parse GMP-ECM configuration with safe numeric casting."""
         return GMPECMConfig(
             path=raw.get('path', 'ecm'),
-            default_b1=raw.get('default_b1', 110000000),
-            default_b2=raw.get('default_b2'),
-            default_curves=raw.get('default_curves', 1),
+            default_b1=self._safe_int(raw.get('default_b1'), 110000000),
+            default_b2=self._safe_optional_int(raw.get('default_b2')),
+            default_curves=self._safe_int(raw.get('default_curves'), 1),
             early_termination=raw.get('early_termination', True),
             gpu_enabled=raw.get('gpu_enabled', False),
-            gpu_device=raw.get('gpu_device', 0),
-            gpu_curves=raw.get('gpu_curves'),
-            workers=raw.get('workers', raw.get('stage2_workers', 8)),  # Backward compat
-            pm1_b1=raw.get('pm1_b1', 2900000000),
-            pm1_b2=raw.get('pm1_b2', 1000000000000000),
-            pp1_b1=raw.get('pp1_b1', 110000000),
-            pp1_b2=raw.get('pp1_b2', 500000000000),
+            gpu_device=self._safe_int(raw.get('gpu_device'), 0),
+            gpu_curves=self._safe_optional_int(raw.get('gpu_curves')),
+            workers=self._safe_int(raw.get('workers', raw.get('stage2_workers')), 8),
+            pm1_b1=self._safe_int(raw.get('pm1_b1'), 2900000000),
+            pm1_b2=self._safe_int(raw.get('pm1_b2'), 1000000000000000),
+            pp1_b1=self._safe_int(raw.get('pp1_b1'), 110000000),
+            pp1_b2=self._safe_int(raw.get('pp1_b2'), 500000000000),
         )
 
     def _parse_yafu(self, raw: Dict[str, Any]) -> YAFUConfig:

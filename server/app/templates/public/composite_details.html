@@ -266,6 +266,7 @@
                 <strong>P-1 Statistics:</strong>
                 <div style="margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
                     <div><strong>Total Attempts:</strong> {{ method_breakdown.pm1.total_attempts }}</div>
+                    <div><strong>Total Curves:</strong> {{ "{:,}".format(method_breakdown.pm1.total_curves) }}</div>
                     <div><strong>Factors Found:</strong> {{ method_breakdown.pm1.factors_found|length }}</div>
                     {% if method_breakdown.pm1.total_attempts > 0 %}
                     <div><strong>B1 Range:</strong> {{ "{:,}".format(method_breakdown.pm1.min_b1|int) }} - {{ "{:,}".format(method_breakdown.pm1.max_b1|int) }}</div>
@@ -279,6 +280,7 @@
                     <tr>
                         <th>B1</th>
                         <th>B2</th>
+                        <th>Curves</th>
                         <th>Factor Found</th>
                         <th>Client</th>
                         <th>Submitted</th>
@@ -287,6 +289,7 @@
                     <tr>
                         <td>{{ "{:,}".format(attempt.b1) }}</td>
                         <td>{% if attempt.b2 is none %}Default{% elif attempt.b2 == 0 %}Stage 1 only{% else %}{{ "{:,}".format(attempt.b2) }}{% endif %}</td>
+                        <td>{{ "{:,}".format(attempt.curves_completed) }}</td>
                         <td class="number-display">
                             {% if attempt.factor_found %}
                             {{ esc(attempt.factor_found) }}
@@ -314,6 +317,7 @@
                 <strong>P+1 Statistics:</strong>
                 <div style="margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
                     <div><strong>Total Attempts:</strong> {{ method_breakdown.pp1.total_attempts }}</div>
+                    <div><strong>Total Curves:</strong> {{ "{:,}".format(method_breakdown.pp1.total_curves) }}</div>
                     <div><strong>Factors Found:</strong> {{ method_breakdown.pp1.factors_found|length }}</div>
                     {% if method_breakdown.pp1.total_attempts > 0 %}
                     <div><strong>B1 Range:</strong> {{ "{:,}".format(method_breakdown.pp1.min_b1|int) }} - {{ "{:,}".format(method_breakdown.pp1.max_b1|int) }}</div>
@@ -327,6 +331,7 @@
                     <tr>
                         <th>B1</th>
                         <th>B2</th>
+                        <th>Curves</th>
                         <th>Factor Found</th>
                         <th>Client</th>
                         <th>Submitted</th>
@@ -335,6 +340,7 @@
                     <tr>
                         <td>{{ "{:,}".format(attempt.b1) }}</td>
                         <td>{% if attempt.b2 is none %}Default{% elif attempt.b2 == 0 %}Stage 1 only{% else %}{{ "{:,}".format(attempt.b2) }}{% endif %}</td>
+                        <td>{{ "{:,}".format(attempt.curves_completed) }}</td>
                         <td class="number-display">
                             {% if attempt.factor_found %}
                             {{ esc(attempt.factor_found) }}

@@ -167,6 +167,7 @@ Clients can now continuously request and process work assignments from the serve
 
 **API Methods** (`client/lib/api_client.py`):
 - `get_ecm_work()` - Request work from `/ecm-work` endpoint
+- `get_p1_work()` - Request P-1/P+1 work from `/p1-work` endpoint (filters by PM1/PP1 coverage)
 - `complete_work()` - Mark work complete via `POST /work/{work_id}/complete`
 - `abandon_work()` - Release work via `DELETE /work/{work_id}`
 - `upload_residue()` - Upload residue file to server (decoupled two-stage)
@@ -680,16 +681,25 @@ Redesigned P-1/P+1 support for `ecm_client.py` auto-work mode:
 
 **New design** (`P1WorkMode` in `lib/work_modes.py`):
 - Three mutually exclusive flags: `--pm1`, `--pp1`, `--p1`
-- Uses `/ecm-work` endpoint (same as standard ECM mode) for reliable work assignment
-- B1 calculated one step above composite's target t-level in the optimal B1 table
+- Uses dedicated `/p1-work` endpoint that filters composites by PM1/PP1 coverage
+- Server calculates B1 one step above composite's target t-level, returns in response
   - Example: target_t=48 → next entry ≥ 48 is t50 (B1=43M) → one above = t55 → B1=110M
-  - Capped by config `pm1_b1` / `pp1_b1` values
+  - Client caps by config `pm1_b1` / `pp1_b1` values
+- Server filters out composites that already have PM1/PP1 at the required B1 level
+  - Uses SQL `NOT EXISTS` subqueries against `ecm_attempts` (hits composite_id,method index)
+  - No `ecm_progress < 1.0` filter — PM1/PP1 valuable even after ECM target reached
 - B2 omitted (GMP-ECM uses its default ratio, appropriate for the B1 level)
 - Per composite: PM1 runs 1 curve, PP1 runs N curves (default 3, configurable with `--pp1-curves`)
 - If PM1 finds a factor, PP1 is skipped
 - PM1 and PP1 results submitted separately with correct `program_name`
 
-**B1 lookup**: `get_b1_above_tlevel()` in `lib/ecm_math.py`
+**Server endpoint**: `GET /p1-work` in `server/app/api/v1/ecm_work.py`
+- Query params: `client_id`, `method` (pm1/pp1/p1), `priority`, `min_target_tlevel`, `max_target_tlevel`, `work_type`
+- Returns: `work_id`, `composite`, `pm1_b1`, `pp1_b1`, etc.
+
+**Client API**: `get_p1_work()` in `lib/api_client.py`, `request_p1_work()` in `lib/work_helpers.py`
+
+**B1 lookup**: `get_b1_above_tlevel()` in both `lib/ecm_math.py` (client) and `server/app/constants.py` (server)
 
 **Config values**: `typed_config.py` now safely handles scientific notation strings (e.g., `pm1_b1: 25e9`) via `_safe_int()` helper in `TypedConfigLoader`
 

@@ -267,8 +267,6 @@ def create_yafu_parser() -> argparse.ArgumentParser:
     parser.add_argument('--curves', '-c', type=int, default=100, help='Number of curves for ECM')
 
     # General parameters
-    parser.add_argument('--project', '-p', help='Project name')
-    parser.add_argument('--no-submit', action='store_true', help='Do not submit to API')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose YAFU output (stream in real-time)')
 
     return parser

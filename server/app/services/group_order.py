@@ -57,6 +57,13 @@ class GroupOrderCalculator:
                 logger.warning("group.gp script not found, will use inline script")
                 self.script_path = None
 
+    def _gp_args(self, factor: str) -> list:
+        """Return PARI/GP command-line args, increasing stack size for large factors."""
+        args = ["-q", "-f"]
+        if len(factor) > 55:
+            args.extend(["-s", "64M"])
+        return args
+
     def calculate_group_order(
         self, factor: str, sigma: str, parametrization: int = 3
     ) -> Optional[Tuple[str, Optional[str]]]:
@@ -103,7 +110,7 @@ class GroupOrderCalculator:
         try:
             # Execute PARI/GP using executor
             success, group_order = self.executor.execute_and_get_last_line(
-                args=["-q", "-f"],  # -q: quiet, -f: fast
+                args=self._gp_args(factor),
                 input_data=script,
                 timeout=30
             )
@@ -127,6 +134,76 @@ class GroupOrderCalculator:
             )
             return None
 
+    def calculate_p1_order(
+        self, factor: str, method: str
+    ) -> Optional[Tuple[str, Optional[str]]]:
+        """
+        Calculate p-1 or p+1 for a factor found by P-1 or P+1 method.
+
+        For PM1, the group is the multiplicative group mod p, with order p-1.
+        For PP1, the relevant group has order p+1.
+
+        Args:
+            factor: Prime factor (p)
+            method: "pm1" or "pp1"
+
+        Returns:
+            Tuple of (order, factorization) or None if calculation fails.
+        """
+        if method == "pm1":
+            order_expr = f"{factor} - 1"
+            label = "p-1"
+        elif method == "pp1":
+            order_expr = f"{factor} + 1"
+            label = "p+1"
+        else:
+            return None
+
+        # Compute the value and factor it in one PARI/GP call
+        script = f"n = {order_expr}; print(n); factor(n)\nquit\n"
+
+        try:
+            success, lines = self.executor.execute_and_parse_lines(
+                args=self._gp_args(factor),
+                input_data=script,
+                timeout=30,
+                filter_empty=True
+            )
+
+            if not success or not lines:
+                return None
+
+            # First line is the order value
+            order_value = lines[0].strip()
+
+            # Remaining lines are the factorization matrix
+            factors = []
+            for line in lines[1:]:
+                if line.startswith('[') and line.endswith(']'):
+                    parts = line[1:-1].split()
+                    if len(parts) == 2:
+                        base = parts[0]
+                        exp = parts[1]
+                        if exp == '1':
+                            factors.append(base)
+                        else:
+                            factors.append(f"{base}^{exp}")
+
+            factorization = " * ".join(factors) if factors else None
+
+            logger.info(
+                f"Calculated {label} for factor {factor[:20]}...: "
+                f"{order_value} = {factorization}"
+            )
+
+            return (order_value, factorization)
+
+        except Exception as e:
+            logger.error(
+                f"Error calculating {label} for factor {factor[:20]}...: {e}"
+            )
+            return None
+
     def _factor_group_order(self, group_order: str) -> Optional[str]:
         """
         Factor the group order using PARI/GP.
@@ -142,7 +219,7 @@ class GroupOrderCalculator:
         try:
             # Execute PARI/GP factorization
             success, lines = self.executor.execute_and_parse_lines(
-                args=["-q", "-f"],
+                args=self._gp_args(group_order),
                 input_data=script,
                 timeout=10,
                 filter_empty=True

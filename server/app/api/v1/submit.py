@@ -234,7 +234,8 @@ async def submit_result(
                     # Convert sigma to string for storage (supports large param 0 values)
                     sigma_for_storage = str(parsed_sigma) if parsed_sigma is not None else None
                     factor, factor_created = FactorService.add_factor(
-                        db, composite.id, factor_str, attempt.id, sigma_for_storage, parametrization
+                        db, composite.id, factor_str, attempt.id, sigma_for_storage, parametrization,
+                        method=result_request.method
                     )
 
                     if factor_created:

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import subprocess
-import sys
 from typing import Optional, Dict, Any, List
 from lib.base_wrapper import BaseWrapper
 from lib.parsing_utils import parse_yafu_ecm_output, parse_yafu_auto_factors, Timeouts
@@ -299,17 +298,6 @@ def main():
         # Also print the command that was executed (for debugging)
         if 'cmd' in results:
             print("Command executed:", ' '.join(results['cmd']))
-
-    # Submit results unless disabled or failed
-    if not args.no_submit:
-        # Only submit if we actually completed some curves (not a failure)
-        if results.get('curves_completed', 0) > 0 or results.get('factors_found'):
-            program_name = f'yafu-{results.get("method", "ecm")}'
-            success = wrapper.submit_result(results, args.project, program_name)
-            sys.exit(0 if success else 1)
-        else:
-            wrapper.logger.warning("Skipping result submission due to failure")
-            sys.exit(1)
 
 if __name__ == '__main__':
     main()

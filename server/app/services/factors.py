@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 class FactorService:
     @staticmethod
     def add_factor(db: Session, composite_id: int, factor: str, attempt_id: Optional[int] = None,
-                   sigma: Optional[str] = None, parametrization: Optional[int] = None) -> Tuple[Factor, bool]:
+                   sigma: Optional[str] = None, parametrization: Optional[int] = None,
+                   method: Optional[str] = None) -> Tuple[Factor, bool]:
         """
         Add a factor to a composite.
         Returns (factor, created) where created is True if new factor was added.
@@ -20,6 +21,7 @@ class FactorService:
         Args:
             sigma: The sigma value that found this factor (ECM only) - stored as string for large param 0 values
             parametrization: ECM parametrization type (0-3) for group order calculation
+            method: Factorization method (ecm, pm1, pp1) - used for p-1/p+1 factorization
         """
         # Validate factor
         if not validate_integer(factor):
@@ -39,6 +41,7 @@ class FactorService:
         group_order_factorization = None
 
         if sigma is not None:
+            # ECM factor - calculate elliptic curve group order
             # Get parametrization from attempt if not provided
             if parametrization is None and attempt_id is not None:
                 attempt = db.query(ECMAttempt).filter(ECMAttempt.id == attempt_id).first()
@@ -58,6 +61,19 @@ class FactorService:
                     logger.info(f"Calculated group order for factor {factor[:20]}...: {group_order}")
             except Exception as e:
                 logger.warning(f"Failed to calculate group order for factor {factor[:20]}...: {e}")
+
+        elif method in ("pm1", "pp1"):
+            # P-1/P+1 factor - calculate p-1 or p+1 factorization
+            try:
+                calculator = GroupOrderCalculator()
+                result = calculator.calculate_p1_order(factor, method)
+                if result:
+                    group_order, group_order_factorization = result
+                    label = "p-1" if method == "pm1" else "p+1"
+                    logger.info(f"Calculated {label} for factor {factor[:20]}...: {group_order}")
+            except Exception as e:
+                label = "p-1" if method == "pm1" else "p+1"
+                logger.warning(f"Failed to calculate {label} for factor {factor[:20]}...: {e}")
 
         # Add new factor
         new_factor = Factor(

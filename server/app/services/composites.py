@@ -803,6 +803,7 @@ class CompositeService:
                 {
                     'factor': f.factor,
                     'sigma': f.sigma,
+                    'method': f.attempt.method if f.attempt else None,
                     'group_order': f.group_order,
                     'group_order_factorization': f.group_order_factorization,
                     'is_prime': f.is_prime

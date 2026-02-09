@@ -1,0 +1,404 @@
+{% extends "base.html" %}
+
+{% block title %}P-1/P+1 Testing Status - ECM Distributed Factorization{% endblock %}
+
+{% block extra_head %}
+<script>
+    function cleanFormSubmit(event) {
+        const form = event.target;
+        const inputs = form.querySelectorAll('input[type="number"]');
+        inputs.forEach(input => {
+            if (input.value === '' || input.value === null) {
+                input.disabled = true;
+            }
+        });
+        return true;
+    }
+
+    function sortTable(columnIndex) {
+        const table = document.getElementById('composites-table');
+        const tbody = table.querySelector('tbody');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+
+        const currentSort = table.dataset.sortColumn;
+        const currentDir = table.dataset.sortDir || 'asc';
+        const newDir = (currentSort == columnIndex && currentDir === 'asc') ? 'desc' : 'asc';
+
+        rows.sort((a, b) => {
+            const aVal = a.cells[columnIndex].dataset.value || a.cells[columnIndex].textContent;
+            const bVal = b.cells[columnIndex].dataset.value || b.cells[columnIndex].textContent;
+
+            const aNum = parseFloat(aVal);
+            const bNum = parseFloat(bVal);
+
+            if (!isNaN(aNum) && !isNaN(bNum)) {
+                return newDir === 'asc' ? aNum - bNum : bNum - aNum;
+            } else {
+                return newDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+            }
+        });
+
+        rows.forEach(row => tbody.appendChild(row));
+
+        table.querySelectorAll('th').forEach((th, idx) => {
+            th.classList.remove('sort-asc', 'sort-desc');
+            if (idx === columnIndex) {
+                th.classList.add(newDir === 'asc' ? 'sort-asc' : 'sort-desc');
+            }
+        });
+
+        table.dataset.sortColumn = columnIndex;
+        table.dataset.sortDir = newDir;
+    }
+</script>
+
+<style>
+    .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 15px;
+        margin-bottom: 30px;
+    }
+
+    .summary-card {
+        background: white;
+        border-radius: 8px;
+        padding: 20px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        text-align: center;
+    }
+
+    .summary-card.pm1 {
+        border-left: 4px solid #ffc107;
+    }
+
+    .summary-card.pp1 {
+        border-left: 4px solid #17a2b8;
+    }
+
+    .summary-card.combined {
+        border-left: 4px solid #28a745;
+    }
+
+    .summary-number {
+        font-size: 2.5em;
+        font-weight: bold;
+        color: #333;
+    }
+
+    .summary-label {
+        font-size: 0.9em;
+        color: #666;
+        margin-top: 5px;
+    }
+
+    .progress-bar-container {
+        height: 20px;
+        background: #e9ecef;
+        border-radius: 4px;
+        overflow: hidden;
+        margin: 10px 0;
+    }
+
+    .progress-bar-fill {
+        height: 100%;
+        transition: width 0.3s ease;
+    }
+
+    .progress-bar-fill.pm1 {
+        background: linear-gradient(90deg, #ffc107, #ffda6a);
+    }
+
+    .progress-bar-fill.pp1 {
+        background: linear-gradient(90deg, #17a2b8, #3dd5f3);
+    }
+
+    .status-badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 0.8em;
+        font-weight: bold;
+    }
+
+    .status-none {
+        background: #f8f9fa;
+        color: #6c757d;
+    }
+
+    .status-pm1-only {
+        background: #fff3cd;
+        color: #856404;
+    }
+
+    .status-pp1-only {
+        background: #d1ecf1;
+        color: #0c5460;
+    }
+
+    .status-complete {
+        background: #d4edda;
+        color: #155724;
+    }
+
+    th.sortable {
+        cursor: pointer;
+        user-select: none;
+    }
+
+    th.sortable:hover {
+        background-color: #e9ecef;
+    }
+
+    th.sort-asc::after {
+        content: ' ▲';
+        font-size: 0.8em;
+    }
+
+    th.sort-desc::after {
+        content: ' ▼';
+        font-size: 0.8em;
+    }
+
+    .nav-links {
+        margin-bottom: 20px;
+    }
+
+    .nav-links a {
+        color: #667eea;
+        text-decoration: none;
+        margin-right: 15px;
+        font-weight: 500;
+    }
+
+    .nav-links a:hover {
+        text-decoration: underline;
+    }
+
+    .b1-badge {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 0.75em;
+        font-weight: bold;
+        background: #e9ecef;
+        color: #495057;
+    }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="nav-links">
+    <a href="/api/v1/dashboard/">← Back to Dashboard</a>
+    <a href="/api/v1/dashboard/testing-status">ECM Testing Status</a>
+</div>
+
+<h1>P-1/P+1 Testing Status</h1>
+
+<!-- Summary Cards -->
+<div class="section">
+    <div class="section-header">Overall Progress</div>
+    <div class="section-content">
+        <div class="summary-grid">
+            <div class="summary-card pm1">
+                <div class="summary-number">{{ summary.pm1_complete }}</div>
+                <div class="summary-label">Composites with P-1</div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar-fill pm1" style="width: {{ summary.pm1_pct|round(1) }}%"></div>
+                </div>
+                <div class="small-text">{{ summary.pm1_pct|round(1) }}% of {{ summary.total }} composites</div>
+            </div>
+
+            <div class="summary-card pp1">
+                <div class="summary-number">{{ summary.pp1_complete }}</div>
+                <div class="summary-label">Composites with P+1</div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar-fill pp1" style="width: {{ summary.pp1_pct|round(1) }}%"></div>
+                </div>
+                <div class="small-text">{{ summary.pp1_pct|round(1) }}% of {{ summary.total }} composites</div>
+            </div>
+
+            <div class="summary-card combined">
+                <div class="summary-number">{{ summary.both_complete }}</div>
+                <div class="summary-label">Both P-1 and P+1</div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar-fill" style="width: {{ summary.both_pct|round(1) }}%; background: linear-gradient(90deg, #28a745, #20c997);"></div>
+                </div>
+                <div class="small-text">{{ summary.both_pct|round(1) }}% of {{ summary.total }} composites</div>
+            </div>
+
+            <div class="summary-card">
+                <div class="summary-number">{{ summary.neither }}</div>
+                <div class="summary-label">No P-1/P+1 Yet</div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar-fill" style="width: {{ summary.neither_pct|round(1) }}%; background: #dc3545;"></div>
+                </div>
+                <div class="small-text">{{ summary.neither_pct|round(1) }}% remaining</div>
+            </div>
+        </div>
+
+        <div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+            <strong>Total Curves:</strong>
+            P-1: {{ "{:,}".format(summary.total_pm1_curves) }} |
+            P+1: {{ "{:,}".format(summary.total_pp1_curves) }}
+        </div>
+    </div>
+</div>
+
+<!-- Filters Section -->
+<div class="section">
+    <div class="section-header">Filter Composites</div>
+    <div class="section-content">
+        <form method="GET" action="/api/v1/dashboard/p1-testing-status" onsubmit="return cleanFormSubmit(event)" style="display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-end;">
+            <div style="flex: 1; min-width: 150px;">
+                <label for="min_target_tlevel" style="display: block; margin-bottom: 5px; font-weight: 500; font-size: 0.9em;">Min Target T-Level</label>
+                <input type="number" id="min_target_tlevel" name="min_target_tlevel"
+                       value="{{ min_target_tlevel if min_target_tlevel is not none else '' }}"
+                       step="1" min="0"
+                       placeholder="e.g., 35"
+                       style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+            <div style="flex: 1; min-width: 150px;">
+                <label for="max_target_tlevel" style="display: block; margin-bottom: 5px; font-weight: 500; font-size: 0.9em;">Max Target T-Level</label>
+                <input type="number" id="max_target_tlevel" name="max_target_tlevel"
+                       value="{{ max_target_tlevel if max_target_tlevel is not none else '' }}"
+                       step="1" min="0"
+                       placeholder="e.g., 50"
+                       style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+            <div style="flex: 1; min-width: 150px;">
+                <label for="status_filter" style="display: block; margin-bottom: 5px; font-weight: 500; font-size: 0.9em;">P1 Status</label>
+                <select id="status_filter" name="status_filter" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <option value="">All</option>
+                    <option value="none" {% if status_filter == 'none' %}selected{% endif %}>No P-1/P+1</option>
+                    <option value="pm1_only" {% if status_filter == 'pm1_only' %}selected{% endif %}>P-1 Only</option>
+                    <option value="pp1_only" {% if status_filter == 'pp1_only' %}selected{% endif %}>P+1 Only</option>
+                    <option value="complete" {% if status_filter == 'complete' %}selected{% endif %}>Both Complete</option>
+                </select>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: flex-end;">
+                <button type="submit" style="padding: 8px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                    Apply Filters
+                </button>
+                <a href="/api/v1/dashboard/p1-testing-status" style="padding: 8px 20px; background-color: #6c757d; color: white; text-decoration: none; border-radius: 4px; display: inline-block; font-weight: 500;">
+                    Clear Filters
+                </a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Composites Table -->
+<div class="section">
+    <div class="section-header">Composites P-1/P+1 Coverage</div>
+    <div class="section-content">
+        <p style="margin-bottom: 10px; color: #666; font-style: italic;">
+            Showing {{ showing_from }} to {{ showing_to }} of {{ total }} composites
+        </p>
+        <p style="margin-bottom: 15px; color: #666; font-style: italic;">
+            Click column headers to sort. Click composite ID to view details.
+        </p>
+        <div class="table-wrapper">
+            <table id="composites-table">
+                <thead>
+                    <tr>
+                        <th class="sortable" onclick="sortTable(0)">ID</th>
+                        <th class="sortable" onclick="sortTable(1)">Digits</th>
+                        <th class="sortable" onclick="sortTable(2)">Target T</th>
+                        <th class="sortable" onclick="sortTable(3)">Required B1</th>
+                        <th>P-1 Status</th>
+                        <th>P+1 Status</th>
+                        <th class="sortable" onclick="sortTable(6)">P1 Coverage</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for comp in composites %}
+                    <tr>
+                        <td data-value="{{ comp.id }}">
+                            <a href="/api/v1/dashboard/composites/{{ comp.id }}/details" style="color: #667eea; text-decoration: none; font-weight: 500;">
+                                #{{ comp.id }}
+                            </a>
+                        </td>
+                        <td data-value="{{ comp.digit_length }}">{{ comp.digit_length }}</td>
+                        <td data-value="{{ comp.target_t_level or 0 }}">t{{ (comp.target_t_level or 0)|round(0)|int }}</td>
+                        <td data-value="{{ comp.required_b1 }}">
+                            <span class="b1-badge">{{ "{:,}".format(comp.required_b1) }}</span>
+                        </td>
+                        <td>
+                            {% if comp.pm1_done %}
+                            <span style="color: #28a745;">&#10003;</span>
+                            {{ comp.pm1_curves }} curve{{ 's' if comp.pm1_curves != 1 else '' }}
+                            @ B1={{ "{:,}".format(comp.pm1_max_b1) }}
+                            {% else %}
+                            <span style="color: #dc3545;">&#10007;</span>
+                            <span style="color: #999;">Not done</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if comp.pp1_done %}
+                            <span style="color: #28a745;">&#10003;</span>
+                            {{ comp.pp1_curves }} curve{{ 's' if comp.pp1_curves != 1 else '' }}
+                            @ B1={{ "{:,}".format(comp.pp1_max_b1) }}
+                            {% else %}
+                            <span style="color: #dc3545;">&#10007;</span>
+                            <span style="color: #999;">Not done</span>
+                            {% endif %}
+                        </td>
+                        <td data-value="{{ comp.coverage_score }}">
+                            {% if comp.pm1_done and comp.pp1_done %}
+                            <span class="status-badge status-complete">Complete</span>
+                            {% elif comp.pm1_done %}
+                            <span class="status-badge status-pm1-only">P-1 Only</span>
+                            {% elif comp.pp1_done %}
+                            <span class="status-badge status-pp1-only">P+1 Only</span>
+                            {% else %}
+                            <span class="status-badge status-none">None</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
+            <div style="color: #666;">
+                <strong>Page {{ page }} of {{ total_pages }}</strong>
+                ({{ showing_from }}-{{ showing_to }} of {{ total }} composites)
+            </div>
+            <div style="display: flex; gap: 10px;">
+                {% if has_prev %}
+                <a href="?offset={{ offset - limit }}&limit={{ limit }}{% if min_target_tlevel is not none %}&min_target_tlevel={{ min_target_tlevel }}{% endif %}{% if max_target_tlevel is not none %}&max_target_tlevel={{ max_target_tlevel }}{% endif %}{% if status_filter %}&status_filter={{ status_filter }}{% endif %}"
+                   style="padding: 8px 16px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; font-weight: 500;">
+                    ← Previous
+                </a>
+                {% else %}
+                <span style="padding: 8px 16px; background-color: #e9ecef; color: #6c757d; border-radius: 4px; font-weight: 500;">
+                    ← Previous
+                </span>
+                {% endif %}
+
+                {% if has_next %}
+                <a href="?offset={{ offset + limit }}&limit={{ limit }}{% if min_target_tlevel is not none %}&min_target_tlevel={{ min_target_tlevel }}{% endif %}{% if max_target_tlevel is not none %}&max_target_tlevel={{ max_target_tlevel }}{% endif %}{% if status_filter %}&status_filter={{ status_filter }}{% endif %}"
+                   style="padding: 8px 16px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; font-weight: 500;">
+                    Next →
+                </a>
+                {% else %}
+                <span style="padding: 8px 16px; background-color: #e9ecef; color: #6c757d; border-radius: 4px; font-weight: 500;">
+                    Next →
+                </span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="small-text" style="margin-top: 20px;">
+    <p>
+        <strong>Required B1:</strong> Calculated as one step above the composite's target t-level.
+        P-1/P+1 is considered "done" when an attempt exists with B1 >= Required B1.
+    </p>
+    <p><a href="/api/v1/dashboard/">Back to Dashboard</a></p>
+</div>
+{% endblock %}

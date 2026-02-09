@@ -11,6 +11,7 @@ from ...models import Composite, ECMAttempt, Factor
 from ...services.composites import CompositeService
 from ...templates import templates
 from ...utils.query_helpers import get_aggregated_attempts, prefetch_factor_counts_for_attempts
+from ...constants import get_b1_above_tlevel
 
 router = APIRouter()
 
@@ -243,6 +244,186 @@ async def testing_status(
         "max_t_level": max_t_level,
         "min_priority": min_priority,
         "snfs_difficulty": snfs_difficulty
+    })
+
+
+@router.get("/p1-testing-status", response_class=HTMLResponse)
+async def p1_testing_status(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(200, ge=1, le=500, description="Composites per page"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    min_target_tlevel: Optional[float] = Query(None, ge=0, description="Minimum target t-level"),
+    max_target_tlevel: Optional[float] = Query(None, ge=0, description="Maximum target t-level"),
+    status_filter: Optional[str] = Query(None, description="Filter by P1 status: none, pm1_only, pp1_only, complete")
+):
+    """
+    P-1/P+1 testing status dashboard showing coverage across composites.
+
+    Shows which composites have had P-1 and/or P+1 run at the required B1 level.
+    """
+    from sqlalchemy import and_
+
+    # Build base query for active, unfactored composites with target t-levels
+    base_query = db.query(Composite).filter(
+        and_(
+            Composite.is_active == True,
+            Composite.is_fully_factored == False,
+            Composite.target_t_level.isnot(None),
+        )
+    )
+
+    # Apply t-level filters
+    if min_target_tlevel is not None:
+        base_query = base_query.filter(Composite.target_t_level >= min_target_tlevel)
+    if max_target_tlevel is not None:
+        base_query = base_query.filter(Composite.target_t_level <= max_target_tlevel)
+
+    # Get all matching composite IDs first (for summary stats)
+    all_composites = base_query.order_by(Composite.target_t_level.asc()).all()
+
+    # Pre-compute PM1/PP1 coverage for all composites
+    composite_ids = [c.id for c in all_composites]
+
+    # Get max B1 for PM1/PP1 attempts per composite
+    pm1_max_b1 = {}
+    pp1_max_b1 = {}
+    pm1_curves = {}
+    pp1_curves = {}
+
+    if composite_ids:
+        # PM1 stats
+        pm1_stats = db.query(
+            ECMAttempt.composite_id,
+            func.max(ECMAttempt.b1).label('max_b1'),
+            func.sum(ECMAttempt.curves_completed).label('total_curves')
+        ).filter(
+            ECMAttempt.composite_id.in_(composite_ids),
+            ECMAttempt.method == 'pm1'
+        ).group_by(ECMAttempt.composite_id).all()
+
+        for composite_id, max_b1, total_curves in pm1_stats:
+            pm1_max_b1[composite_id] = max_b1 or 0
+            pm1_curves[composite_id] = int(total_curves or 0)
+
+        # PP1 stats
+        pp1_stats = db.query(
+            ECMAttempt.composite_id,
+            func.max(ECMAttempt.b1).label('max_b1'),
+            func.sum(ECMAttempt.curves_completed).label('total_curves')
+        ).filter(
+            ECMAttempt.composite_id.in_(composite_ids),
+            ECMAttempt.method == 'pp1'
+        ).group_by(ECMAttempt.composite_id).all()
+
+        for composite_id, max_b1, total_curves in pp1_stats:
+            pp1_max_b1[composite_id] = max_b1 or 0
+            pp1_curves[composite_id] = int(total_curves or 0)
+
+    # Build composite data with P1 coverage info
+    composite_data = []
+    pm1_complete_count = 0
+    pp1_complete_count = 0
+    both_complete_count = 0
+    neither_count = 0
+    total_pm1_curves = 0
+    total_pp1_curves = 0
+
+    for comp in all_composites:
+        required_b1 = get_b1_above_tlevel(comp.target_t_level or 35.0)
+        comp_pm1_max = pm1_max_b1.get(comp.id, 0)
+        comp_pp1_max = pp1_max_b1.get(comp.id, 0)
+        comp_pm1_curves = pm1_curves.get(comp.id, 0)
+        comp_pp1_curves = pp1_curves.get(comp.id, 0)
+
+        pm1_done = comp_pm1_max >= required_b1
+        pp1_done = comp_pp1_max >= required_b1
+
+        # Update summary stats
+        total_pm1_curves += comp_pm1_curves
+        total_pp1_curves += comp_pp1_curves
+
+        if pm1_done:
+            pm1_complete_count += 1
+        if pp1_done:
+            pp1_complete_count += 1
+        if pm1_done and pp1_done:
+            both_complete_count += 1
+        if not pm1_done and not pp1_done:
+            neither_count += 1
+
+        # Determine coverage score for sorting (0=none, 1=one, 2=both)
+        coverage_score = (1 if pm1_done else 0) + (1 if pp1_done else 0)
+
+        # Apply status filter
+        if status_filter:
+            if status_filter == 'none' and (pm1_done or pp1_done):
+                continue
+            if status_filter == 'pm1_only' and not (pm1_done and not pp1_done):
+                continue
+            if status_filter == 'pp1_only' and not (pp1_done and not pm1_done):
+                continue
+            if status_filter == 'complete' and not (pm1_done and pp1_done):
+                continue
+
+        composite_data.append({
+            'id': comp.id,
+            'digit_length': comp.digit_length,
+            'target_t_level': comp.target_t_level,
+            'required_b1': required_b1,
+            'pm1_done': pm1_done,
+            'pp1_done': pp1_done,
+            'pm1_max_b1': comp_pm1_max,
+            'pp1_max_b1': comp_pp1_max,
+            'pm1_curves': comp_pm1_curves,
+            'pp1_curves': comp_pp1_curves,
+            'coverage_score': coverage_score,
+        })
+
+    # Apply pagination to filtered results
+    total = len(composite_data)
+    paginated_composites = composite_data[offset:offset + limit]
+
+    # Calculate pagination metadata
+    page = (offset // limit) + 1 if limit > 0 else 1
+    total_pages = (total + limit - 1) // limit if limit > 0 else 1
+    showing_from = offset + 1 if total > 0 else 0
+    showing_to = min(offset + limit, total)
+
+    # Summary stats
+    total_composites = len(all_composites)
+    summary = {
+        'total': total_composites,
+        'pm1_complete': pm1_complete_count,
+        'pp1_complete': pp1_complete_count,
+        'both_complete': both_complete_count,
+        'neither': neither_count,
+        'pm1_pct': (pm1_complete_count / total_composites * 100) if total_composites > 0 else 0,
+        'pp1_pct': (pp1_complete_count / total_composites * 100) if total_composites > 0 else 0,
+        'both_pct': (both_complete_count / total_composites * 100) if total_composites > 0 else 0,
+        'neither_pct': (neither_count / total_composites * 100) if total_composites > 0 else 0,
+        'total_pm1_curves': total_pm1_curves,
+        'total_pp1_curves': total_pp1_curves,
+    }
+
+    return templates.TemplateResponse("public/p1_testing_status.html", {
+        "request": request,
+        "summary": summary,
+        "composites": paginated_composites,
+        # Pagination metadata
+        "total": total,
+        "page": page,
+        "total_pages": total_pages,
+        "limit": limit,
+        "offset": offset,
+        "showing_from": showing_from,
+        "showing_to": showing_to,
+        "has_prev": offset > 0,
+        "has_next": offset + limit < total,
+        # Filter values
+        "min_target_tlevel": min_target_tlevel,
+        "max_target_tlevel": max_target_tlevel,
+        "status_filter": status_filter,
     })
 
 

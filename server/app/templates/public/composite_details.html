@@ -153,19 +153,19 @@
 
     {% if factors_with_group_orders %}
     <div class="card">
-        <h2>Factors with Elliptic Curve Group Order Data</h2>
+        <h2>Factor Group Order Data</h2>
         <div class="table-wrapper">
             <table>
                 <tr>
                     <th>Factor</th>
-                    <th>Sigma</th>
+                    <th>Method</th>
                     <th>Group Order</th>
-                    <th>Group Order Factorization</th>
+                    <th>Factorization</th>
                 </tr>
                 {% for f in factors_with_group_orders %}
                 <tr>
                     <td class="number-display">{{ esc(f.factor) }}</td>
-                    <td>{{ "{:,}".format(f.sigma|int) if f.sigma else "N/A" }}</td>
+                    <td>{% if f.sigma %}ECM (&sigma;={{ "{:,}".format(f.sigma|int) }}){% elif f.method %}{{ f.method|upper }}{% else %}N/A{% endif %}</td>
                     <td class="number-display">{{ esc(f.group_order) if f.group_order else "N/A" }}</td>
                     <td class="number-display">{{ esc(f.group_order_factorization) if f.group_order_factorization else "N/A" }}</td>
                 </tr>

@@ -963,7 +963,7 @@ class ECMWrapper(BaseWrapper):
         try:
             for step_target in step_targets:
                 # Check for interruption at start of each step
-                if self.interrupted:
+                if self.interrupted or self.shutdown_level >= 1:
                     self.logger.info("T-level execution interrupted, returning partial results")
                     break
 
@@ -1044,7 +1044,7 @@ class ECMWrapper(BaseWrapper):
                     ))
 
                 # Check for interruption after execution
-                if self.interrupted:
+                if self.interrupted or self.shutdown_level >= 1:
                     self.logger.info("T-level execution interrupted after ECM run, returning partial results")
                     # Still accumulate results from this batch
                     all_factors.extend(step_result.factors)

@@ -92,13 +92,17 @@ def get_workers_default(config: Dict[str, Any]) -> int:
     """
     Get default worker count from config.
 
+    Reads from programs.gmp_ecm.workers in client.yaml / client.local.yaml.
+
     Args:
         config: Configuration dictionary
 
     Returns:
         Default number of workers (from config or 4)
     """
-    return config.get('execution', {}).get('workers', 4)
+    if config and 'programs' in config and 'gmp_ecm' in config['programs']:
+        return config['programs']['gmp_ecm'].get('workers', 4)
+    return 4
 
 
 # Backward compatibility alias

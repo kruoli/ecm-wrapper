@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any, Optional, Dict, TYPE_CHECKING
 import argparse
 import hashlib
-import multiprocessing
 import signal
 import time
 
@@ -35,7 +34,7 @@ from .error_helpers import check_work_limit_reached
 from .cleanup_helpers import handle_shutdown
 from .results_builder import results_for_stage1
 from .arg_parser import resolve_gpu_settings, resolve_worker_count, get_workers_default, get_max_batch_default
-from .ecm_arg_helpers import parse_sigma_arg, resolve_param, resolve_workers
+from .ecm_arg_helpers import parse_sigma_arg, resolve_param
 
 if TYPE_CHECKING:
     from .ecm_executor import ECMWrapper
@@ -1055,6 +1054,14 @@ class P1WorkMode(WorkMode):
 
     def submit_results(self, work: Dict[str, Any], result: FactorResult) -> bool:
         composite = work['composite']
+
+        # Check that at least one method actually ran curves
+        pm1_curves = self._pm1_result.curves_run if self._pm1_result else 0
+        pp1_curves = self._pp1_result.curves_run if self._pp1_result else 0
+        if pm1_curves == 0 and pp1_curves == 0:
+            self.logger.error("Zero curves completed for P-1/P+1, execution may have failed (check ECM binary path)")
+            return False
+
         success = True
 
         # Submit PM1 results if we ran PM1
@@ -1160,11 +1167,8 @@ class StandardAutoWorkMode(WorkMode):
 
         # Use workers for multiprocess mode OR two-stage mode (for CPU stage 2)
         two_stage = getattr(self.args, 'two_stage', False)
-        if self.args.multiprocess:
-            workers = resolve_worker_count(self.args)
-        elif two_stage:
-            # For two-stage, use explicit --workers or auto-detect CPU count
-            workers = self.args.workers if self.args.workers > 0 else multiprocessing.cpu_count()
+        if self.args.multiprocess or two_stage:
+            workers = resolve_worker_count(self.args, self.wrapper.config)
         else:
             workers = 1
 
@@ -1209,8 +1213,8 @@ class StandardAutoWorkMode(WorkMode):
         result: FactorResult
 
         if self.args.two_stage and self.args.method == 'ecm':
-            print(f"Mode: two-stage GPU+CPU (B1={b1}, B2={b2}, curves={curves})")
-            workers = resolve_workers(self.args, self.wrapper.config)
+            workers = resolve_worker_count(self.args, self.wrapper.config)
+            print(f"Mode: two-stage GPU+CPU (B1={b1}, B2={b2}, curves={curves}, workers={workers})")
 
             two_stage_config = TwoStageConfig(
                 composite=composite,
@@ -1227,7 +1231,7 @@ class StandardAutoWorkMode(WorkMode):
             result = self.wrapper.run_two_stage_v2(two_stage_config)
 
         elif self.args.multiprocess:
-            workers = resolve_worker_count(self.args)
+            workers = resolve_worker_count(self.args, self.wrapper.config)
             print(f"Mode: multiprocess (B1={b1}, B2={b2}, curves={curves}, workers={workers})")
 
             mp_config = MultiprocessConfig(
@@ -1274,21 +1278,28 @@ class StandardAutoWorkMode(WorkMode):
     def submit_results(self, work: Dict[str, Any], result: FactorResult) -> bool:
         # T-level mode submits internally after each batch
         if self._is_tlevel_mode:
+            if result.curves_run == 0:
+                self.logger.error("T-level mode ran zero curves, execution may have failed")
+                return False
             return True
 
-        # B1/B2 modes need to submit here
-        if result.curves_run > 0:
-            self._results_dict['work_id'] = self.current_work_id
-            program_name = f"gmp-ecm-{self._results_dict.get('method', 'ecm')}"
-            submit_response = self.wrapper.submit_result(
-                self._results_dict,
-                self.args.project,
-                program_name
-            )
+        # Reject if no curves were actually run (e.g. binary not found)
+        if result.curves_run == 0:
+            self.logger.error("Zero curves completed, execution may have failed (check ECM binary path)")
+            return False
 
-            if not submit_response:
-                self.logger.error("Failed to submit results, abandoning work assignment")
-                return False
+        # B1/B2 modes need to submit here
+        self._results_dict['work_id'] = self.current_work_id
+        program_name = f"gmp-ecm-{self._results_dict.get('method', 'ecm')}"
+        submit_response = self.wrapper.submit_result(
+            self._results_dict,
+            self.args.project,
+            program_name
+        )
+
+        if not submit_response:
+            self.logger.error("Failed to submit results, abandoning work assignment")
+            return False
 
         return True
 

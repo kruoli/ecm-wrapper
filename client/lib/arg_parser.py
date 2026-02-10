@@ -501,11 +501,19 @@ def resolve_gpu_settings(args: argparse.Namespace, config: Dict[str, Any]) -> tu
     return use_gpu, gpu_device, gpu_curves
 
 
-def resolve_worker_count(args: argparse.Namespace) -> int:
-    """Resolve number of workers for multiprocess mode."""
-    if args.multiprocess and args.workers <= 0:
-        return multiprocessing.cpu_count()
-    return args.workers
+def resolve_worker_count(args: argparse.Namespace, config: Optional[Dict[str, Any]] = None) -> int:
+    """Resolve number of workers for multiprocess/two-stage mode.
+
+    Priority: command-line --workers > config programs.gmp_ecm.workers > CPU count.
+    """
+    workers = getattr(args, 'workers', None) or 0
+    if workers > 0:
+        return workers
+    if config:
+        config_workers = get_workers_default(config)
+        if config_workers > 0:
+            return config_workers
+    return multiprocessing.cpu_count()
 
 
 def print_validation_errors(errors: Dict[str, str]) -> None:

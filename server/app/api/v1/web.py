@@ -10,7 +10,7 @@ from ...dependencies import get_composite_service
 from ...models import Composite, ECMAttempt, Factor
 from ...services.composites import CompositeService
 from ...templates import templates
-from ...utils.query_helpers import get_aggregated_attempts, prefetch_factor_counts_for_attempts
+from ...utils.query_helpers import get_aggregated_attempts, prefetch_factor_counts_for_attempts, get_residues_filtered, calculate_pagination
 from ...constants import get_b1_above_tlevel
 
 router = APIRouter()
@@ -424,6 +424,48 @@ async def p1_testing_status(
         "min_target_tlevel": min_target_tlevel,
         "max_target_tlevel": max_target_tlevel,
         "status_filter": status_filter,
+    })
+
+
+@router.get("/residue-status", response_class=HTMLResponse)
+async def residue_status_public(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(100, ge=1, le=200, description="Items per page"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    composite_id: Optional[int] = Query(None, description="Filter by composite ID"),
+):
+    """
+    Public read-only dashboard showing residue pool status.
+    No authentication required.
+    """
+    from ...services.residue_manager import ResidueManager
+    residue_manager = ResidueManager()
+
+    # Get filtered residues
+    residues, total = get_residues_filtered(
+        db,
+        limit=limit,
+        offset=offset,
+        status_filter=status,
+        composite_id=composite_id,
+    )
+
+    # Get summary statistics
+    stats = residue_manager.get_stats(db)
+    pagination = calculate_pagination(offset, limit, total)
+
+    return templates.TemplateResponse("public/residue_status.html", {
+        "request": request,
+        "residues": residues,
+        **pagination.to_dict(),
+        # Filter values for form state
+        "filter_status": status,
+        "filter_composite_id": composite_id,
+        # Statistics
+        "stats": stats,
+        "now": datetime.utcnow(),
     })
 
 

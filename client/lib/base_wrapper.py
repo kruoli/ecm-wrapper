@@ -5,6 +5,8 @@ Base wrapper class containing shared functionality for ECM and YAFU wrappers.
 import atexit
 import datetime
 import logging
+import os
+import signal
 import subprocess
 import threading
 import time
@@ -570,6 +572,15 @@ class BaseWrapper:
                     # Call optional per-line callback
                     if line_callback:
                         line_callback(line, output_lines)
+
+                # Check if stop requested (e.g. second Ctrl+C)
+                if hasattr(self, 'stop_event') and self.stop_event.is_set():
+                    self.logger.info(f"{log_prefix}: Stop requested, sending SIGINT to subprocess")
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGINT)
+                    except (OSError, ProcessLookupError):
+                        pass
+                    break
 
             process.wait()
         except KeyboardInterrupt:

@@ -151,7 +151,7 @@
     </div>
     {% endif %}
 
-    {% if factors_with_group_orders %}
+    {% if all_factors %}
     <div class="card">
         <h2>Factor Group Order Data</h2>
         <div class="table-wrapper">
@@ -162,7 +162,7 @@
                     <th>Group Order</th>
                     <th>Factorization</th>
                 </tr>
-                {% for f in factors_with_group_orders %}
+                {% for f in all_factors %}
                 <tr>
                     <td class="number-display">{{ esc(f.factor) }}</td>
                     <td>{% if f.sigma %}ECM (&sigma;={{ "{:,}".format(f.sigma|int) }}){% elif f.method %}{{ f.method|upper }}{% else %}N/A{% endif %}</td>

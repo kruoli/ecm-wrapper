@@ -799,6 +799,17 @@ class CompositeService:
                 }
                 for attempt in attempts[:10]  # Last 10 attempts
             ],
+            'all_factors': [
+                {
+                    'factor': f.factor,
+                    'sigma': f.sigma,
+                    'method': f.attempt.method if f.attempt else None,
+                    'group_order': f.group_order,
+                    'group_order_factorization': f.group_order_factorization,
+                    'is_prime': f.is_prime
+                }
+                for f in factors_with_details
+            ],
             'factors_with_group_orders': [
                 {
                     'factor': f.factor,

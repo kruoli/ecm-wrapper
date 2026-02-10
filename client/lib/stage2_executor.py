@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional, Tuple, List, Callable, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from .ecm_command import build_ecm_command
 from .parsing_utils import parse_ecm_output
 
 if TYPE_CHECKING:
@@ -183,17 +184,11 @@ class Stage2Executor:
     def _worker_stage2(self, chunk_file: Path, worker_id: int, b1: int,
                        early_termination: bool, progress_interval: int) -> Optional[Tuple[str, str]]:
         """Worker function for Stage 2 processing."""
-        cmd = [self.ecm_path, '-resume', str(chunk_file)]
-        if self.verbose:
-            cmd.append('-v')
-        cmd.append('-one')  # Stop after finding first factor (even if cofactor is composite)
-
-        # Add B1 parameter
-        cmd.append(str(b1))
-
-        # Add B2 parameter: -1 means use GMP-ECM default (omit B2), otherwise pass the value
-        if self.b2 != -1:
-            cmd.append(str(self.b2))
+        cmd = build_ecm_command(
+            self.ecm_path, b1,
+            b2=self.b2, residue_load=chunk_file,
+            verbose=self.verbose, one=True,
+        )
 
         # Count total lines in this worker's chunk for progress reporting and diagnostics
         total_lines = 0

@@ -261,6 +261,7 @@ async def get_composite_details_page(
         "progress": details['progress'],
         "recent_attempts": details['recent_attempts'],
         "active_work": details['active_work'],
+        "all_factors": details['all_factors'],
         "factors_with_group_orders": details['factors_with_group_orders'],
         "db": db,
         "Factor": Factor

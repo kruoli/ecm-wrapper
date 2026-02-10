@@ -8,6 +8,7 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -171,7 +172,7 @@ class BaseWrapper:
             level=getattr(logging, log_level),
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(log_file),
+                logging.FileHandler(log_file, encoding='utf-8'),
                 logging.StreamHandler()
             ]
         )
@@ -577,7 +578,10 @@ class BaseWrapper:
                 if hasattr(self, 'stop_event') and self.stop_event.is_set():
                     self.logger.info(f"{log_prefix}: Stop requested, sending SIGINT to subprocess")
                     try:
-                        os.killpg(os.getpgid(process.pid), signal.SIGINT)
+                        if sys.platform != 'win32':
+                            os.killpg(os.getpgid(process.pid), signal.SIGINT)
+                        else:
+                            process.send_signal(signal.CTRL_BREAK_EVENT)
                     except (OSError, ProcessLookupError):
                         pass
                     break

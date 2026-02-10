@@ -24,6 +24,7 @@ from lib.cleanup_helpers import handle_shutdown
 
 # New modularized utilities
 from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
+from lib.ecm_command import build_ecm_command
 from lib.ecm_math import (
     trial_division, is_probably_prime, get_b1_for_digit_length
 )
@@ -423,7 +424,10 @@ class ECMWrapper(BaseWrapper):
                 # SIGTERM the entire process group (worker + its ECM child)
                 try:
                     if p.pid is not None:
-                        os.killpg(p.pid, signal.SIGTERM)
+                        if sys.platform != 'win32':
+                            os.killpg(p.pid, signal.SIGTERM)
+                        else:
+                            p.terminate()
                 except (ProcessLookupError, PermissionError):
                     pass
                 try:
@@ -434,7 +438,10 @@ class ECMWrapper(BaseWrapper):
                 # Escalate to SIGKILL if SIGTERM didn't work
                 try:
                     if p.pid is not None:
-                        os.killpg(p.pid, signal.SIGKILL)
+                        if sys.platform != 'win32':
+                            os.killpg(p.pid, signal.SIGKILL)
+                        else:
+                            p.kill()
                 except (ProcessLookupError, PermissionError):
                     pass
                 try:
@@ -1284,50 +1291,14 @@ class ECMWrapper(BaseWrapper):
         """
         ecm_path = self.config['programs']['gmp_ecm']['path']
 
-        # Build command
-        cmd = [ecm_path]
-
-        # Method-specific flags
-        if method == "pm1":
-            cmd.append('-pm1')
-        elif method == "pp1":
-            cmd.append('-pp1')
-
-        # GPU flags (must come early)
-        if use_gpu and method == "ecm":
-            cmd.append('-gpu')
-            if gpu_device is not None:
-                cmd.extend(['-gpudevice', str(gpu_device)])
-            if gpu_curves is not None:
-                cmd.extend(['-gpucurves', str(gpu_curves)])
-
-        # Residue operations
-        if residue_save:
-            cmd.extend(['-save', str(residue_save)])
-        if residue_load:
-            cmd.extend(['-resume', str(residue_load)])
-
-        # Verbosity
-        if verbose:
-            cmd.append('-v')
-
-        # Parametrization (ECM only)
-        if param is not None and method == "ecm":
-            cmd.extend(['-param', str(param)])
-
-        # Sigma (ECM only)
-        if sigma and method == "ecm":
-            cmd.extend(['-sigma', str(sigma)])
-
-        # Curves
-        cmd.extend(['-c', str(curves)])
-
-        # B1 parameter
-        cmd.append(str(b1))
-
-        # B2 parameter
-        if b2 is not None:
-            cmd.append(str(b2))
+        # Build command using shared builder
+        cmd = build_ecm_command(
+            ecm_path, b1,
+            b2=b2, curves=curves, method=method,
+            use_gpu=use_gpu, gpu_device=gpu_device, gpu_curves=gpu_curves,
+            residue_save=residue_save, residue_load=residue_load,
+            verbose=verbose, param=param, sigma=sigma,
+        )
 
         # Execute subprocess with streaming
         try:

@@ -11,7 +11,9 @@ Design note: multiprocessing requires pickleable functions, so we provide both:
 """
 import os
 import signal
+import sys
 from typing import Optional, Dict, Any
+from .ecm_command import build_ecm_command
 from .parsing_utils import parse_ecm_output, ECMPatterns
 from .subprocess_utils import execute_subprocess
 
@@ -64,28 +66,12 @@ class ECMWorkerProcess:
             - curves_completed: Number of curves completed
             - raw_output: Full program output
         """
-        # Build command for this worker
-        cmd = [self.ecm_path]
-
-        # Add method-specific parameters
-        if self.method == "pm1":
-            cmd.append('-pm1')
-        elif self.method == "pp1":
-            cmd.append('-pp1')
-
-        if self.verbose:
-            cmd.append('-v')
-
-        # Stop on first factor found (ECM only)
-        # This makes each worker stop when IT finds a factor, saving compute.
-        # The stop_event mechanism handles stopping OTHER workers.
-        if self.method == "ecm":
-            cmd.append('-one')
-
-        # Run specified number of curves
-        cmd.extend(['-c', str(self.curves), str(self.b1)])
-        if self.b2 is not None:
-            cmd.append(str(self.b2))
+        # Build command for this worker using shared builder
+        cmd = build_ecm_command(
+            self.ecm_path, self.b1,
+            b2=self.b2, curves=self.curves, method=self.method,
+            verbose=self.verbose, one=(self.method == "ecm"),
+        )
 
         try:
             print(f"Worker {self.worker_id} starting {self.curves} curves")
@@ -206,7 +192,8 @@ def run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optional
     # Create a new process group for this worker (worker PID = PGID).
     # Child subprocesses (ECM binaries) inherit this group when spawned with
     # start_new_session=False, so os.killpg() from the parent kills the entire group.
-    os.setpgrp()
+    if sys.platform != 'win32':
+        os.setpgrp()
 
     try:
         worker = ECMWorkerProcess(worker_id, composite, b1, b2, curves, verbose, method, ecm_path,

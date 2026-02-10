@@ -8,6 +8,7 @@ dictionary-based access with proper dataclasses. This enables:
 - Clear documentation of available settings
 """
 
+import sys
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from pathlib import Path
@@ -111,7 +112,7 @@ class CADOConfig:
 @dataclass
 class TLevelConfig:
     """T-level calculator configuration."""
-    path: str = "bin/t-level"
+    path: str = "bin/t-level.exe" if sys.platform == 'win32' else "bin/t-level"
 
 
 @dataclass

@@ -11,8 +11,11 @@ This module provides functions for:
 import logging
 import random
 import re
+import sys
 from typing import List, Tuple, Optional
 from .subprocess_utils import execute_subprocess_simple
+
+TLEVEL_BINARY_DEFAULT = 'bin/t-level.exe' if sys.platform == 'win32' else 'bin/t-level'
 
 
 logger = logging.getLogger(__name__)
@@ -118,7 +121,7 @@ def is_probably_prime(n: int, trials: int = 10) -> bool:
     return True
 
 
-def calculate_tlevel(curve_history: List[str], tlevel_binary: str = 'bin/t-level',
+def calculate_tlevel(curve_history: List[str], tlevel_binary: str = TLEVEL_BINARY_DEFAULT,
                      base_tlevel: float = 0.0) -> float:
     """
     Call t-level binary to calculate current t-level.
@@ -237,7 +240,7 @@ def _query_tlevel_for_curves(curves: int, b1: int, b2: Optional[int], parametriz
 def calculate_curves_to_target_direct(current_tlevel: float, target_tlevel: float,
                                       b1: int, parametrization: int = 1,
                                       b2: Optional[int] = None,
-                                      tlevel_binary: str = 'bin/t-level') -> Optional[int]:
+                                      tlevel_binary: str = TLEVEL_BINARY_DEFAULT) -> Optional[int]:
     """
     Use t-level binary to calculate exact curves needed to reach target.
 

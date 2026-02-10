@@ -434,7 +434,7 @@ async def residue_status_public(
     limit: int = Query(100, ge=1, le=200, description="Items per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     status: Optional[str] = Query(None, description="Filter by status"),
-    composite_id: Optional[int] = Query(None, description="Filter by composite ID"),
+    composite_id: Optional[str] = Query(None, description="Filter by composite ID"),
 ):
     """
     Public read-only dashboard showing residue pool status.
@@ -443,13 +443,16 @@ async def residue_status_public(
     from ...services.residue_manager import ResidueManager
     residue_manager = ResidueManager()
 
+    # Parse composite_id (empty string from form submission → None)
+    parsed_composite_id = int(composite_id) if composite_id and composite_id.strip() else None
+
     # Get filtered residues
     residues, total = get_residues_filtered(
         db,
         limit=limit,
         offset=offset,
         status_filter=status,
-        composite_id=composite_id,
+        composite_id=parsed_composite_id,
     )
 
     # Get summary statistics
@@ -462,7 +465,7 @@ async def residue_status_public(
         **pagination.to_dict(),
         # Filter values for form state
         "filter_status": status,
-        "filter_composite_id": composite_id,
+        "filter_composite_id": parsed_composite_id,
         # Statistics
         "stats": stats,
         "now": datetime.utcnow(),
@@ -533,6 +536,7 @@ async def get_composite_details_public(
         "progress": details['progress'],
         "recent_attempts": details['recent_attempts'],
         "active_work": details['active_work'],
+        "all_factors": details['all_factors'],
         "factors_with_group_orders": details['factors_with_group_orders'],
         "method_breakdown": method_breakdown,
         "db": db,

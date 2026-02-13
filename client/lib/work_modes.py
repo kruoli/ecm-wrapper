@@ -667,6 +667,7 @@ class Stage2ConsumerMode(WorkMode):
         self._curves_completed: int = 0
         self._found_factor: bool = False
         self._raw_output: str = ""  # Aggregated ECM output from workers
+        self._primary_submission_failed: bool = False
         # Import here to avoid circular dependency
         from .stage2_executor import Stage2Executor
         self.Stage2Executor = Stage2Executor
@@ -830,19 +831,37 @@ class Stage2ConsumerMode(WorkMode):
             self.logger.error("Failed to submit stage 2 results")
             return False
 
-        # Extract attempt_id
-        stage2_attempt_id = submit_response.get('attempt_id')
-        if not stage2_attempt_id:
-            self.logger.error("No attempt_id returned from submit")
-            return False
-
-        print(f"Stage 2 attempt ID: {stage2_attempt_id}")
-        self._stage2_attempt_id = stage2_attempt_id
+        # Use primary endpoint's response for attempt_id (needed for complete_residue)
+        primary = submit_response.primary_response
+        if primary:
+            stage2_attempt_id = primary.get('attempt_id')
+            if not stage2_attempt_id:
+                self.logger.error("No attempt_id returned from primary endpoint")
+                return False
+            print(f"Stage 2 attempt ID: {stage2_attempt_id}")
+            self._stage2_attempt_id = stage2_attempt_id
+            self._primary_submission_failed = False
+        else:
+            # Primary failed but another endpoint succeeded - can't call complete_residue
+            self.logger.warning("Primary endpoint submission failed (other endpoints may have succeeded)")
+            self.logger.warning("Skipping residue completion - failed submission saved for retry via resend_failed.py")
+            self._stage2_attempt_id = None
+            self._primary_submission_failed = True
 
         return True
 
     def complete_work(self, work: Dict[str, Any]) -> None:
         assert self.current_residue_id is not None  # Set in on_work_started
+
+        # If primary endpoint submission failed, we can't complete the residue
+        # (the attempt_id would be from a different endpoint)
+        if self._primary_submission_failed:
+            self.logger.warning(
+                f"Skipping complete_residue for residue {self.current_residue_id} - "
+                "primary endpoint submission failed, resubmit via resend_failed.py first"
+            )
+            self.api_client.abandon_residue(self.ctx.client_id, self.current_residue_id)
+            return
 
         # Server requires 75% completion if no factor found
         # If we didn't complete enough curves (e.g., graceful shutdown), abandon instead
@@ -882,6 +901,7 @@ class Stage2ConsumerMode(WorkMode):
     def on_work_completed(self, work: Dict[str, Any], result: FactorResult) -> None:
         self.current_residue_id = None
         self.local_residue_file = None
+        self._primary_submission_failed = False
         super().on_work_completed(work, result)
 
     def cleanup_on_failure(self, work: Optional[Dict[str, Any]], error: BaseException) -> None:

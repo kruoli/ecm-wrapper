@@ -107,7 +107,7 @@
                     {% set param = attempt.parametrization if attempt and attempt.parametrization is not none else '' %}
                     {% set client = attempt.client_id if attempt else 'Unknown' %}
                     {% set factor_digits = factor.factor|length %}
-                    {% set factor_bits = (factor_digits * 3.322)|int if factor_digits > 0 else 0 %}
+                    {% set factor_bits = factor.factor|bit_length %}
                     <tr>
                         <td class="factor number" style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">
                             <span title="{{ factor.factor }}">{{ factor.factor }}</span>

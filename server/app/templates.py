@@ -32,3 +32,14 @@ templates.env.globals.update({
     'format_time': format_time_remaining,
     'format_factors': format_factors_display
 })
+
+
+def _bit_length(number_str: str) -> int:
+    """Calculate exact bit length from a number string."""
+    try:
+        return int(number_str).bit_length()
+    except (ValueError, TypeError):
+        return 0
+
+
+templates.env.filters['bit_length'] = _bit_length

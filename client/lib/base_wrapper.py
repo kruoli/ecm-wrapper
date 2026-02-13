@@ -23,6 +23,35 @@ if TYPE_CHECKING:
     from .typed_config import AppConfig
 
 
+class SubmissionResult:
+    """Tracks per-endpoint submission responses."""
+
+    def __init__(self):
+        self.endpoint_responses: Dict[str, Optional[Dict[str, Any]]] = {}
+        # Ordered: first entry = primary endpoint
+
+    @property
+    def primary_response(self) -> Optional[Dict[str, Any]]:
+        """Response from the primary (first) endpoint, or None if it failed."""
+        if self.endpoint_responses:
+            return next(iter(self.endpoint_responses.values()))
+        return None
+
+    @property
+    def first_success(self) -> Optional[Dict[str, Any]]:
+        """First successful response from any endpoint."""
+        return next((r for r in self.endpoint_responses.values() if r is not None), None)
+
+    def __bool__(self) -> bool:
+        """True if any endpoint succeeded (backward compat)."""
+        return any(r is not None for r in self.endpoint_responses.values())
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Dict-like access to first successful response (backward compat)."""
+        resp = self.first_success
+        return resp.get(key, default) if resp else default
+
+
 class BaseWrapper:
     """Base class for factorization wrappers with common functionality."""
 
@@ -249,7 +278,7 @@ class BaseWrapper:
 
     def submit_payload_to_endpoints(self, payload: Dict[str, Any],
                                     save_on_failure: bool = True,
-                                    results_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+                                    results_context: Optional[Dict[str, Any]] = None) -> 'SubmissionResult':
         """
         Submit a pre-built payload to all configured API endpoints.
 
@@ -259,16 +288,15 @@ class BaseWrapper:
             results_context: Optional full results dict for failure persistence
 
         Returns:
-            Response dictionary from first successful submission (contains attempt_id, composite_id, etc.)
-            Returns None if all submissions failed
+            SubmissionResult with per-endpoint responses.
+            Bool-truthy if any endpoint succeeded (backward compat).
         """
         # Ensure API clients are initialized
         if not self.api_clients:
             self._ensure_api_clients()
         assert self.api_clients is not None  # For type checker
 
-        submission_results = []
-        first_success_response = None
+        result = SubmissionResult()
 
         for api_client_info in self.api_clients:
             api_client = api_client_info['client']
@@ -284,38 +312,34 @@ class BaseWrapper:
 
                 if response:
                     self.logger.info(f"✓ Successfully submitted to {endpoint_name}")
-                    submission_results.append(True)
-                    # Keep track of first successful response (contains attempt_id)
-                    if first_success_response is None:
-                        first_success_response = response
+                    result.endpoint_responses[endpoint_name] = response
                 else:
                     self.logger.warning(f"✗ Failed to submit to {endpoint_name}")
-                    submission_results.append(False)
+                    result.endpoint_responses[endpoint_name] = None
 
             except Exception as e:
                 self.logger.error(f"✗ Error submitting to {endpoint_name}: {str(e)}")
-                submission_results.append(False)
+                result.endpoint_responses[endpoint_name] = None
 
         # Log summary if multiple endpoints
         if len(self.api_clients) > 1:
-            success_count = sum(submission_results)
-            total_count = len(submission_results)
+            success_count = sum(1 for r in result.endpoint_responses.values() if r is not None)
+            total_count = len(result.endpoint_responses)
             self.logger.info(f"Submission summary: {success_count}/{total_count} endpoints succeeded")
 
         # If all submissions failed, enqueue for automatic retry
-        if first_success_response is None and save_on_failure:
+        if not result and save_on_failure:
             self.submission_queue.enqueue_result(payload, results_context)
 
-        # Return first successful response (or None if all failed)
-        return first_success_response
+        return result
 
     def submit_result(self, results: Dict[str, Any], project: Optional[str] = None,
-                     program: str = "unknown") -> Optional[Dict[str, Any]]:
+                     program: str = "unknown") -> 'SubmissionResult':
         """
         Submit results to API endpoint(s) with retry logic.
 
         If multiple endpoints are configured, submits to all of them.
-        Returns response from first successful submission (contains attempt_id).
+        Returns SubmissionResult with per-endpoint responses.
         """
         self._ensure_api_clients()  # Lazy load API clients on first use
         assert self.api_clients is not None  # For type checker

@@ -221,8 +221,7 @@
                     {% set method = attempt.method if attempt else 'Unknown' %}
                     {% set param = attempt.parametrization if attempt and attempt.parametrization is not none else '' %}
                     {% set factor_digits = factor.factor|length %}
-                    {# Approximate bits from digits: bits ≈ digits × log2(10) ≈ digits × 3.322 #}
-                    {% set factor_bits = (factor_digits * 3.322)|int if factor_digits > 0 else 0 %}
+                    {% set factor_bits = factor.factor|bit_length %}
                     <tr>
                         <td class="factor number">{{ factor.factor }}</td>
                         <td>{{ factor_bits }}</td>

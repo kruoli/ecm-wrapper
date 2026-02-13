@@ -19,11 +19,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Initialize rate limiter - 10 submissions per minute per IP
+# Initialize rate limiter - 30 submissions per minute per IP
+# Stage 2 consumers can submit rapidly when processing multiple residues
 limiter = Limiter(key_func=get_remote_address)
 
 @router.post("/submit_result", response_model=SubmitResultResponse)
-@limiter.limit("10/minute")
+@limiter.limit("30/minute")
 async def submit_result(
     result_request: SubmitResultRequest,
     request: Request,

@@ -746,19 +746,17 @@ class ECMWrapper(BaseWrapper):
 
                         # Submit results with factor (b2=0 since stage 2 never ran)
                         if not config.no_submit and curves > 0:
-                            # Extract just the factor strings from (factor, sigma) tuples
-                            factor_strings = [f for f, s in all_stage1_factors]
-                            step_results = {
-                                'success': True,
-                                'factors_found': factor_strings,
-                                'curves_completed': curves,
-                                'execution_time': stage1_time,
-                                'composite': config.composite,
-                                'method': 'ecm',
-                                'b1': b1,
-                                'b2': 0,  # Stage 1 only
-                                'parametrization': 3
-                            }
+                            # Build FactorResult from stage 1 factors for consistent submission
+                            s1_result = FactorResult()
+                            for f, s in all_stage1_factors:
+                                s1_result.add_factor(f, s)
+                            s1_result.curves_run = curves
+                            s1_result.execution_time = stage1_time
+
+                            step_results = s1_result.to_dict(config.composite, 'ecm')
+                            step_results['b1'] = b1
+                            step_results['b2'] = 0  # Stage 1 only
+                            step_results['parametrization'] = 3
                             if config.work_id:
                                 step_results['work_id'] = config.work_id
                             self.submit_result(step_results, config.project, 'gmp-ecm-ecm')
@@ -807,17 +805,17 @@ class ECMWrapper(BaseWrapper):
                                 self.logger.info("[CPU Thread] Factor found, will break after cleanup")
                                 # Submit results with factor before breaking
                                 if not config.no_submit and curves_completed > 0:
-                                    step_results = {
-                                        'success': True,
-                                        'factors_found': all_stage2_factors,
-                                        'curves_completed': curves_completed,
-                                        'execution_time': stage1_time + stage2_time,
-                                        'composite': config.composite,
-                                        'method': 'ecm',
-                                        'b1': b1,
-                                        'b2': b2,
-                                        'parametrization': 3
-                                    }
+                                    # Build FactorResult for consistent submission
+                                    s2_result = FactorResult()
+                                    for f in all_stage2_factors:
+                                        s2_result.add_factor(f, sigma)
+                                    s2_result.curves_run = curves_completed
+                                    s2_result.execution_time = stage1_time + stage2_time
+
+                                    step_results = s2_result.to_dict(config.composite, 'ecm')
+                                    step_results['b1'] = b1
+                                    step_results['b2'] = b2
+                                    step_results['parametrization'] = 3
                                     if config.work_id:
                                         step_results['work_id'] = config.work_id
                                     self.submit_result(step_results, config.project, 'gmp-ecm-ecm')
@@ -833,7 +831,7 @@ class ECMWrapper(BaseWrapper):
                         if not config.no_submit and curves_completed > 0:
                             step_results = {
                                 'success': True,
-                                'factors_found': all_stage2_factors if all_stage2_factors else [],
+                                'factors_found': [],
                                 'curves_completed': curves_completed,
                                 'execution_time': stage1_time + stage2_time,
                                 'composite': config.composite,
@@ -1092,18 +1090,10 @@ class ECMWrapper(BaseWrapper):
                     # Calculate B2 for submission (two-stage uses B1*multiplier, else use GMP default)
                     submission_b2 = int(b1 * config.b2_multiplier) if config.use_two_stage else None
 
-                    step_results = {
-                        'success': True,
-                        'factors_found': step_result.factors,
-                        'curves_completed': step_result.curves_run,
-                        'execution_time': step_result.execution_time,
-                        'raw_output': step_result.raw_output,
-                        'composite': config.composite,
-                        'method': 'ecm',
-                        'b1': b1,
-                        'b2': submission_b2,
-                        'parametrization': effective_param
-                    }
+                    step_results = step_result.to_dict(config.composite, 'ecm')
+                    step_results['b1'] = b1
+                    step_results['b2'] = submission_b2
+                    step_results['parametrization'] = effective_param
                     if config.work_id:
                         step_results['work_id'] = config.work_id
 

@@ -421,7 +421,7 @@
                     {% set comp_display = (comp.number[:30] + '...') if comp.number|length > 30 else comp.number %}
                     {% set t_data = calc_t_progress(comp.current_t_level, comp.target_t_level, comp.ecm_progress) %}
                     {% set comp_digits = comp.current_composite|length if comp.current_composite else 0 %}
-                    {% set comp_bits = (comp_digits * 3.322)|int if comp_digits > 0 else 0 %}
+                    {% set comp_bits = comp.current_composite|bit_length if comp.current_composite else 0 %}
                     <!-- Main aggregated row -->
                     <tr class="composite-row" onclick="toggleExpand({{ comp.id }})" style="cursor: pointer; background: #f8f9fa;">
                         <td style="width: 30px; text-align: center;">

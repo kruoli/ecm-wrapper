@@ -381,14 +381,17 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
     elif args.two_stage and args.method == 'ecm':
         if not args.composite:
             errors['composite'] = "Two-stage mode requires composite number. Use --composite argument."
-        # Two-stage mode requires explicit B2 for Stage 2 coordination
-        # Exception: B2=0 is allowed when saving residues (Stage 1 only)
-        if args.b2 is None and config:
+        # Two-stage mode requires a B2 source for Stage 2 coordination.
+        # Valid B2 sources: --b2, --b2-multiplier, --tlevel (calculates B2 automatically), or config default.
+        has_b2_source = (args.b2 is not None
+                         or getattr(args, 'b2_multiplier', None) is not None
+                         or (hasattr(args, 'tlevel') and args.tlevel is not None))
+        if not has_b2_source and config:
             _, b2_default = get_method_defaults(config, args.method)
             if not b2_default:
-                errors['b2'] = "Two-stage mode requires B2 bound. Use --b2 argument or set default_b2 in config."
-        elif args.b2 is None and not config:
-            errors['b2'] = "Two-stage mode requires B2 bound. Use --b2 argument."
+                errors['b2'] = "Two-stage mode requires B2 bound. Use --b2, --b2-multiplier, or --tlevel."
+        elif not has_b2_source and not config:
+            errors['b2'] = "Two-stage mode requires B2 bound. Use --b2, --b2-multiplier, or --tlevel."
 
     # Multiprocess mode validation
     elif args.multiprocess:

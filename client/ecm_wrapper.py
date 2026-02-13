@@ -21,7 +21,7 @@ from typing import Optional
 
 from lib.ecm_executor import ECMWrapper
 from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
-from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_workers_default, get_max_batch_default, parse_int_with_scientific
+from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_workers_default, get_max_batch_default, parse_int_with_scientific, validate_ecm_args
 from lib.stage1_helpers import submit_stage1_complete_workflow
 from lib.results_builder import results_for_stage1
 from lib.user_output import UserOutput
@@ -42,6 +42,13 @@ def main():
     if not args.composite and not args.stage2_only:
         output.error("--composite is required for local/manual factorization")
         output.info("For server-coordinated work, use ecm_client.py instead")
+        sys.exit(1)
+
+    # Validate argument combinations before doing any real work
+    validation_errors = validate_ecm_args(args)
+    if validation_errors:
+        for msg in validation_errors.values():
+            output.error(msg)
         sys.exit(1)
 
     # Initialize wrapper (this loads and merges client.yaml + client.local.yaml)

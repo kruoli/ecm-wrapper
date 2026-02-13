@@ -412,53 +412,59 @@ class ECMWrapper(BaseWrapper):
             except Exception:
                 pass  # Manager connection may be broken
 
-        # Wait for all processes to finish.
-        # Use os.killpg() to kill the entire process group (worker + ECM binary)
-        # since each worker calls os.setpgrp() and ECM inherits that group.
-        for p in processes:
-            try:
-                p.join(timeout=10)
-            except Exception:
-                pass
-            if p.is_alive():
-                # SIGTERM the entire process group (worker + its ECM child)
+        # Suppress SIGINT during cleanup to prevent additional Ctrl+C from
+        # breaking out of the kill loop and leaving orphaned child processes.
+        prev_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            # Wait for all processes to finish.
+            # Use os.killpg() to kill the entire process group (worker + ECM binary)
+            # since each worker calls os.setpgrp() and ECM inherits that group.
+            for p in processes:
                 try:
-                    if p.pid is not None:
-                        if sys.platform != 'win32':
-                            os.killpg(p.pid, signal.SIGTERM)
-                        else:
-                            p.terminate()
-                except (ProcessLookupError, PermissionError):
-                    pass
-                try:
-                    p.join(timeout=5)
+                    p.join(timeout=10)
                 except Exception:
                     pass
-            if p.is_alive():
-                # Escalate to SIGKILL if SIGTERM didn't work
+                if p.is_alive():
+                    # SIGTERM the entire process group (worker + its ECM child)
+                    try:
+                        if p.pid is not None:
+                            if sys.platform != 'win32':
+                                os.killpg(p.pid, signal.SIGTERM)
+                            else:
+                                p.terminate()
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    try:
+                        p.join(timeout=5)
+                    except Exception:
+                        pass
+                if p.is_alive():
+                    # Escalate to SIGKILL if SIGTERM didn't work
+                    try:
+                        if p.pid is not None:
+                            if sys.platform != 'win32':
+                                os.killpg(p.pid, signal.SIGKILL)
+                            else:
+                                p.kill()
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    try:
+                        p.join(timeout=2)
+                    except Exception:
+                        pass
+
+            # Shutdown the manager in a daemon thread to avoid hanging
+            def _shutdown_manager():
                 try:
-                    if p.pid is not None:
-                        if sys.platform != 'win32':
-                            os.killpg(p.pid, signal.SIGKILL)
-                        else:
-                            p.kill()
-                except (ProcessLookupError, PermissionError):
-                    pass
-                try:
-                    p.join(timeout=2)
+                    manager.shutdown()
                 except Exception:
                     pass
 
-        # Shutdown the manager in a daemon thread to avoid hanging
-        def _shutdown_manager():
-            try:
-                manager.shutdown()
-            except Exception:
-                pass
-
-        shutdown_thread = threading.Thread(target=_shutdown_manager, daemon=True)
-        shutdown_thread.start()
-        shutdown_thread.join(timeout=5)
+            shutdown_thread = threading.Thread(target=_shutdown_manager, daemon=True)
+            shutdown_thread.start()
+            shutdown_thread.join(timeout=5)
+        finally:
+            signal.signal(signal.SIGINT, prev_handler)
 
         if self.interrupted:
             print(f"\nMultiprocess ECM stopped. Completed {total_curves_completed} curves before interrupt.")

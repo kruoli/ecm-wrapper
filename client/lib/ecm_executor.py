@@ -509,6 +509,8 @@ class ECMWrapper(BaseWrapper):
         # Shared state between threads
         residue_queue: queue.Queue[Any] = queue.Queue(maxsize=2)  # Small queue for backpressure
         shutdown_event = threading.Event()
+        self.stop_event.clear()        # Reset from any previous run's factor-found
+        self.interrupted = False       # Reset from any previous run's interrupt
 
         # Results accumulation (protected by lock)
         result_lock = threading.Lock()

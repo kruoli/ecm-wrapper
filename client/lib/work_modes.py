@@ -35,6 +35,7 @@ from .cleanup_helpers import handle_shutdown
 from .results_builder import results_for_stage1
 from .arg_parser import resolve_gpu_settings, resolve_worker_count, get_workers_default, get_max_batch_default
 from .ecm_arg_helpers import parse_sigma_arg, resolve_param
+from .api_client import ResourceNotFoundError
 
 if TYPE_CHECKING:
     from .ecm_executor import ECMWrapper
@@ -628,10 +629,13 @@ class Stage1ProducerMode(WorkMode):
 
     def complete_work(self, work: Dict[str, Any]) -> None:
         assert self.current_work_id is not None  # Set in on_work_started
-        if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
-            self.wrapper.submission_queue.enqueue_work_completion(
-                self.current_work_id, self.ctx.client_id
-            )
+        try:
+            if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
+                self.wrapper.submission_queue.enqueue_work_completion(
+                    self.current_work_id, self.ctx.client_id
+                )
+        except ResourceNotFoundError:
+            self.logger.warning(f"Work {self.current_work_id} already expired/completed on server, skipping")
 
     def cleanup_on_failure(self, work: Optional[Dict[str, Any]], error: BaseException) -> None:
         if self.current_work_id:
@@ -875,23 +879,26 @@ class Stage2ConsumerMode(WorkMode):
         else:
             # Completed enough curves or found a factor - mark as complete
             print("Completing residue work...")
-            complete_result = self.api_client.complete_residue(
-                client_id=self.ctx.client_id,
-                residue_id=self.current_residue_id,
-                stage2_attempt_id=self._stage2_attempt_id
-            )
-
-            if complete_result:
-                new_t_level = complete_result.get('new_t_level')
-                if new_t_level is not None:
-                    print(f"T-level updated to {new_t_level:.2f}")
-            else:
-                self.logger.warning("Failed to complete residue on server - queuing for retry")
-                self.wrapper.submission_queue.enqueue_residue_completion(
-                    residue_id=self.current_residue_id,
+            try:
+                complete_result = self.api_client.complete_residue(
                     client_id=self.ctx.client_id,
+                    residue_id=self.current_residue_id,
                     stage2_attempt_id=self._stage2_attempt_id
                 )
+
+                if complete_result:
+                    new_t_level = complete_result.get('new_t_level')
+                    if new_t_level is not None:
+                        print(f"T-level updated to {new_t_level:.2f}")
+                else:
+                    self.logger.warning("Failed to complete residue on server - queuing for retry")
+                    self.wrapper.submission_queue.enqueue_residue_completion(
+                        residue_id=self.current_residue_id,
+                        client_id=self.ctx.client_id,
+                        stage2_attempt_id=self._stage2_attempt_id
+                    )
+            except ResourceNotFoundError:
+                self.logger.warning(f"Residue {self.current_residue_id} already expired/completed on server, skipping")
 
         # Clean up local residue file
         if self.local_residue_file and self.local_residue_file.exists():
@@ -1120,10 +1127,13 @@ class P1WorkMode(WorkMode):
 
     def complete_work(self, work: Dict[str, Any]) -> None:
         assert self.current_work_id is not None
-        if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
-            self.wrapper.submission_queue.enqueue_work_completion(
-                self.current_work_id, self.ctx.client_id
-            )
+        try:
+            if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
+                self.wrapper.submission_queue.enqueue_work_completion(
+                    self.current_work_id, self.ctx.client_id
+                )
+        except ResourceNotFoundError:
+            self.logger.warning(f"Work {self.current_work_id} already expired/completed on server, skipping")
 
 
 
@@ -1325,10 +1335,13 @@ class StandardAutoWorkMode(WorkMode):
 
     def complete_work(self, work: Dict[str, Any]) -> None:
         assert self.current_work_id is not None  # Set in on_work_started
-        if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
-            self.wrapper.submission_queue.enqueue_work_completion(
-                self.current_work_id, self.ctx.client_id
-            )
+        try:
+            if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
+                self.wrapper.submission_queue.enqueue_work_completion(
+                    self.current_work_id, self.ctx.client_id
+                )
+        except ResourceNotFoundError:
+            self.logger.warning(f"Work {self.current_work_id} already expired/completed on server, skipping")
 
 
 class CompositeTargetMode(StandardAutoWorkMode):

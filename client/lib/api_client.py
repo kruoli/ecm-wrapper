@@ -19,6 +19,11 @@ from .file_utils import save_json
 logger = logging.getLogger(__name__)
 
 
+class ResourceNotFoundError(Exception):
+    """Raised when an API resource returns 404 (permanently gone)."""
+    pass
+
+
 class APIClient:
     """
     Handle API communication with retry logic and failure persistence.
@@ -65,10 +70,10 @@ class APIClient:
                 self.logger.info(f"{operation_name} succeeded")
                 return response
             except requests.exceptions.HTTPError as e:
-                # Don't retry on 404 - resource doesn't exist
+                # Don't retry on 404 - resource is permanently gone
                 if e.response is not None and e.response.status_code == 404:
                     self.logger.warning(f"{operation_name} failed: resource not found (404)")
-                    return None
+                    raise ResourceNotFoundError(f"{operation_name}: resource not found (404)")
                 # Fall through to retry logic for other HTTP errors
                 if attempt < self.retry_attempts:
                     delay = 2 ** attempt
@@ -537,8 +542,13 @@ class APIClient:
         def api_call():
             return requests.delete(url, params=params, timeout=self.timeout)
 
-        response = self._retry_with_exponential_backoff(f"Abandon work {work_id}", api_call)
-        return response is not None
+        try:
+            response = self._retry_with_exponential_backoff(f"Abandon work {work_id}", api_call)
+            return response is not None
+        except ResourceNotFoundError:
+            # 404 = work already gone (expired, completed, etc.) - abandon goal achieved
+            self.logger.info(f"Work {work_id} already gone (404), treating abandon as success")
+            return True
 
     # ==================== Residue Management Methods ====================
 
@@ -767,8 +777,13 @@ class APIClient:
         def api_call():
             return requests.delete(url, headers=headers, timeout=self.timeout)
 
-        response = self._retry_with_exponential_backoff(f"Release residue {residue_id}", api_call)
-        return response is not None
+        try:
+            response = self._retry_with_exponential_backoff(f"Release residue {residue_id}", api_call)
+            return response is not None
+        except ResourceNotFoundError:
+            # 404 = residue already gone (expired, completed, etc.) - release goal achieved
+            self.logger.info(f"Residue {residue_id} already gone (404), treating release as success")
+            return True
 
     # ==================== Composite Status Methods ====================
 

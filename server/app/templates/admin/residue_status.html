@@ -170,8 +170,13 @@
                 <tbody>
                     {% for residue in residues %}
                     {% set composite = residue.composite %}
+                    {% if residue.status == 'completed' %}
+                    {% set time_remaining = '--' %}
+                    {% set is_expiring_soon = False %}
+                    {% else %}
                     {% set time_remaining = format_time(residue.expires_at, now) %}
                     {% set is_expiring_soon = (residue.expires_at - now).total_seconds() < 86400 if residue.expires_at else False %}
+                    {% endif %}
                     <tr>
                         <td>{{ residue.id }}</td>
                         <td>

@@ -430,6 +430,7 @@ class ResidueManager:
         # Update residue status
         residue.status = 'completed'
         residue.completed_at = datetime.utcnow()
+        residue.expires_at = None
 
         # Delete the residue file
         try:

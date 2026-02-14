@@ -16,6 +16,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
+from .api_client import ResourceNotFoundError
+
 if TYPE_CHECKING:
     from .api_client import APIClient
 
@@ -351,45 +353,55 @@ class SubmissionQueue:
             item: Queue item dict with type and payload
 
         Returns:
-            True if successful, False otherwise
+            True if successful (or permanently failed and should be discarded),
+            False if transient failure (should retry later)
         """
         item_type = item.get("type")
         payload = item.get("payload", {})
 
-        if item_type == "result":
-            response = api_client.submit_result(
-                payload=payload,
-                save_on_failure=False  # Don't re-save on failure (already in queue)
-            )
-            return response is not None
+        try:
+            if item_type == "result":
+                response = api_client.submit_result(
+                    payload=payload,
+                    save_on_failure=False  # Don't re-save on failure (already in queue)
+                )
+                return response is not None
 
-        elif item_type == "residue_upload":
-            residue_path = item.get("residue_file")
-            if not residue_path or not Path(residue_path).exists():
-                self.logger.error(f"Residue file missing for queued upload: {residue_path}")
+            elif item_type == "residue_upload":
+                residue_path = item.get("residue_file")
+                if not residue_path or not Path(residue_path).exists():
+                    self.logger.error(f"Residue file missing for queued upload: {residue_path}")
+                    return False
+                result = api_client.upload_residue(
+                    client_id=payload["client_id"],
+                    residue_file_path=residue_path,
+                    stage1_attempt_id=payload.get("stage1_attempt_id"),
+                    expiry_days=payload.get("expiry_days", 7)
+                )
+                return result is not None
+
+            elif item_type == "work_complete":
+                return api_client.complete_work(
+                    work_id=payload["work_id"],
+                    client_id=payload["client_id"]
+                )
+
+            elif item_type == "residue_complete":
+                result = api_client.complete_residue(
+                    client_id=payload["client_id"],
+                    residue_id=payload["residue_id"],
+                    stage2_attempt_id=payload["stage2_attempt_id"]
+                )
+                return result is not None
+
+            else:
+                self.logger.error(f"Unknown queue item type: {item_type}")
                 return False
-            result = api_client.upload_residue(
-                client_id=payload["client_id"],
-                residue_file_path=residue_path,
-                stage1_attempt_id=payload.get("stage1_attempt_id"),
-                expiry_days=payload.get("expiry_days", 7)
-            )
-            return result is not None
 
-        elif item_type == "work_complete":
-            return api_client.complete_work(
-                work_id=payload["work_id"],
-                client_id=payload["client_id"]
+        except ResourceNotFoundError:
+            # 404 = resource permanently gone (expired, already completed, etc.)
+            self.logger.warning(
+                f"Discarding {item_type} from queue: resource no longer exists on server "
+                f"(likely expired or already completed)"
             )
-
-        elif item_type == "residue_complete":
-            result = api_client.complete_residue(
-                client_id=payload["client_id"],
-                residue_id=payload["residue_id"],
-                stage2_attempt_id=payload["stage2_attempt_id"]
-            )
-            return result is not None
-
-        else:
-            self.logger.error(f"Unknown queue item type: {item_type}")
-            return False
+            return True  # Treat as success to remove from queue

@@ -294,7 +294,7 @@ class WorkMode(ABC):
         try:
             b2_dict = dict()
             k_dict = dict()
-            if self.args.b2_dictionary != None:
+            if self.args.b2_dictionary is not None:
                 try:
                     with open(self.args.b2_dictionary, 'r') as b2_dict_file:
                         for line in b2_dict_file:
@@ -312,7 +312,7 @@ class WorkMode(ABC):
                                 value = int(entries[1]) if 'e' not in entries[1].lower() else int(float(entries[1]) + 0.5)
                                 if len(entries) > 2:
                                     k_entry = entries[2]
-                                    if not (k_entry.startswith('#') and k_entry.startswith("'") and k_entry.startswith('--')):
+                                    if not (k_entry.startswith('#') or k_entry.startswith("'") or k_entry.startswith('--')):
                                         k = int(k_entry)
                             except ValueError:
                                 print("Warning: An entry in the B2 dictionary had the wrong format!")

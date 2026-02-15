@@ -107,7 +107,7 @@ def build_ecm_command(
 
     # 9. optional k (number of segments in stage 2)
     if k is not None:
-        cmd.extend(['-k', str(k)])
+        cmd.extend(["-k", str(k)])
 
     # 10. B1
     cmd.append(str(b1))

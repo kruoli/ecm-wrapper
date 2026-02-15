@@ -973,11 +973,6 @@ class P1WorkMode(WorkMode):
         else:
             self.mode_name = "P+1 Sweep"
 
-        # Get B1 caps from typed config (handles scientific notation safely)
-        gmp = self.wrapper.typed_config.programs.gmp_ecm
-        self._pm1_b1_cap = gmp.pm1_b1
-        self._pp1_b1_cap = gmp.pp1_b1
-
         # Per-assignment state
         self._pm1_result: Optional[FactorResult] = None
         self._pp1_result: Optional[FactorResult] = None
@@ -999,12 +994,16 @@ class P1WorkMode(WorkMode):
         self._pm1_result = None
         self._pp1_result = None
 
-        # Read B1 from server response, cap by config values
+        # Use B1 from server response directly (server already computed the appropriate B1)
+        # Don't cap here — the server's filter checks for attempts at this exact B1,
+        # so capping would cause the submitted attempt to never satisfy the filter,
+        # resulting in the same composite being assigned repeatedly.
+        # To limit B1, use --max-target-tlevel to avoid high-B1 composites.
         server_pm1_b1 = work.get('pm1_b1') or 0
         server_pp1_b1 = work.get('pp1_b1') or 0
 
-        self._pm1_b1 = min(server_pm1_b1, self._pm1_b1_cap) if self._run_pm1 and server_pm1_b1 else 0
-        self._pp1_b1 = min(server_pp1_b1, self._pp1_b1_cap) if self._run_pp1 and server_pp1_b1 else 0
+        self._pm1_b1 = server_pm1_b1 if self._run_pm1 else 0
+        self._pp1_b1 = server_pp1_b1 if self._run_pp1 else 0
 
         # Build params display
         params: Dict[str, Any] = {

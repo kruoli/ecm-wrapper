@@ -30,6 +30,8 @@ async def get_ecm_work(
     priority: Optional[int] = None,
     min_target_tlevel: Optional[float] = None,
     max_target_tlevel: Optional[float] = None,
+    min_digits: Optional[int] = None,
+    max_digits: Optional[int] = None,
     timeout_days: int = 1,
     work_type: str = "standard",
     db: Session = Depends(get_db),
@@ -111,6 +113,12 @@ async def get_ecm_work(
             query = query.filter(Composite.target_t_level >= min_target_tlevel)
         if max_target_tlevel is not None:
             query = query.filter(Composite.target_t_level <= max_target_tlevel)
+
+        # Apply digit length filters
+        if min_digits is not None:
+            query = query.filter(Composite.digit_length >= min_digits)
+        if max_digits is not None:
+            query = query.filter(Composite.digit_length <= max_digits)
 
         # Exclude composites with active work assignments
         active_work_composites = db.query(WorkAssignment.composite_id).filter(
@@ -299,6 +307,8 @@ async def get_p1_work(
     priority: Optional[int] = None,
     min_target_tlevel: Optional[float] = None,
     max_target_tlevel: Optional[float] = None,
+    min_digits: Optional[int] = None,
+    max_digits: Optional[int] = None,
     timeout_days: int = 1,
     work_type: str = "standard",
     db: Session = Depends(get_db),
@@ -384,6 +394,10 @@ async def get_p1_work(
             query = query.filter(Composite.target_t_level >= min_target_tlevel)
         if max_target_tlevel is not None:
             query = query.filter(Composite.target_t_level <= max_target_tlevel)
+        if min_digits is not None:
+            query = query.filter(Composite.digit_length >= min_digits)
+        if max_digits is not None:
+            query = query.filter(Composite.digit_length <= max_digits)
 
         # Exclude composites with active work assignments
         active_work_composites = db.query(WorkAssignment.composite_id).filter(

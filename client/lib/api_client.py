@@ -312,6 +312,8 @@ class APIClient:
         min_target_tlevel: Optional[float] = None,
         max_target_tlevel: Optional[float] = None,
         priority: Optional[int] = None,
+        min_digits: Optional[int] = None,
+        max_digits: Optional[int] = None,
         timeout_days: int = 1,
         work_type: str = "standard"
     ) -> Optional[Dict[str, Any]]:
@@ -347,6 +349,10 @@ class APIClient:
             params['max_target_tlevel'] = max_target_tlevel
         if priority is not None:
             params['priority'] = priority
+        if min_digits is not None:
+            params['min_digits'] = min_digits
+        if max_digits is not None:
+            params['max_digits'] = max_digits
 
         try:
             response = requests.get(url, params=params, timeout=self.timeout)
@@ -437,6 +443,8 @@ class APIClient:
         min_target_tlevel: Optional[float] = None,
         max_target_tlevel: Optional[float] = None,
         priority: Optional[int] = None,
+        min_digits: Optional[int] = None,
+        max_digits: Optional[int] = None,
         timeout_days: int = 1,
         work_type: str = "standard"
     ) -> Optional[Dict[str, Any]]:
@@ -477,6 +485,10 @@ class APIClient:
             params['max_target_tlevel'] = max_target_tlevel
         if priority is not None:
             params['priority'] = priority
+        if min_digits is not None:
+            params['min_digits'] = min_digits
+        if max_digits is not None:
+            params['max_digits'] = max_digits
 
         try:
             response = requests.get(url, params=params, timeout=self.timeout)

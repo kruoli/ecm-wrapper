@@ -31,7 +31,7 @@ class Stage2Executor:
     """Manages Stage 2 execution with configurable worker pools."""
 
     def __init__(self, wrapper: 'ECMWrapper', residue_file: Path, b1: int, b2: Optional[int],
-                 workers: int, verbose: bool = False):
+                 k: Optional[int], workers: int, verbose: bool = False) -> None:
         """
         Initialize Stage 2 executor.
 
@@ -47,6 +47,7 @@ class Stage2Executor:
         self.residue_file = residue_file
         self.b1 = b1
         self.b2 = b2
+        self.k = k
         self.workers = workers
         self.verbose = verbose
         self.logger = wrapper.logger
@@ -185,8 +186,8 @@ class Stage2Executor:
                        early_termination: bool, progress_interval: int) -> Optional[Tuple[str, str]]:
         """Worker function for Stage 2 processing."""
         cmd = build_ecm_command(
-            self.ecm_path, b1,
-            b2=self.b2, residue_load=chunk_file,
+            self.ecm_path, b1, b2=self.b2, k=self.k,
+            residue_load=chunk_file,
             verbose=self.verbose, one=True,
         )
 

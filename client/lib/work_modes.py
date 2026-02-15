@@ -292,6 +292,29 @@ class WorkMode(ABC):
         self._drain_queue()
 
         try:
+            b2_dict = dict()
+            if self.args.b2_dictionary != None:
+                try:
+                    with open(self.args.b2_dictionary, "r") as b2_dict_file:
+                        for line in b2_dict_file:
+                            if line.startswith("#") or line.startswith("'") or line.startswith("--"):
+                                continue
+                            entries = line.strip().split(" ")
+                            if len(entries) != 2:
+                                print("Warning: A line in the B2 dictionary had the wrong format!")
+                                continue
+                            key = 0
+                            value = 0
+                            try:
+                                key = int(entries[0])
+                                value = int(entries[1])
+                            except ValueError:
+                                print("Warning: An entry in the B2 dictionary had the wrong format!")
+                                continue
+                            b2_dict[key] = value
+                except:
+                    print("The B2 file could not be accessed/loaded! Using defaults…")
+
             while self.should_continue():
                 # Drain submission queue before each work request
                 self._drain_queue()
@@ -300,6 +323,10 @@ class WorkMode(ABC):
                 work = self.request_work()
                 if not work:
                     continue
+
+                if 'b1' in work and work['b1'] in b2_dict:
+                    work['b2_from_dict'] = b2_dict[work['b1']]
+                    print(f"Using B2 = {b2_dict[work['b1']]} from dictionary.")
 
                 # Track work assignment
                 self.on_work_started(work)
@@ -715,7 +742,9 @@ class Stage2ConsumerMode(WorkMode):
         b1 = work['b1']
 
         # Determine B2
-        if self.args.b2 is not None:
+        if 'b2_from_dict' in work:
+            b2 = work['b2_from_dict']
+        elif self.args.b2 is not None:
             b2 = self.args.b2
         elif hasattr(self.args, 'b2_multiplier') and self.args.b2_multiplier is not None:
             b2 = int(b1 * self.args.b2_multiplier)
@@ -1231,7 +1260,11 @@ class StandardAutoWorkMode(WorkMode):
     def _execute_b1b2_mode(self, work: Dict[str, Any], composite: str) -> FactorResult:
         """Execute using explicit B1/B2 parameters."""
         b1 = self.args.b1
-        b2 = self.args.b2
+        b2 = 0
+        if 'b2_from_dict' in work:
+            b2 = work['b2_from_dict']
+        else:
+            b2 = self.args.b2
         curves = self.args.curves if self.args.curves else \
                  (1 if self.args.two_stage else self.wrapper.config['programs']['gmp_ecm']['default_curves'])
 

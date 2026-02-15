@@ -1657,7 +1657,7 @@ class ECMWrapper(BaseWrapper):
         Returns:
             Tuple of (factor, all_factors, curves_completed, execution_time, sigma)
         """
-        executor = Stage2Executor(self, residue_file, b1, b2, workers, verbose)
+        executor = Stage2Executor(self, residue_file, b1, b2, None, workers, verbose)
         self._active_stage2_executor: Optional[Stage2Executor] = executor
         try:
             return executor.execute(early_termination, progress_interval)

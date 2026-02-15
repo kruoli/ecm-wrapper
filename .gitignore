@@ -109,6 +109,7 @@ node_modules/
 # Data files and one-time processing files
 *.csv
 *.txt
+!client/example_b2_dictionary.txt
 numbers_with_keys*
 number_key_mapping*
 *_batch_with_keys*

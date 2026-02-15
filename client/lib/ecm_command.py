@@ -19,6 +19,7 @@ def build_ecm_command(
     b1: int,
     *,
     b2: Optional[int] = None,
+    k: Optional[int] = None,
     curves: Optional[int] = None,
     method: str = "ecm",
     use_gpu: bool = False,
@@ -46,6 +47,7 @@ def build_ecm_command(
         ecm_path: Path to GMP-ECM binary
         b1: B1 bound
         b2: B2 bound (None/-1 = omit, 0 = stage1 only, >0 = explicit)
+        k: number of segments in stage 2; automatic if None
         curves: Number of curves (-c flag); omitted if None
         method: "ecm", "pm1", or "pp1"
         use_gpu: Enable GPU acceleration (ECM only)
@@ -103,10 +105,14 @@ def build_ecm_command(
     if curves is not None:
         cmd.extend(["-c", str(curves)])
 
-    # 9. B1
+    # 9. optional k (number of segments in stage 2)
+    if k is not None:
+        cmd.extend(["-k", str(k)])
+
+    # 10. B1
     cmd.append(str(b1))
 
-    # 10. B2: omit when None or -1
+    # 11. B2: omit when None or -1
     if b2 is not None and b2 != -1:
         cmd.append(str(b2))
 

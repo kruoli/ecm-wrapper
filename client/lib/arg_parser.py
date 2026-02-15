@@ -174,6 +174,8 @@ Examples:
                        help='B2 parameter (overrides server default, -1 for GMP-ECM default, supports scientific notation)')
     parser.add_argument('--b2-multiplier', type=float,
                        help='Dynamic B2 = B1 * multiplier (for stage2-only mode)')
+    parser.add_argument('--b2-dictionary', type=str, default=None,
+                       help='File which maps B1 to B2 values (one entry per line, separated by space); falls back to calculating it if no matching entry could be found')
     parser.add_argument('--curves', type=int,
                        help='Curves per batch')
     parser.add_argument('--max-batch', type=int,

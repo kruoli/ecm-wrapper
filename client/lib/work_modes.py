@@ -292,6 +292,37 @@ class WorkMode(ABC):
         self._drain_queue()
 
         try:
+            b2_dict = dict()
+            k_dict = dict()
+            if self.args.b2_dictionary is not None:
+                try:
+                    with open(self.args.b2_dictionary, 'r') as b2_dict_file:
+                        for line in b2_dict_file:
+                            if line.startswith('#') or line.startswith("'") or line.startswith('--') or not line:
+                                continue
+                            entries = [l for l in line.strip().split(' ') if l]
+                            if len(entries) < 2: # extra entries are treated as comments
+                                print("Warning: A line in the B2 dictionary had a wrong format!")
+                                continue
+                            key = 0
+                            value = 0
+                            k = 0
+                            try:
+                                key = int(entries[0]) if 'e' not in entries[0].lower() else int(float(entries[0]) + 0.5)
+                                value = int(entries[1]) if 'e' not in entries[1].lower() else int(float(entries[1]) + 0.5)
+                                if len(entries) > 2:
+                                    k_entry = entries[2]
+                                    if not (k_entry.startswith('#') or k_entry.startswith("'") or k_entry.startswith('--')):
+                                        k = int(k_entry)
+                            except ValueError:
+                                print("Warning: An entry in the B2 dictionary had the wrong format!")
+                                continue
+                            b2_dict[key] = value
+                            if k > 0:
+                                k_dict[key] = k
+                except:
+                    print("The B2 file could not be accessed/loaded! Using defaults…")
+
             while self.should_continue():
                 # Drain submission queue before each work request
                 self._drain_queue()
@@ -300,6 +331,13 @@ class WorkMode(ABC):
                 work = self.request_work()
                 if not work:
                     continue
+
+                if 'b1' in work and work['b1'] in b2_dict:
+                    b1 = work['b1']
+                    work['b2_from_dict'] = b2_dict[b1]
+                    print(f"Using B2 = {b2_dict[b1]} from dictionary.")
+                    if b1 in k_dict:
+                        work['k_from_dict'] = k_dict[b1]
 
                 # Track work assignment
                 self.on_work_started(work)
@@ -664,6 +702,8 @@ class Stage2ConsumerMode(WorkMode):
 
     def __init__(self, ctx: WorkLoopContext):
         super().__init__(ctx)
+        self._b2 = None
+        self._k = None
         self.local_residue_file: Optional[Path] = None
         self._residue_checksum: Optional[str] = None
         # Track curves for completion validation
@@ -714,8 +754,13 @@ class Stage2ConsumerMode(WorkMode):
 
         b1 = work['b1']
 
-        # Determine B2
-        if self.args.b2 is not None:
+        # Determine B2 and optionally k
+        k = 0
+        if 'b2_from_dict' in work:
+            b2 = work['b2_from_dict']
+            if 'k_from_dict' in work:
+                k = work['k_from_dict']
+        elif self.args.b2 is not None:
             b2 = self.args.b2
         elif hasattr(self.args, 'b2_multiplier') and self.args.b2_multiplier is not None:
             b2 = int(b1 * self.args.b2_multiplier)
@@ -724,6 +769,7 @@ class Stage2ConsumerMode(WorkMode):
             b2 = work.get('suggested_b2', b1 * 100)
 
         self._b2 = b2
+        self._k = k if k > 0 else None
         b2_display = "GMP-ECM default" if b2 == -1 else str(b2)
 
         print_work_header(
@@ -776,6 +822,7 @@ class Stage2ConsumerMode(WorkMode):
             self.local_residue_file,
             work['b1'],
             self._b2,
+            self._k,
             workers,
             self.args.verbose
         )
@@ -1230,7 +1277,14 @@ class StandardAutoWorkMode(WorkMode):
     def _execute_b1b2_mode(self, work: Dict[str, Any], composite: str) -> FactorResult:
         """Execute using explicit B1/B2 parameters."""
         b1 = self.args.b1
-        b2 = self.args.b2
+        b2 = 0
+        k = 0
+        if 'b2_from_dict' in work:
+            b2 = work['b2_from_dict']
+            if 'k_from_dict' in work:
+                k = work['k_from_dict']
+        else:
+            b2 = self.args.b2
         curves = self.args.curves if self.args.curves else \
                  (1 if self.args.two_stage else self.wrapper.config['programs']['gmp_ecm']['default_curves'])
 
@@ -1297,7 +1351,7 @@ class StandardAutoWorkMode(WorkMode):
 
         # Add ECM parameters that aren't in FactorResult
         self._results_dict['b1'] = self.args.b1
-        self._results_dict['b2'] = self.args.b2
+        self._results_dict['b2'] = b2
         self._results_dict['curves_requested'] = self.args.curves
         use_gpu, _, _ = resolve_gpu_settings(self.args, self.wrapper.config)
         self._results_dict['parametrization'] = self.args.param or (3 if use_gpu else 1)

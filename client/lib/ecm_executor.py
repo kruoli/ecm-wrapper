@@ -895,9 +895,19 @@ class ECMWrapper(BaseWrapper):
         except (KeyboardInterrupt, SystemExit):
             self.logger.info("Pipelined execution interrupted - terminating subprocesses...")
             self.interrupted = True
-            shutdown_event.set()  # Signal threads to stop
-            # Kill any running subprocesses (GPU ecm process, etc.)
+            self.stop_event.set()  # Signal Stage2Executor workers to stop
+            shutdown_event.set()  # Signal GPU/CPU threads to stop
+            # Kill any running subprocesses (GPU ecm process, Stage2Executor workers)
             self._terminate_all_subprocesses()
+            s2_exec = getattr(self, '_active_stage2_executor', None)
+            if s2_exec is not None:
+                with s2_exec.process_lock:
+                    for p in s2_exec.running_processes:
+                        if p.poll() is None:
+                            try:
+                                p.terminate()
+                            except OSError:
+                                pass
             # Give threads a moment to notice their subprocess died and exit
             gpu_thread.join(timeout=5)
             cpu_thread.join(timeout=5)
@@ -1648,7 +1658,11 @@ class ECMWrapper(BaseWrapper):
             Tuple of (factor, all_factors, curves_completed, execution_time, sigma)
         """
         executor = Stage2Executor(self, residue_file, b1, b2, workers, verbose)
-        return executor.execute(early_termination, progress_interval)
+        self._active_stage2_executor: Optional[Stage2Executor] = executor
+        try:
+            return executor.execute(early_termination, progress_interval)
+        finally:
+            self._active_stage2_executor = None
 
     def _split_residue_file(self, residue_file: Path, num_chunks: int) -> List[Path]:
         """Split residue file into chunks for parallel processing"""

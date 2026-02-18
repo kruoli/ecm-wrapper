@@ -68,13 +68,14 @@ class ResidueManager:
 
         # There are multiple valid stage 1 save file formats. The most important ones are:
         # - GMP-ECM's current save format (has a checksum) that can be used with CPU and CUDA GPU
-        # …and…
+        #  …and…
         # - Prime95/mprime's format, accepted by GMP-ECM as input (from version 22 onward)
-        # While using CGBN is useful for small and medium numbers, Prime95/mprime's fast FFTs shine when larger numbers
-        # are being processed and especially when AVX512 is available. Though one should note that Prime95/mprime limits
-        # bases to 32-bit numbers and are best when the base is as small as possible and there are no non-trivial
-        # cofactors known. (Cofactors do not slow things down, but also do not speed things up unlike with CGBN
-        # when going down to a smaller kernel.) Another disadvantage of Prime95/mprime is that it does not include B1.
+        # While using CGBN is useful for small- and medium-sized numbers, Prime95/mprime's fast FFTs shine when larger
+        # numbers are being processed and especially when AVX512 is available. Though one should note that
+        # Prime95/mprime limits bases to 32-bit numbers and are best when the base is as small as possible and there are
+        # no non-trivial cofactors known. (Cofactors do not slow things down, but also do not speed things up unlike
+        # with CGBN when going down to a smaller kernel.) Another disadvantage of Prime95/mprime is that it does not
+        # include B1.
         # To use this feature, GmpEcmHook=1 needs to be added to prime.txt; output can be found in results.txt, but may
         # have to be stripped of timestamps.
 

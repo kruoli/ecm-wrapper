@@ -164,6 +164,10 @@ class TLevelConfig(ECMConfigValidation):
     max_batch_curves: Optional[int] = None  # Max curves per GPU batch (enables chunking for pipelined mode)
     b2_multiplier: float = 100.0  # B2 = B1 * multiplier for two-stage mode (default 100)
 
+    # GPU support
+    gpu_device: Optional[int] = None
+    gpu_curves: Optional[int] = None
+
     # API submission
     project: Optional[str] = None
     no_submit: bool = False

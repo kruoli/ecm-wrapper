@@ -248,7 +248,9 @@ class ECMWrapper(BaseWrapper):
                     residue_file=residue_file,
                     use_gpu=(config.stage1_device == "GPU"),
                     param=config.stage1_parametrization,
-                    verbose=config.verbose
+                    verbose=config.verbose,
+                    gpu_device=config.gpu_device,
+                    gpu_curves=config.gpu_curves
                 )
 
                 # Early return if factor found in stage 1
@@ -618,8 +620,8 @@ class ECMWrapper(BaseWrapper):
                             residue_file=residue_file,
                             use_gpu=True,
                             verbose=config.verbose,
-                            gpu_device=None,
-                            gpu_curves=None
+                            gpu_device=config.gpu_device,
+                            gpu_curves=config.gpu_curves
                         )
                         stage1_time = time.time() - stage1_start
 

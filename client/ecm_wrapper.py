@@ -302,7 +302,9 @@ def main():
                 max_batch_curves=max_batch,
                 b2_multiplier=getattr(args, 'b2_multiplier', None) or 100.0,
                 project=args.project,
-                no_submit=not args.submit
+                no_submit=not args.submit,
+                gpu_device=gpu_device,
+                gpu_curves=gpu_curves
             )
 
             result = wrapper.run_tlevel_v2(config)

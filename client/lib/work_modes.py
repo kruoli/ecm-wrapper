@@ -1251,6 +1251,9 @@ class StandardAutoWorkMode(WorkMode):
         # Resolve max_batch from args or config
         max_batch = getattr(self.args, 'max_batch', None) or get_max_batch_default(self.wrapper.config)
 
+        # Resolve GPU settings for two-stage mode
+        _, gpu_device, gpu_curves = resolve_gpu_settings(self.args, self.wrapper.config)
+
         config = TLevelConfig(
             composite=composite,
             target_t_level=target_tlevel,
@@ -1263,7 +1266,9 @@ class StandardAutoWorkMode(WorkMode):
             b2_multiplier=getattr(self.args, 'b2_multiplier', None) or 100.0,
             project=self.args.project,
             no_submit=False,
-            work_id=self.current_work_id
+            work_id=self.current_work_id,
+            gpu_device=gpu_device,
+            gpu_curves=gpu_curves
         )
 
         result = self.wrapper.run_tlevel_v2(config)
@@ -1288,7 +1293,7 @@ class StandardAutoWorkMode(WorkMode):
         curves = self.args.curves if self.args.curves else \
                  (1 if self.args.two_stage else self.wrapper.config['programs']['gmp_ecm']['default_curves'])
 
-        use_gpu, _, _ = resolve_gpu_settings(self.args, self.wrapper.config)
+        use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(self.args, self.wrapper.config)
         sigma = parse_sigma_arg(self.args)
         param = resolve_param(self.args, use_gpu)
 
@@ -1309,7 +1314,9 @@ class StandardAutoWorkMode(WorkMode):
                 stage1_parametrization=param if param else 3,
                 threads=workers,
                 verbose=self.args.verbose,
-                progress_interval=getattr(self.args, 'progress_interval', 0)
+                progress_interval=getattr(self.args, 'progress_interval', 0),
+                gpu_device=gpu_device,
+                gpu_curves=gpu_curves
             )
             result = self.wrapper.run_two_stage_v2(two_stage_config)
 

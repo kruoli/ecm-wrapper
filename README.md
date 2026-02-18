@@ -35,30 +35,31 @@ pip install requests pyyaml
 cp client.local.yaml.example client.local.yaml
 # Edit client.local.yaml with your API endpoint and binary paths
 
-# Run ECM factorization (standard mode)
-python3 ecm-wrapper.py --composite "123456789012345" --curves 100 --b1 50000
+# Local/manual ECM factorization (ecm_wrapper.py)
+python3 ecm_wrapper.py --composite "123456789012345" --curves 100 --b1 50000
+python3 ecm_wrapper.py --composite "123456789012345" --two-stage --curves 1000 --b1 50000
+python3 ecm_wrapper.py --composite "123456789012345" --multiprocess --workers 4 --curves 1000
+python3 ecm_wrapper.py --composite "123456789012345" --tlevel 30
 
-# Run ECM with GPU acceleration and two-stage processing
-python3 ecm-wrapper.py --composite "123456789012345" --two-stage --curves 1000 --b1 50000
+# Auto-work mode - continuously get work from server (ecm_client.py)
+python3 ecm_client.py                                       # Use server t-levels
+python3 ecm_client.py --work-count 5                        # Process 5 assignments
+python3 ecm_client.py --tlevel 35                           # Override with client t-level
+python3 ecm_client.py --b1 50000 --b2 5000000               # Override with B1/B2
+python3 ecm_client.py --b1 26e7 --b2 4e11                   # Scientific notation for large bounds
 
-# Run ECM with multiprocess parallelization
-python3 ecm-wrapper.py --composite "123456789012345" --multiprocess --workers 4 --curves 1000
+# P-1/P+1 sweep mode
+python3 ecm_client.py --pm1                                 # P-1 only
+python3 ecm_client.py --pp1                                 # P+1 only
+python3 ecm_client.py --p1                                  # P-1 + P+1 per composite
 
-# Run ECM targeting t-level (progressive approach)
-python3 ecm-wrapper.py --composite "123456789012345" --tlevel 30
+# Decoupled two-stage mode (separate GPU/CPU workers)
+python3 ecm_client.py --stage1-only --b1 110000000 --curves 3000 --gpu
+python3 ecm_client.py --stage2-only --b2 11000000000000 --workers 8
 
-# Auto-work mode - continuously get work from server
-python3 ecm-wrapper.py --auto-work                          # Use server t-levels
-python3 ecm-wrapper.py --auto-work --work-count 5           # Process 5 assignments
-python3 ecm-wrapper.py --auto-work --tlevel 35              # Override with client t-level
-python3 ecm-wrapper.py --auto-work --b1 50000 --b2 5000000  # Override with B1/B2
-python3 ecm-wrapper.py --auto-work --b1 26e7 --b2 4e11      # Scientific notation for large bounds
-
-# Run YAFU automatic factorization
-python3 yafu-wrapper.py --composite "123456789012345" --mode auto
-
-# Run YAFU P-1 factorization
-python3 yafu-wrapper.py --composite "123456789012345" --mode pm1 --b1 1000000
+# Run YAFU factorization
+python3 yafu_wrapper.py --composite "123456789012345" --mode auto
+python3 yafu_wrapper.py --composite "123456789012345" --mode pm1 --b1 1000000
 
 # Resend failed API submissions
 python3 resend_failed.py --dry-run  # Preview first
@@ -85,38 +86,38 @@ ecm-wrapper/
 │   ├── tests/                   # Server unit tests
 │   ├── docker-compose.simple.yml  # Easy Docker setup
 │   ├── DEPLOYMENT.md            # Detailed deployment guide
-│   ├── REFACTORING_GUIDE.md     # Server refactoring documentation
 │   └── .env.example             # Environment template
 │
 ├── client/                      # Python factorization clients
-│   ├── ecm-wrapper.py           # GMP-ECM wrapper (standard, two-stage, multiprocess, t-level)
-│   ├── yafu-wrapper.py          # YAFU wrapper (ECM, P-1, P+1, SIQS, NFS, Auto)
-│   ├── cado-wrapper.py          # CADO-NFS wrapper (Number Field Sieve)
-│   ├── aliquot-wrapper.py       # Aliquot sequence calculator with FactorDB integration
-│   ├── base_wrapper.py          # Shared base class for all wrappers
-│   ├── config_manager.py        # Configuration loading with deep merge
-│   ├── api_client.py            # API communication with retry logic
-│   ├── parsing_utils.py         # Output parsing with pre-compiled patterns
-│   ├── arg_parser.py            # Unified argument parsing
-│   ├── residue_manager.py       # Residue file operations (GPU/CPU formats)
-│   ├── result_processor.py      # Factor deduplication and logging
-│   ├── stage2_executor.py       # Multi-threaded Stage 2 execution
-│   ├── ecm_worker_process.py    # Multiprocess worker coordination
+│   ├── ecm_wrapper.py           # GMP-ECM wrapper (local/manual factorization)
+│   ├── ecm_client.py            # Server-coordinated auto-work client
+│   ├── yafu_wrapper.py          # YAFU wrapper (ECM, P-1, P+1, SIQS, NFS, Auto)
+│   ├── cado_wrapper.py          # CADO-NFS wrapper (Number Field Sieve)
+│   ├── aliquot_wrapper.py       # Aliquot sequence calculator with FactorDB integration
 │   ├── resend_failed.py         # Retry failed API submissions
+│   ├── lib/                     # Shared library modules
+│   │   ├── base_wrapper.py      # Shared base class for all wrappers
+│   │   ├── config_manager.py    # Configuration loading with deep merge
+│   │   ├── api_client.py        # API communication with retry logic
+│   │   ├── arg_parser.py        # Unified argument parsing
+│   │   ├── parsing_utils.py     # Output parsing with pre-compiled patterns
+│   │   ├── ecm_executor.py      # ECM execution engine (standard, two-stage, multiprocess)
+│   │   ├── ecm_config.py        # V2 config dataclasses and FactorResult
+│   │   ├── ecm_math.py          # T-level calculation and B1 tables
+│   │   ├── work_modes.py        # Auto-work strategy pattern (Standard, P1, Stage1, Stage2)
+│   │   ├── stage2_executor.py   # Multi-threaded Stage 2 execution
+│   │   ├── residue_manager.py   # Residue file operations (GPU/CPU formats)
+│   │   ├── results_builder.py   # Unified results dictionary builder
+│   │   └── result_processor.py  # Factor deduplication and logging
 │   ├── client.yaml              # Default configuration (checked into git)
 │   ├── client.local.yaml.example # Local config template (machine-specific)
-│   ├── tests/                   # Client unit tests (1,100+ lines)
+│   ├── tests/                   # Client unit tests
 │   ├── scripts/                 # Batch processing scripts
-│   │   ├── run_batch.sh         # ECM batch processing
-│   │   ├── run_pm1_batch.sh     # GMP-ECM P-1 batch
-│   │   └── run_batch_pipeline.py # GPU/CPU pipeline batch processing
-│   ├── data/                    # Auto-created data directories
-│   │   ├── logs/                # Client logs
-│   │   ├── outputs/             # Raw program outputs
-│   │   ├── residues/            # ECM residue files
-│   │   └── results/             # Failed API submissions
-│   ├── README.md                # Client documentation
-│   └── CLAUDE.md                # Detailed client guide
+│   └── data/                    # Auto-created data directories
+│       ├── logs/                # Client logs
+│       ├── outputs/             # Raw program outputs
+│       ├── residues/            # ECM residue files
+│       └── results/             # Failed API submissions
 │
 ├── CLAUDE.md                    # Project overview and development guide
 └── README.md                    # This file
@@ -157,10 +158,9 @@ ecm-wrapper/
 
 ## Documentation
 
-- **Development Guide**: [CLAUDE.md](CLAUDE.md) - Comprehensive guide for Claude Code (client + server development commands, architecture, implementation details)
+- **Development Guide**: [CLAUDE.md](CLAUDE.md) - Development commands, architecture, and implementation details
 - **Production Deployment**: [PRODUCTION_DEPLOY.md](PRODUCTION_DEPLOY.md) - Automated deployment with GitHub Actions
 - **Server Setup**: [server/DEPLOYMENT.md](server/DEPLOYMENT.md) - Local development and Docker setup
-- **Server Refactoring**: [server/REFACTORING_GUIDE.md](server/REFACTORING_GUIDE.md) - Architecture patterns and migration guide
 - **Client Quick Reference**: [client/README.md](client/README.md) - Client usage examples and testing
 - **API Documentation**: `/docs` endpoint - Interactive OpenAPI documentation when server is running
 
@@ -207,31 +207,6 @@ ecm-wrapper/
                                         └───────────────────┘
 ```
 
-## Recent Improvements
-
-### Client Enhancements (2025-10/11)
-- ✅ **Scientific notation for B1/B2**: `--b1 26e7 --b2 4e11` for easier entry of large bounds
-- ✅ **Multi-factor submission**: Properly handles multiple factors found in single ECM run with individual sigmas
-- ✅ **Two-stage ECM improvements**: Fixed exit code handling (factor in Stage 1 = success, not failure)
-- ✅ **Residue file handling**: Auto-detects GPU (single-line) vs CPU (multi-line) formats
-- ✅ **FactorDB integration**: 3 automatic retries with exponential backoff for transient errors
-- ✅ **Primality checks**: Miller-Rabin tests after trial division AND after ECM
-- ✅ **CADO-NFS failure detection**: Properly detects crashes, avoids submitting partial results
-- ✅ **Pipeline batch processing**: Fixed Stage 2 failure handling and timing accuracy
-
-### Server Refactoring (2025-10/11)
-- ✅ **Unified service architecture**: Dependency injection throughout (no module-level singletons)
-- ✅ **Centralized error handling**: Consistent error response patterns
-- ✅ **Calculation utilities**: Eliminated 300-400 lines of duplicate code
-- ✅ **Group order calculation**: Automatic elliptic curve group order via PARI/GP
-- ✅ **Admin dashboard improvements**: Auto-refresh, deduplicated factors, multi-factor indicators
-- ✅ **Testing status page**: Server-side pagination and filtering for 20k+ composites
-
-### Testing Infrastructure
-- **Client tests**: 1,100+ lines covering factorization parsing, config management, API payloads
-- **Server tests**: Unit tests for number utilities, transaction handling, business logic
-- Run with: `pytest tests/ -v`
-
 ## Requirements
 
 ### Server
@@ -243,9 +218,9 @@ ecm-wrapper/
 - **Python 3.8+**
 - **Required packages**: `requests`, `pyyaml` (install via: `pip install requests pyyaml`)
 - **Factorization binaries** (configure paths in `client.local.yaml`):
-  - GMP-ECM binary (for `ecm-wrapper.py`) - Required
-  - YAFU binary (for `yafu-wrapper.py`) - Optional
-  - CADO-NFS (for `cado-wrapper.py` and `aliquot-wrapper.py`) - Optional
+  - GMP-ECM binary (for `ecm_wrapper.py` / `ecm_client.py`) - Required
+  - YAFU binary (for `yafu_wrapper.py`) - Optional
+  - CADO-NFS (for `cado_wrapper.py` and `aliquot_wrapper.py`) - Optional
 - **Testing**: pytest (install via: `pip install pytest`)
 
 ## Development
@@ -261,20 +236,6 @@ cd server/
 source venv/bin/activate
 pytest tests/ --ignore=tests/test_transactions.py -v
 ```
-
-### Code Quality
-The codebase follows these principles:
-- **DRY (Don't Repeat Yourself)**: Recent refactoring eliminated 300-400 lines of duplication
-- **Dependency Injection**: Server uses DI throughout for testability
-- **Type Hints**: Comprehensive typing for better IDE support
-- **Pre-compiled Patterns**: Regex patterns compiled once for performance
-- **Comprehensive Error Handling**: Retry logic with exponential backoff
-
-### Potential Refactoring Opportunities
-See architectural analysis in project for details:
-1. **Extract T-Level Calculator** (ecm-wrapper.py lines 951-1120) into `tlevel_calculator.py`
-2. **Extract Factorization Utilities** (lines 776-950) into `factorization_utils.py`
-3. **Consider Renaming** hyphenated files (`ecm-wrapper.py` → `ecm_wrapper.py`) for standard Python imports
 
 ## Support
 

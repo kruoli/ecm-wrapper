@@ -40,6 +40,7 @@ async def upload_residue(
     file: UploadFile = File(..., description="ECM residue file from stage 1"),
     client_id: str = Header(..., alias="X-Client-ID", description="Client identifier"),
     stage1_attempt_id: Optional[int] = Query(None, description="ID of stage 1 ECM attempt to link"),
+    b1: Optional[int] = Query(None, ge=250000, description="B1 if residues are from Prime95/mprime"),
     db: Session = Depends(get_db),
     residue_manager: ResidueManager = Depends(get_residue_manager)
 ):
@@ -52,7 +53,7 @@ async def upload_residue(
 
     The server parses the file to extract:
     - Composite number (N=)
-    - B1 parameter
+    - B1 parameter (for residues directly from GMP-ECM)
     - Parametrization (PARAM=)
     - Curve count
 
@@ -60,6 +61,7 @@ async def upload_residue(
         file: The residue file content
         client_id: ID of the uploading client (header)
         stage1_attempt_id: Optional ID of the stage 1 attempt for supersession tracking
+        b1: B1 of a residue file that was created with Prime95/mprime
         db: Database session
 
     Returns:
@@ -89,7 +91,8 @@ async def upload_residue(
                 db=db,
                 file_content=content,
                 client_id=client_id,
-                stage1_attempt_id=stage1_attempt_id
+                stage1_attempt_id=stage1_attempt_id,
+                b1=b1
             )
 
             # Get composite for response

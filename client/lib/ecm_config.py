@@ -56,6 +56,7 @@ class ECMConfig(ECMConfigValidation):
     # Method and progress
     method: str = "ecm"  # 'ecm', 'pm1', 'pp1'
     progress_interval: int = 0
+    maxmem: Optional[int] = None  # Maximum memory in MB for stage 2 (-maxmem)
 
     def __post_init__(self):
         """Validate configuration after initialization."""

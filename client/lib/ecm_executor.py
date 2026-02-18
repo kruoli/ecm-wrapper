@@ -98,7 +98,8 @@ class ECMWrapper(BaseWrapper):
                 use_gpu=config.use_gpu,
                 gpu_device=config.gpu_device,
                 gpu_curves=config.gpu_curves,
-                verbose=config.verbose
+                verbose=config.verbose,
+                maxmem=config.maxmem,
             )
 
             return FactorResult.from_primitive_result(prim_result, time.time() - start_time)
@@ -190,6 +191,18 @@ class ECMWrapper(BaseWrapper):
             elif self.shutdown_level == 2:
                 self.graceful_shutdown_requested = True
                 self.stop_event.set()  # Signal workers to stop after current curve
+                # Directly signal any running subprocesses - readline() may be blocking
+                # (PEP 475 prevents the signal from unblocking readline naturally)
+                with self._subprocess_lock:
+                    for proc in list(self._running_subprocesses):
+                        if proc.poll() is None:
+                            try:
+                                if sys.platform != 'win32':
+                                    os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+                                else:
+                                    proc.send_signal(signal.CTRL_BREAK_EVENT)
+                            except (OSError, ProcessLookupError):
+                                pass
                 print("\n[Ctrl+C] Stopping after current curve...")
                 print("[Ctrl+C] Press again to abort immediately")
                 self.logger.info("Shutdown level 2: stopping after current curve")
@@ -1258,7 +1271,8 @@ class ECMWrapper(BaseWrapper):
         progress_callback: Optional[Callable[[str, List[str]], None]] = None,
         stop_on_factor: bool = True,
         # Execution
-        verbose: bool = False
+        verbose: bool = False,
+        maxmem: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Execute GMP-ECM primitive operation.
@@ -1308,6 +1322,7 @@ class ECMWrapper(BaseWrapper):
             use_gpu=use_gpu, gpu_device=gpu_device, gpu_curves=gpu_curves,
             residue_save=residue_save, residue_load=residue_load,
             verbose=verbose, param=param, sigma=sigma,
+            maxmem=maxmem,
         )
 
         # Execute subprocess with streaming

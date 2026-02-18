@@ -86,6 +86,9 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     parser.add_argument('--sigma', type=str, help='Specific sigma value to use (format: "N" or "3:N")')
     parser.add_argument('--param', type=int, choices=[0, 1, 2, 3], help='ECM parametrization (0-3)')
 
+    # Memory limit
+    parser.add_argument('--maxmem', type=int, help='Maximum memory in MB for GMP-ECM stage 2 (-maxmem flag)')
+
     # Method and verbosity
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose ECM output')
     parser.add_argument('--progress-interval', type=int, default=0,
@@ -227,6 +230,8 @@ Examples:
                        help='ECM parametrization (0-3)')
     parser.add_argument('--sigma', type=str,
                        help='Sigma value (integer or parametrization:value)')
+    parser.add_argument('--maxmem', type=int,
+                       help='Maximum memory in MB for GMP-ECM stage 2 (-maxmem flag)')
 
     # Execution behavior
     parser.add_argument('--continue-after-factor', action='store_true',

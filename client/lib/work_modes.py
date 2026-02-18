@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import Any, Optional, Dict, TYPE_CHECKING
 import argparse
 import hashlib
+import os
 import signal
+import sys
 import time
 
 from .ecm_config import (
@@ -227,6 +229,18 @@ class WorkMode(ABC):
                 self._second_interrupt_received = True
                 self.wrapper.graceful_shutdown_requested = True
                 self.wrapper.stop_event.set()
+                # Directly signal any running subprocesses - readline() may be blocking
+                # (PEP 475 prevents the signal from unblocking readline naturally)
+                with self.wrapper._subprocess_lock:
+                    for proc in list(self.wrapper._running_subprocesses):
+                        if proc.poll() is None:
+                            try:
+                                if sys.platform != 'win32':
+                                    os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+                                else:
+                                    proc.send_signal(signal.CTRL_BREAK_EVENT)
+                            except (OSError, ProcessLookupError):
+                                pass
                 print("\n")
                 print("=" * 60)
                 print("Stopping after current curve...")
@@ -1350,7 +1364,8 @@ class StandardAutoWorkMode(WorkMode):
                 parametrization=param if param else 3,
                 method=self.args.method,
                 verbose=self.args.verbose,
-                progress_interval=getattr(self.args, 'progress_interval', 0)
+                progress_interval=getattr(self.args, 'progress_interval', 0),
+                maxmem=getattr(self.args, 'maxmem', None),
             )
             result = self.wrapper.run_ecm_v2(ecm_config)
 

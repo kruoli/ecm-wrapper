@@ -31,6 +31,7 @@ def build_ecm_command(
     param: Optional[int] = None,
     sigma: Optional[Union[str, int]] = None,
     one: bool = False,
+    maxmem: Optional[int] = None,
 ) -> List[str]:
     """
     Build a GMP-ECM command line with correct flag ordering.
@@ -59,6 +60,7 @@ def build_ecm_command(
         param: Parametrization value (-param, ECM only)
         sigma: Sigma value (-sigma, ECM only)
         one: Stop after first factor (-one)
+        maxmem: Maximum memory in MB for stage 2 (-maxmem)
 
     Returns:
         List of command-line arguments suitable for subprocess.
@@ -109,10 +111,14 @@ def build_ecm_command(
     if k is not None:
         cmd.extend(["-k", str(k)])
 
-    # 10. B1
+    # 10. optional maxmem (memory limit for stage 2 in MB)
+    if maxmem is not None:
+        cmd.extend(["-maxmem", str(maxmem)])
+
+    # 11. B1
     cmd.append(str(b1))
 
-    # 11. B2: omit when None or -1
+    # 12. B2: omit when None or -1
     if b2 is not None and b2 != -1:
         cmd.append(str(b2))
 

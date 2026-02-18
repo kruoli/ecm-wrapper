@@ -415,6 +415,29 @@ class ResidueManager:
                 f"Residue {residue_id} has been released back to the available pool."
             )
 
+        # Validate B2 is sufficient: NULL/-1 (GMP-ECM default) is accepted, but an
+        # explicit B2 must be at least 100*B1 to be worth consuming the residue file
+        stage2_b2 = stage2_attempt.b2
+        if not has_factor and stage2_b2 is not None and stage2_b2 != -1:
+            min_b2 = residue.b1 * 100
+            if stage2_b2 < min_b2:
+                residue.status = 'available'
+                residue.claimed_at = None
+                residue.claimed_by = None
+                residue.expires_at = None
+                db.flush()
+
+                logger.warning(
+                    f"Rejected residue {residue_id} completion: stage2_attempt {stage2_attempt_id} "
+                    f"used B2={stage2_b2} < minimum {min_b2} (100 * B1={residue.b1}). "
+                    f"Residue released back to pool."
+                )
+                raise ValueError(
+                    f"Invalid stage 2 completion: B2={stage2_b2} is less than the minimum "
+                    f"required {min_b2} (100 * B1={residue.b1}). "
+                    f"Residue {residue_id} has been released back to the available pool."
+                )
+
         # Mark stage 1 attempt as superseded (if linked)
         if residue.stage1_attempt_id:
             stage1_attempt = db.query(ECMAttempt).filter(

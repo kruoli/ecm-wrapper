@@ -124,13 +124,13 @@ class ResidueManager:
                 checksum_calc = b1_in
                 sigma_index = available_keys.index("SIGMA")
                 sigma = int(split_elements[sigma_index][1])
-                checksum_calc *= sigma // self.CHKCONST
-                checksum_calc *= composite // self.CHKCONST
+                checksum_calc *= sigma % self.CHKCONST
+                checksum_calc *= composite % self.CHKCONST
                 x_index = available_keys.index("X")
                 x = int(split_elements[x_index][1], 0) # X is always in hexadecimal format
-                checksum_calc *= x // self.CHKCONST
+                checksum_calc *= x % self.CHKCONST
                 checksum_calc *= param_of_residue + 1
-                checksum_calc //= self.CHKCONST
+                checksum_calc %= self.CHKCONST
 
                 if checksum != checksum_calc:
                     raise ValueError("A line did not match its expected checksum")

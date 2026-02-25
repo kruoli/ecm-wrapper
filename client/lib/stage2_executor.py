@@ -189,6 +189,7 @@ class Stage2Executor:
             self.ecm_path, b1, b2=self.b2, k=self.k,
             residue_load=chunk_file,
             verbose=self.verbose, one=True,
+            b1done=b1,
         )
 
         # Count total lines in this worker's chunk for progress reporting and diagnostics

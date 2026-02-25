@@ -56,7 +56,8 @@ class ECMPatterns:
     CURVE_COUNT = re.compile(r'\((\d+) curves\)')
 
     # Resume file parsing patterns
-    RESUME_N_PATTERN = re.compile(r'N=(\d+)')
+    # N can be decimal or hex (0x prefix, used by P95/mprime parametrization 0)
+    RESUME_N_PATTERN = re.compile(r'N=(0x[0-9a-fA-F]+|\d+)')
     RESUME_B1_PATTERN = re.compile(r'B1=(\d+)')
     RESUME_SIGMA_PATTERN = re.compile(r'SIGMA=(\d+)')
 

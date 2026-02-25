@@ -37,13 +37,17 @@ class ResidueFileManager:
         Extracts composite number (N), B1 parameter, and curve count from
         residue file headers.
 
+        Supports multiple residue formats:
+        - Standard GMP-ECM: METHOD=ECM; N=<decimal>; B1=<value>; SIGMA=<value>
+        - P95/mprime (param 0): PARAM=0; N=0x<hex>; QX=0x<hex>; SIGMA=<decimal>
+
         Args:
             file_path: Path to the residue file
 
         Returns:
             Tuple of (composite, b1, curve_count) or None if parsing fails
-            - composite: The composite number being factored (as string)
-            - b1: The B1 smoothness bound used
+            - composite: The composite number being factored (decimal string)
+            - b1: The B1 smoothness bound used (0 if not present in file)
             - curve_count: Number of curves in the residue file
         """
         if not os.path.exists(file_path):
@@ -63,7 +67,12 @@ class ResidueFileManager:
                     if not composite:
                         n_match = ECMPatterns.RESUME_N_PATTERN.search(line)
                         if n_match:
-                            composite = n_match.group(1)
+                            n_value = n_match.group(1)
+                            # Convert hex to decimal if needed
+                            if n_value.startswith('0x') or n_value.startswith('0X'):
+                                composite = str(int(n_value, 16))
+                            else:
+                                composite = n_value
 
                     # Extract B1 parameter
                     if not b1:
@@ -75,13 +84,15 @@ class ResidueFileManager:
                     if ECMPatterns.RESUME_SIGMA_PATTERN.search(line):
                         curve_count += 1
 
-            # Validate we found all required metadata
-            if composite and b1 and curve_count > 0:
+            # Validate: composite and curves are required, B1 is optional
+            # (P95/mprime residues don't include B1; it comes from the server)
+            if composite and curve_count > 0:
+                b1_value = b1 if b1 else 0
                 self.logger.info(
                     f"Parsed residue file {file_path}: "
-                    f"composite={composite[:20]}..., b1={b1}, curves={curve_count}"
+                    f"composite={composite[:20]}..., b1={b1_value}, curves={curve_count}"
                 )
-                return (composite, b1, curve_count)
+                return (composite, b1_value, curve_count)
             else:
                 self.logger.warning(
                     f"Incomplete metadata in residue file {file_path}: "
@@ -128,17 +139,22 @@ class ResidueFileManager:
             with open(file_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
 
-            # Detect format: GPU format (single-line) vs old format (multi-line)
-            # GPU format: each line has METHOD=...; PARAM=...; SIGMA=...; etc
+            # Detect format: single-line vs old format (multi-line)
+            # Single-line formats (each line is a complete curve):
+            #   GPU: METHOD=ECM; PARAM=...; SIGMA=...; N=...; ...
+            #   P95/mprime: PARAM=0; N=0x<hex>; QX=0x<hex>; SIGMA=<decimal>
             # Old format: separate N=, B1=, SIGMA= lines
-            is_gpu_format = any('METHOD=ECM' in line and 'SIGMA=' in line and ';' in line for line in lines[:5])
-            self.logger.debug(f"Detected {'GPU' if is_gpu_format else 'CPU'} residue file format")
+            is_single_line_format = any(
+                'SIGMA=' in line and ';' in line and ('METHOD=ECM' in line or 'PARAM=' in line)
+                for line in lines[:5]
+            )
+            self.logger.debug(f"Detected {'single-line' if is_single_line_format else 'multi-line'} residue file format")
 
             header_lines: List[str] = []
             curve_blocks: List[List[str]] = []
 
-            if is_gpu_format:
-                # GPU format: each line is a complete curve
+            if is_single_line_format:
+                # Single-line format: each line is a complete curve
                 for line in lines:
                     if ECMPatterns.RESUME_SIGMA_PATTERN.search(line):
                         curve_blocks.append([line])
@@ -260,7 +276,12 @@ class ResidueFileManager:
                     if not composite:
                         n_match = ECMPatterns.RESUME_N_PATTERN.search(line)
                         if n_match:
-                            composite = n_match.group(1)
+                            n_value = n_match.group(1)
+                            # Convert hex to decimal if needed
+                            if n_value.startswith('0x') or n_value.startswith('0X'):
+                                composite = str(int(n_value, 16))
+                            else:
+                                composite = n_value
 
                     # Extract sigma values
                     sigma_match = ECMPatterns.RESUME_SIGMA_PATTERN.search(line)

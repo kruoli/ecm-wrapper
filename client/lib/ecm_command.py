@@ -32,6 +32,7 @@ def build_ecm_command(
     sigma: Optional[Union[str, int]] = None,
     one: bool = False,
     maxmem: Optional[int] = None,
+    b1done: Optional[int] = None,
 ) -> List[str]:
     """
     Build a GMP-ECM command line with correct flag ordering.
@@ -61,6 +62,9 @@ def build_ecm_command(
         sigma: Sigma value (-sigma, ECM only)
         one: Stop after first factor (-one)
         maxmem: Maximum memory in MB for stage 2 (-maxmem)
+        b1done: Stage 1 already complete up to this bound. When set,
+            B1 is formatted as "b1done-b1" so GMP-ECM skips stage 1.
+            Use b1done=b1 for pure stage 2 runs (e.g. resuming P95 residues).
 
     Returns:
         List of command-line arguments suitable for subprocess.
@@ -115,8 +119,11 @@ def build_ecm_command(
     if maxmem is not None:
         cmd.extend(["-maxmem", str(maxmem)])
 
-    # 11. B1
-    cmd.append(str(b1))
+    # 11. B1 (with optional B1done prefix for stage 2 resume)
+    if b1done is not None:
+        cmd.append(f"{b1done}-{b1}")
+    else:
+        cmd.append(str(b1))
 
     # 12. B2: omit when None or -1
     if b2 is not None and b2 != -1:

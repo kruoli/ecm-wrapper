@@ -11,6 +11,8 @@ Handles:
 import logging
 import hashlib
 import re
+
+import math
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 from datetime import datetime, timedelta
@@ -30,11 +32,9 @@ logger = logging.getLogger(__name__)
 class ResidueManager:
     """Manages ECM residue files for decoupled two-stage processing."""
 
-    # Patterns for parsing residue file metadata
-    PARAM_PATTERN = re.compile(r'PARAM=(\d+)')
-    B1_PATTERN = re.compile(r'B1=(\d+)')
-    N_PATTERN = re.compile(r'N=(\d+)')
-    SIGMA_PATTERN = re.compile(r'SIGMA=(\d+)')
+    ALLOWED_EVAL_CHARS = "0123456789+-*/^()" # prevent abusing eval(…), DO NOT CHANGE!
+    CHKCONST = 4294967291 # from GMP-ECM's CHKSUMMOD (ecm/ecm-ecm.h:170)
+    EXPONENTATION_PATTERN = re.compile(r'(\d+)\*\*(\d+)')
 
     def __init__(self):
         """Initialize the residue manager."""
@@ -43,12 +43,13 @@ class ResidueManager:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.t_level_calculator = TLevelCalculator()
 
-    def parse_residue_file(self, file_content: bytes) -> Dict[str, Any]:
+    def parse_residue_file(self, file_content: bytes, b1_in: Optional[int]) -> Dict[str, Any]:
         """
         Parse metadata from a residue file.
 
         Args:
             file_content: Raw bytes of the residue file
+            b1_in: B1 of a residue file that was created with Prime95/mprime
 
         Returns:
             Dict with keys: composite, b1, parametrization, curve_count
@@ -61,69 +62,118 @@ class ResidueManager:
         except UnicodeDecodeError as e:
             raise ValueError(f"Residue file is not valid UTF-8: {e}")
 
-        lines = [line.strip() for line in content.strip().split('\n') if line.strip()]
+        raw_lines = content.strip().replace('\r', '').split('\n')
+        lines = [line.strip() for line in raw_lines if line.strip() and not line.lstrip().startswith(('[', '#'))]
         if not lines:
             raise ValueError("Residue file is empty")
 
         # Parse first line to get metadata
         first_line = lines[0]
 
-        # Check if it's GPU format (single-line with METHOD=ECM; PARAM=...; etc)
-        if 'METHOD=ECM' in first_line and 'SIGMA=' in first_line and ';' in first_line:
-            # GPU format - each line is a complete curve
-            param_match = self.PARAM_PATTERN.search(first_line)
-            b1_match = self.B1_PATTERN.search(first_line)
-            n_match = self.N_PATTERN.search(first_line)
+        # There are multiple valid stage 1 save file formats. The most important ones are:
+        # - GMP-ECM's current save format (has a checksum) that can be used with CPU and CUDA GPU
+        #  …and…
+        # - Prime95/mprime's format, accepted by GMP-ECM as input (from version 22 onward)
+        # While using CGBN is useful for small- and medium-sized numbers, Prime95/mprime's fast FFTs shine when larger
+        # numbers are being processed and especially when AVX512 is available. Though one should note that
+        # Prime95/mprime limits bases to 32-bit numbers and are best when the base is as small as possible and there are
+        # no non-trivial cofactors known. (Cofactors do not slow things down, but also do not speed things up unlike
+        # with CGBN when going down to a smaller kernel.) Another disadvantage of Prime95/mprime is that it does not
+        # include B1.
+        # To use this feature, GmpEcmHook=1 needs to be added to prime.txt; output can be found in results.txt, but may
+        # have to be stripped of timestamps.
 
-            if not all([param_match, b1_match, n_match]):
-                raise ValueError("GPU format residue file missing required fields (PARAM, B1, or N)")
+        line_elements = [el.strip() for el in first_line.split(';') if el.strip()]
+        split_elements = [el.split('=', 1) for el in line_elements]
+        available_keys = [parts[0] for parts in split_elements if len(parts) > 1]
 
-            # Assertions for type narrowing after the above check
-            assert n_match is not None
-            assert b1_match is not None
-            assert param_match is not None
+        # Common parameters
+        param_of_residue_index = available_keys.index("PARAM")
+        param_of_residue = int(split_elements[param_of_residue_index][1])
+        n_str_index = available_keys.index("N")
+        n_str: str
+        n_str = split_elements[n_str_index][1] # hexadecimal number with prefix OR decimal expression
+        curve_count = sum(1 for line in lines if "SIGMA=" in line) # count curves (each line with SIGMA= is a curve)
 
-            composite = n_match.group(1)
-            b1 = int(b1_match.group(1))
-            parametrization = int(param_match.group(1))
+        # Check if the data comes from Prime95/mprime
+        if "QX" in available_keys: # special key for identification
+            if b1_in is None:
+                raise ValueError("B1 was not set despite processing a Prime95/mprime file")
 
-            # Count curves (each line with SIGMA= is a curve)
-            curve_count = sum(1 for line in lines if self.SIGMA_PATTERN.search(line))
+            b1 = b1_in
+            composite = int(n_str, 0) # "base 0" allows for a 0x prefix
 
-        else:
-            # CPU format - multi-line with header blocks
-            # Look for N=, B1=, PARAM= in the first few lines
-            composite = None
-            b1 = None
-            parametrization = None
+        else: # GMP-ECM format
+            if "CHECKSUM" not in available_keys:
+                raise ValueError("An original GMP-ECM residue had no checksum")
 
-            for line in lines[:20]:  # Check first 20 lines for metadata
-                if composite is None:
-                    n_match = self.N_PATTERN.match(line)
-                    if n_match:
-                        composite = n_match.group(1)
-                if b1 is None:
-                    b1_match = self.B1_PATTERN.match(line)
-                    if b1_match:
-                        b1 = int(b1_match.group(1))
-                if parametrization is None and 'PARAM=' in line:
-                    param_match = self.PARAM_PATTERN.search(line)
-                    if param_match:
-                        parametrization = int(param_match.group(1))
+            if n_str.isdecimal(): # pure decimal
+                composite = int(n_str)
 
-            if not all([composite, b1, parametrization is not None]):
-                raise ValueError("CPU format residue file missing required fields (N, B1, or PARAM)")
+            elif n_str[:2].lower() == "0x" and n_str[2:].isdecimal(): # hexadecimal
+                composite = int(n_str[2:], 16)
 
-            # Count curves (SIGMA= lines indicate individual curves)
-            curve_count = sum(1 for line in lines if line.startswith('SIGMA='))
+            elif not n_str.strip(self.ALLOWED_EVAL_CHARS): # only mathematical characters allowed
+                python_expr: str
+                python_expr = n_str.replace("^", "**").replace("/", "//")
 
-        if curve_count == 0:
+                # only allow one exponentiation in expression (sufficient for OPN numbers)
+                exponentiation_count = python_expr.count("**")
+                if exponentiation_count > 1:
+                    raise ValueError(f"Only one exponentation per expression allowed")
+
+                elif exponentiation_count > 0:
+                    match = self.EXPONENTATION_PATTERN.search(python_expr)
+                    if not match:
+                        ValueError(f"Exponentiations do not support brackets nor negative exponents")
+
+                    # make sure the resulting number is reasonably small
+                    base = int(match.group(1))
+                    exponent = int(match.group(2))
+                    if exponent * math.log10(base) > 100000:
+                        raise ValueError(f"N too big")
+
+                composite = int(eval(python_expr))
+
+            else:
+                raise ValueError(f"N has an unknown format: {n_str}")
+
+            b1_index = available_keys.index("B1")
+            b1 = int(split_elements[b1_index][1])
+
+            # Check residues for validity
+            for line in lines:
+                line_elements = [el.strip() for el in line.split(';') if el.strip()]
+                split_elements = [el.split('=', 1) for el in line_elements]
+                available_keys = [parts[0] for parts in split_elements if len(parts) > 1]
+                checksum_index = available_keys.index("CHECKSUM")
+                checksum = int(split_elements[checksum_index][1])
+
+                # Calculate checksum of line
+                checksum_calc = b1
+                sigma_index = available_keys.index("SIGMA")
+                sigma = int(split_elements[sigma_index][1])
+                # Note: differing from most checksum implementations, GMP-ECM always does a MOD operation first
+                #       and a MUL operation second, which look like this:
+                #       mpz_mul_ui(checksum_calc, checksum_calc, mpz_fdiv_ui(some_val, CHKCONST))
+                checksum_calc *= sigma % self.CHKCONST
+                checksum_calc *= composite % self.CHKCONST
+                x_index = available_keys.index("X")
+                x = int(split_elements[x_index][1], 0) # field X is always in hexadecimal format
+                checksum_calc *= x % self.CHKCONST
+                checksum_calc *= param_of_residue + 1 # does not need a MOD operation
+                checksum_calc %= self.CHKCONST
+
+                if checksum != checksum_calc:
+                    raise ValueError("A line did not match its expected checksum")
+
+        if not curve_count:
             raise ValueError("No curves found in residue file")
 
         return {
-            'composite': composite,
+            'composite': str(composite),
             'b1': b1,
-            'parametrization': parametrization,
+            'parametrization': param_of_residue,
             'curve_count': curve_count
         }
 
@@ -136,7 +186,8 @@ class ResidueManager:
         db: Session,
         file_content: bytes,
         client_id: str,
-        stage1_attempt_id: Optional[int] = None
+        stage1_attempt_id: Optional[int] = None,
+        b1: Optional[int] = None
     ) -> ECMResidue:
         """
         Store a residue file and create database record.
@@ -150,6 +201,7 @@ class ResidueManager:
             file_content: Raw residue file bytes
             client_id: ID of the uploading client
             stage1_attempt_id: Optional ID of the stage 1 attempt to link
+            b1: B1 of a residue file that was created with Prime95/mprime
 
         Returns:
             ECMResidue database record
@@ -158,7 +210,7 @@ class ResidueManager:
             ValueError: If file format is invalid or composite not found
         """
         # Parse metadata from file
-        metadata = self.parse_residue_file(file_content)
+        metadata = self.parse_residue_file(file_content, b1)
         composite_number = metadata['composite']
 
         # Look up composite in database

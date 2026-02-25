@@ -60,8 +60,7 @@ def handle_shutdown(
         output.info(f"Abandoning residue work {current_residue_id}...")
         wrapper.api_client.abandon_residue(
             wrapper.client_id,
-            current_residue_id,
-            reason="client_interrupted"
+            current_residue_id
         )
 
     # Clean up local residue file

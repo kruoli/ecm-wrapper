@@ -125,7 +125,7 @@ class ResidueManager:
                 elif exponentiation_count > 0:
                     match = self.EXPONENTATION_PATTERN.search(python_expr)
                     if not match:
-                        ValueError(f"Exponentiations do not support brackets nor negative exponents")
+                        raise ValueError(f"Exponentiations do not support brackets nor negative exponents")
 
                     # make sure the resulting number is reasonably small
                     base = int(match.group(1))

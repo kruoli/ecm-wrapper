@@ -21,9 +21,7 @@ from pathlib import Path
 from typing import Any, Optional, Dict, TYPE_CHECKING
 import argparse
 import hashlib
-import os
 import signal
-import sys
 import time
 
 from .ecm_config import (
@@ -161,13 +159,19 @@ class WorkMode(ABC):
 
         Override in subclasses for custom cleanup behavior.
         Default implementation abandons work if we have a work_id.
+        If the abandon call fails (e.g. network down), queues a work
+        completion for later retry so the assignment doesn't stay active.
 
         Args:
             work: Work assignment that failed (may be None)
             error: The exception that occurred (can be Exception or KeyboardInterrupt)
         """
         if self.current_work_id:
-            self.wrapper.abandon_work(self.current_work_id, reason="execution_error")
+            if not self.wrapper.abandon_work(self.current_work_id, reason="execution_error"):
+                # Network likely down - queue completion so assignment gets released on reconnect
+                self.wrapper.submission_queue.enqueue_work_completion(
+                    self.current_work_id, self.ctx.client_id
+                )
             self.current_work_id = None
 
     def cleanup_on_shutdown(self) -> None:
@@ -229,18 +233,7 @@ class WorkMode(ABC):
                 self._second_interrupt_received = True
                 self.wrapper.graceful_shutdown_requested = True
                 self.wrapper.stop_event.set()
-                # Directly signal any running subprocesses - readline() may be blocking
-                # (PEP 475 prevents the signal from unblocking readline naturally)
-                with self.wrapper._subprocess_lock:
-                    for proc in list(self.wrapper._running_subprocesses):
-                        if proc.poll() is None:
-                            try:
-                                if sys.platform != 'win32':
-                                    os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-                                else:
-                                    proc.send_signal(signal.CTRL_BREAK_EVENT)
-                            except (OSError, ProcessLookupError):
-                                pass
+                self.wrapper._signal_subprocesses_interrupt()
                 print("\n")
                 print("=" * 60)
                 print("Stopping after current curve...")
@@ -614,7 +607,7 @@ class Stage1ProducerMode(WorkMode):
         print(f"Saving residues to: {self.residue_file}")
 
         # Run stage 1
-        success, factor, actual_curves, raw_output, all_factors = self.wrapper._run_stage1(
+        stage1_result = self.wrapper._run_stage1_primitive(
             composite=composite,
             b1=b1,
             curves=curves,
@@ -626,6 +619,13 @@ class Stage1ProducerMode(WorkMode):
             gpu_curves=gpu_curves,
             verbose=self.args.verbose
         )
+
+        # Extract fields from primitive result dict
+        success = stage1_result['success']
+        factor = stage1_result['factors'][-1] if stage1_result['factors'] else None
+        actual_curves = stage1_result['curves_completed']
+        raw_output = stage1_result['raw_output']
+        all_factors = list(zip(stage1_result['factors'], stage1_result['sigmas']))
 
         # Build FactorResult
         result = FactorResult()
@@ -691,7 +691,11 @@ class Stage1ProducerMode(WorkMode):
 
     def cleanup_on_failure(self, work: Optional[Dict[str, Any]], error: BaseException) -> None:
         if self.current_work_id:
-            self.wrapper.abandon_work(self.current_work_id, reason="stage1_failed")
+            if not self.wrapper.abandon_work(self.current_work_id, reason="stage1_failed"):
+                # Network likely down - queue completion so assignment gets released on reconnect
+                self.wrapper.submission_queue.enqueue_work_completion(
+                    self.current_work_id, self.ctx.client_id
+                )
             self.current_work_id = None
 
         # Clean up residue file
@@ -974,7 +978,11 @@ class Stage2ConsumerMode(WorkMode):
 
     def cleanup_on_failure(self, work: Optional[Dict[str, Any]], error: BaseException) -> None:
         if self.current_residue_id:
-            self.api_client.abandon_residue(self.ctx.client_id, self.current_residue_id)
+            if not self.api_client.abandon_residue(self.ctx.client_id, self.current_residue_id):
+                # Network likely down - queue abandonment so residue gets released on reconnect
+                self.wrapper.submission_queue.enqueue_residue_abandonment(
+                    self.current_residue_id, self.ctx.client_id
+                )
             self.current_residue_id = None
 
         if self.local_residue_file and self.local_residue_file.exists():

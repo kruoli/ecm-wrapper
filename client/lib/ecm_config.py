@@ -6,7 +6,7 @@ reducing function argument counts and improving code maintainability.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TypedDict
 from pathlib import Path
 
 
@@ -32,6 +32,18 @@ class ECMConfigValidation:
         """Validate parametrization."""
         if param not in [0, 1, 2, 3]:
             raise ValueError(f"Parametrization must be 0-3, got {param}")
+
+
+class ECMPrimitiveResult(TypedDict):
+    """Return type of _execute_ecm_primitive() and its helper wrappers."""
+    success: bool
+    factors: List[str]
+    sigmas: List[Optional[str]]
+    curves_completed: int
+    raw_output: str
+    parametrization: int
+    exit_code: int
+    interrupted: bool
 
 
 @dataclass
@@ -294,7 +306,7 @@ class FactorResult:
         return list(zip(self.factors, self.sigmas))
 
     @classmethod
-    def from_primitive_result(cls, prim_result: Dict[str, Any], execution_time: float = 0.0) -> 'FactorResult':
+    def from_primitive_result(cls, prim_result: ECMPrimitiveResult, execution_time: float = 0.0) -> 'FactorResult':
         """
         Create FactorResult from _execute_ecm_primitive() dict output.
 
@@ -351,4 +363,51 @@ class FactorResult:
             if self.sigmas[0] is not None:
                 result['sigma'] = self.sigmas[0]
 
+        return result
+
+
+@dataclass
+class ExecutionBatch:
+    """
+    Parameters for a batch of ECM work.
+
+    Defines the interface between planning (what to run) and execution (how to run it).
+    Used by CompositeExecutionEngine as the common input format.
+    """
+
+    composite: str
+    b1: int
+    b2: Optional[int] = None
+    curves: int = 1
+    method: str = "ecm"
+    verbose: bool = False
+    progress_interval: int = 0
+
+
+@dataclass
+class BatchResult:
+    """
+    Result from executing a batch of ECM work.
+
+    Engine's output format. Can be converted to FactorResult for API compatibility.
+    """
+
+    factors: List[str] = field(default_factory=list)
+    sigmas: List[Optional[str]] = field(default_factory=list)
+    curves_run: int = 0
+    execution_time: float = 0.0
+    success: bool = False
+    raw_output: Optional[str] = None
+    interrupted: bool = False
+
+    def to_factor_result(self) -> FactorResult:
+        """Convert to FactorResult for API compatibility."""
+        result = FactorResult()
+        for factor, sigma in zip(self.factors, self.sigmas):
+            result.add_factor(factor, sigma)
+        result.curves_run = self.curves_run
+        result.execution_time = self.execution_time
+        result.success = self.success
+        result.raw_output = self.raw_output
+        result.interrupted = self.interrupted
         return result

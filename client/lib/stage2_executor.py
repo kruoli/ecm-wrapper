@@ -3,8 +3,8 @@
 Stage2Executor - Unified Stage 2 execution with worker pool management.
 
 This class eliminates ~270 lines of duplicated Stage 2 logic across:
-- ECMWrapper._run_stage2_multithread()
-- run_batch_pipeline.py cpu_worker() function
+- execution_engine.py (two-stage and pipelined modes)
+- scripts/run_batch_pipeline.py cpu_worker() function
 
 Handles:
 - Residue file splitting

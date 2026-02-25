@@ -9,7 +9,7 @@ Runs GPU stage 1 and CPU stage 2 concurrently in a pipeline architecture:
 This maximizes hardware utilization by keeping both GPU and CPU busy.
 
 Architecture:
-- Uses Stage2Executor (via wrapper._run_stage2_multithread) for multi-threaded stage 2
+- Uses Stage2Executor directly for multi-threaded stage 2
 - Uses ResultProcessor for consistent factor handling and logging
 """
 
@@ -30,6 +30,7 @@ from lib.arg_parser import parse_int_with_scientific
 
 # Import wrapper and utilities
 from lib.ecm_executor import ECMWrapper
+from lib.stage2_executor import Stage2Executor
 from lib.result_processor import ResultProcessor
 from lib.results_builder import ResultsBuilder
 from lib.parsing_utils import ECMPatterns
@@ -90,7 +91,7 @@ def gpu_worker(wrapper: ECMWrapper, numbers: list, b1: int, curves: int,
             # Run stage 1
             stage1_start = time.time()
 
-            stage1_success, stage1_factor, actual_curves, stage1_output, all_factors = wrapper._run_stage1(
+            stage1_result = wrapper._run_stage1_primitive(
                 composite=number,
                 b1=b1,
                 curves=curves,
@@ -100,6 +101,13 @@ def gpu_worker(wrapper: ECMWrapper, numbers: list, b1: int, curves: int,
                 gpu_device=gpu_device,
                 gpu_curves=gpu_curves
             )
+
+            # Extract fields from primitive result dict
+            stage1_success = stage1_result['success']
+            stage1_factor = stage1_result['factors'][-1] if stage1_result['factors'] else None
+            actual_curves = stage1_result['curves_completed']
+            stage1_output = stage1_result['raw_output']
+            all_factors = list(zip(stage1_result['factors'], stage1_result['sigmas']))
             stage1_time = time.time() - stage1_start
 
             if stage1_factor:
@@ -201,15 +209,8 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
                 logger.info(f"[CPU Thread] [{idx}/{total}] Starting stage 2 for {number[:30]}...")
                 stage2_start = time.time()
                 early_termination = wrapper.config['programs']['gmp_ecm'].get('early_termination', True) and not continue_after_factor
-                stage2_result = wrapper._run_stage2_multithread(
-                    residue_file=residue_file,
-                    b1=b1_actual,
-                    b2=b2,
-                    workers=stage2_workers,
-                    verbose=verbose,
-                    early_termination=early_termination,
-                    progress_interval=progress_interval
-                )
+                executor = Stage2Executor(wrapper, residue_file, b1_actual, b2, None, stage2_workers, verbose)
+                stage2_result = executor.execute(early_termination, progress_interval)
                 stage2_time = time.time() - stage2_start
 
                 # Extract results from stage 2

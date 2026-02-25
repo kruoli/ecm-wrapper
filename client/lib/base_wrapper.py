@@ -542,6 +542,25 @@ class BaseWrapper:
 
             self._running_subprocesses.clear()
 
+    def _signal_subprocesses_interrupt(self) -> None:
+        """
+        Send SIGINT to all running subprocesses to trigger graceful shutdown.
+
+        Used by signal handlers to unblock subprocess readline() calls
+        (PEP 475 prevents the signal from propagating through Python's I/O).
+        Sends to the process group so child processes (ECM binaries) also receive it.
+        """
+        with self._subprocess_lock:
+            for proc in list(self._running_subprocesses):
+                if proc.poll() is None:
+                    try:
+                        if sys.platform != 'win32':
+                            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+                        else:
+                            proc.send_signal(signal.CTRL_BREAK_EVENT)
+                    except (OSError, ProcessLookupError):
+                        pass
+
     def _stream_subprocess_output(self, cmd: List[str], composite: Optional[str],
                                    log_prefix: str, line_callback: Optional[Callable] = None) -> tuple[subprocess.Popen, List[str]]:
         """

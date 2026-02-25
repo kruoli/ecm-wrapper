@@ -1,29 +1,15 @@
 #!/usr/bin/env python3
-import os
 import subprocess
 import time
-import sys
-import signal
 import threading
-import hashlib
-import queue
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple, Union, Callable
 from lib.base_wrapper import BaseWrapper
 from lib.parsing_utils import ECMPatterns
 from lib.residue_manager import ResidueFileManager
 from lib.result_processor import ResultProcessor
-from lib.results_builder import results_for_stage1
-from lib.stage2_executor import Stage2Executor
-from lib.ecm_worker_process import run_worker_ecm_process
-from lib.ecm_arg_helpers import parse_sigma_arg, resolve_param, resolve_stage2_workers
-from lib.work_helpers import print_work_header, print_work_status, request_ecm_work
-from lib.stage1_helpers import submit_stage1_complete_workflow
-from lib.error_helpers import handle_work_failure, check_work_limit_reached
-from lib.cleanup_helpers import handle_shutdown
-
-# New modularized utilities
-from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
+from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult, ExecutionBatch, ECMPrimitiveResult
+from lib.execution_engine import CompositeExecutionEngine, TLevelBatchProducer
 from lib.ecm_command import build_ecm_command
 from lib.ecm_math import (
     trial_division, is_probably_prime, get_b1_for_digit_length
@@ -47,13 +33,15 @@ class ECMWrapper(BaseWrapper):
     def __init__(self, config_path: str):
         super().__init__(config_path)
         self.residue_manager = ResidueFileManager()
-        # Initialize new executor for config-based methods
         # Graceful shutdown support (3 levels)
         self.stop_event = threading.Event()  # Shared with Stage2Executor for curve-level stop
         self.interrupted = False
         self.shutdown_level = 0  # 0=none, 1=complete batch, 2=complete curve, 3=abort
         self.graceful_shutdown_requested = False  # First Ctrl+C: finish current work
         self._original_sigint_handler: Optional[Any] = None  # Store original handler for restoration
+        self._active_stage2_executor: Optional[Any] = None  # Set by execution_engine.py for interrupt handling
+        # Unified execution engine
+        self._engine = CompositeExecutionEngine(self)
 
     # ==================== NEW CONFIG-BASED METHODS ====================
     # These methods use configuration objects for cleaner interfaces
@@ -146,6 +134,8 @@ class ECMWrapper(BaseWrapper):
         Stage 1: GPU-accelerated residue generation
         Stage 2: CPU processing of residues
 
+        Delegates to CompositeExecutionEngine.run_two_stage().
+
         Args:
             config: Two-stage configuration object
                    - If config.resume_file is provided, skip stage 1 and process existing residue
@@ -154,7 +144,6 @@ class ECMWrapper(BaseWrapper):
             FactorResult with discovered factors
 
         Example:
-            >>> # Full two-stage pipeline
             >>> config = TwoStageConfig(
             ...     composite="12345...",
             ...     b1=50000,
@@ -162,164 +151,30 @@ class ECMWrapper(BaseWrapper):
             ...     stage2_curves_per_residue=1000
             ... )
             >>> result = wrapper.run_two_stage_v2(config)
-            >>>
-            >>> # Resume from existing residue (stage 2 only)
-            >>> config = TwoStageConfig(
-            ...     composite="12345...",
-            ...     b1=50000,
-            ...     resume_file="path/to/residue.txt"
-            ... )
-            >>> result = wrapper.run_two_stage_v2(config)
         """
-        start_time = time.time()
-
-        # Install graceful shutdown signal handler (3 levels)
-        def graceful_sigint_handler(signum, frame):
-            """Handle Ctrl+C gracefully with 3 levels:
-            1st: Flag shutdown requested (let entire assignment finish), then exit after
-            2nd: Complete current curve then stop
-            3rd: Immediate abort
-            """
-            self.shutdown_level += 1
-            if self.shutdown_level == 1:
-                # Level 1: Do NOT set graceful_shutdown_requested - let the full assignment complete.
-                # The work mode loop will check shutdown_level after execute_work() returns
-                # and set finish_after_current to prevent requesting new work.
-                print("\n[Ctrl+C] Will complete after this assignment finishes...")
-                print("[Ctrl+C] Press again to stop after current curve, twice more to abort")
-                self.logger.info("Shutdown level 1: will complete current assignment")
-            elif self.shutdown_level == 2:
-                self.graceful_shutdown_requested = True
-                self.stop_event.set()  # Signal workers to stop after current curve
-                # Directly signal any running subprocesses - readline() may be blocking
-                # (PEP 475 prevents the signal from unblocking readline naturally)
-                with self._subprocess_lock:
-                    for proc in list(self._running_subprocesses):
-                        if proc.poll() is None:
-                            try:
-                                if sys.platform != 'win32':
-                                    os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-                                else:
-                                    proc.send_signal(signal.CTRL_BREAK_EVENT)
-                            except (OSError, ProcessLookupError):
-                                pass
-                print("\n[Ctrl+C] Stopping after current curve...")
-                print("[Ctrl+C] Press again to abort immediately")
-                self.logger.info("Shutdown level 2: stopping after current curve")
-            else:
-                print("\n[Ctrl+C] Immediate abort requested")
-                self.logger.info("Shutdown level 3: immediate abort")
-                # Restore original handler and re-raise to trigger immediate abort
-                if self._original_sigint_handler:
-                    signal.signal(signal.SIGINT, self._original_sigint_handler)
-                raise KeyboardInterrupt()
-
-        # Save and install new handler
-        self._original_sigint_handler = signal.signal(signal.SIGINT, graceful_sigint_handler)
-
-        try:
-            # Check if resuming from existing residue file
-            if config.resume_file:
-                residue_file = Path(config.resume_file)
-                if not residue_file.exists():
-                    self.logger.error(f"Resume file not found: {residue_file}")
-                    result = FactorResult()
-                    result.success = False
-                    result.execution_time = time.time() - start_time
-                    return result
-
-                # Parse residue file for metadata
-                residue_info = self._parse_residue_file(residue_file)
-                _composite = residue_info['composite']
-                stage1_curves = residue_info['curve_count']
-                stage1_b1 = residue_info['b1']
-
-                # Use B1 from residue file if available
-                if stage1_b1 > 0:
-                    if stage1_b1 != config.b1:
-                        self.logger.info(f"Using B1={stage1_b1} from residue file (overriding config B1={config.b1})")
-                    actual_b1 = stage1_b1
-                else:
-                    actual_b1 = config.b1
-
-                self.logger.info(f"Resuming from residue file: {residue_file}")
-                self.logger.info(f"Stage 1 completed {stage1_curves} curves at B1={actual_b1}")
-
-                # Skip stage 1, go directly to stage 2
-                stage1_result = None
-            else:
-                # Normal flow: Setup residue file and run stage 1
-                residue_file = self._create_residue_path(config)
-                actual_b1 = config.b1
-                stage1_curves = 0
-
-                # Stage 1: GPU execution
-                stage1_result = self._run_stage1_primitive(
-                    composite=config.composite,
-                    b1=config.b1,
-                    curves=config.stage1_curves,
-                    residue_file=residue_file,
-                    use_gpu=(config.stage1_device == "GPU"),
-                    param=config.stage1_parametrization,
-                    verbose=config.verbose,
-                    gpu_device=config.gpu_device,
-                    gpu_curves=config.gpu_curves
-                )
-
-                # Early return if factor found in stage 1
-                if stage1_result['factors']:
-                    return self._build_factor_result(stage1_result, start_time)
-
-                # Skip stage 2 if b2=0 (stage 1 only mode)
-                if config.b2 == 0:
-                    self.logger.info("B2=0: Skipping stage 2 (stage 1 only mode)")
-                    return self._build_factor_result(stage1_result, start_time)
-
-                stage1_curves = stage1_result.get('curves_run', 0)
-
-            # Stage 2: Multi-threaded CPU processing
-            actual_b2 = config.b2 or (actual_b1 * 100)  # Default B2
-            self.logger.info(f"Starting stage 2: B1={actual_b1:,}, B2={actual_b2:,}, workers={config.threads}")
-
-            # _run_stage2_multithread returns: (factor, all_factors, curves_completed, execution_time, sigma)
-            _factor, all_factors, curves_completed, _stage2_time, sigma = self._run_stage2_multithread(
-                residue_file=residue_file,
-                b1=actual_b1,
-                b2=actual_b2,
-                workers=config.threads,
-                verbose=config.verbose,
-                progress_interval=config.progress_interval
-            )
-
-            # Build FactorResult from stage 2 results
-            result = FactorResult()
-            if all_factors:
-                for f in all_factors:
-                    result.add_factor(f, sigma)
-            result.curves_run = curves_completed
-            result.execution_time = time.time() - start_time
-            result.success = len(all_factors) > 0
-
-            # Check if execution was gracefully shutdown (any level of Ctrl+C)
-            if self.shutdown_level >= 1:
-                result.interrupted = True
-                self.logger.info(f"Graceful shutdown completed - processed {curves_completed} curves")
-
-            return result
-        finally:
-            # Always restore the original signal handler
-            if self._original_sigint_handler:
-                signal.signal(signal.SIGINT, self._original_sigint_handler)
-            # Reset shutdown state for next execution
-            self.graceful_shutdown_requested = False
-            self.shutdown_level = 0
-            self.stop_event.clear()
+        batch_result = self._engine.run_two_stage(
+            composite=config.composite,
+            b1=config.b1,
+            b2=config.b2,
+            stage1_curves=config.stage1_curves,
+            stage2_workers=config.threads,
+            stage1_parametrization=config.stage1_parametrization,
+            verbose=config.verbose,
+            progress_interval=config.progress_interval,
+            use_gpu=(config.stage1_device == "GPU"),
+            gpu_device=config.gpu_device,
+            gpu_curves=config.gpu_curves,
+            resume_file=Path(config.resume_file) if config.resume_file else None,
+            save_residues=config.save_residues,
+        )
+        return batch_result.to_factor_result()
 
     def run_multiprocess_v2(self, config: MultiprocessConfig) -> FactorResult:
         """
         Execute multiprocess ECM with configuration object.
 
         Distributes curves across multiple CPU cores for parallel execution.
+        Delegates to CompositeExecutionEngine.run_cpu_workers().
 
         Args:
             config: Multiprocess configuration object
@@ -338,176 +193,27 @@ class ECMWrapper(BaseWrapper):
         """
         import multiprocessing as mp
 
-        # Ensure num_processes is set (should be auto-set in __post_init__)
         num_processes = config.num_processes or mp.cpu_count()
 
-        self.logger.info(f"Running multi-process ECM: {num_processes} workers, {config.total_curves} total curves")
-        start_time = time.time()
+        batch = ExecutionBatch(
+            composite=config.composite,
+            b1=config.b1,
+            b2=config.b2,
+            curves=config.total_curves,
+            method=config.method,
+            verbose=config.verbose,
+            progress_interval=config.progress_interval,
+        )
 
-        # Distribute curves across workers
-        curves_per_worker = config.total_curves // num_processes
-        remaining_curves = config.total_curves % num_processes
-        worker_assignments = []
-
-        for worker_id in range(num_processes):
-            worker_curves = curves_per_worker + (1 if worker_id < remaining_curves else 0)
-            if worker_curves > 0:
-                worker_assignments.append((worker_id + 1, worker_curves))
-
-        # Create shared variables for worker coordination
-        manager = mp.Manager()
-        result_queue = manager.Queue()
-        progress_queue = manager.Queue()
-        stop_event = manager.Event()
-
-        # Start worker processes
-        processes = []
-        for worker_id, worker_curves in worker_assignments:
-            p = mp.Process(
-                target=run_worker_ecm_process,
-                args=(worker_id, config.composite, config.b1, config.b2, worker_curves,
-                      config.verbose, config.method, self.config['programs']['gmp_ecm']['path'],
-                      result_queue, stop_event, config.progress_interval, progress_queue)
-            )
-            p.start()
-            processes.append(p)
-
-        # Collect results from workers
-        all_factors = []
-        all_sigmas = []
-        all_raw_outputs = []
-        total_curves_completed = 0
-        completed_workers = 0
-
-        def process_result(result: dict) -> None:
-            """Process a single worker result."""
-            nonlocal total_curves_completed
-            total_curves_completed += result['curves_completed']
-
-            if result['factor_found']:
-                factor = result['factor_found']
-                # Deduplicate: multiple workers can find the same factor
-                if factor not in all_factors:
-                    all_factors.append(factor)
-                    all_sigmas.append(result.get('sigma_found'))
-                    self.logger.info(f"Worker {result['worker_id']} found factor: {factor}")
-                else:
-                    self.logger.info(f"Worker {result['worker_id']} found same factor: {factor} (already recorded)")
-                stop_event.set()  # Signal workers to stop on factor found
-
-            # Collect raw output from each worker
-            if 'raw_output' in result:
-                all_raw_outputs.append(f"=== Worker {result['worker_id']} ===\n{result['raw_output']}")
-
-        try:
-            while completed_workers < len(processes):
-                try:
-                    result = result_queue.get(timeout=0.5)
-                    process_result(result)
-                    completed_workers += 1
-                except queue.Empty:
-                    # Timeout waiting for result - check if processes are still alive
-                    if not any(p.is_alive() for p in processes):
-                        # Drain any remaining results from the queue before breaking
-                        # (processes may have exited after putting results in queue)
-                        while True:
-                            try:
-                                result = result_queue.get_nowait()
-                                process_result(result)
-                                completed_workers += 1
-                            except queue.Empty:
-                                break
-                        break
-                    continue
-        except KeyboardInterrupt:
-            self.logger.info("Multiprocess ECM interrupted by user")
-            self.interrupted = True
-            try:
-                stop_event.set()  # Signal workers to stop
-            except Exception:
-                pass  # Manager connection may be broken
-
-        # Suppress SIGINT during cleanup to prevent additional Ctrl+C from
-        # breaking out of the kill loop and leaving orphaned child processes.
-        prev_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
-        try:
-            # Wait for all processes to finish.
-            # Use os.killpg() to kill the entire process group (worker + ECM binary)
-            # since each worker calls os.setpgrp() and ECM inherits that group.
-            for p in processes:
-                try:
-                    p.join(timeout=10)
-                except Exception:
-                    pass
-                if p.is_alive():
-                    # SIGTERM the entire process group (worker + its ECM child)
-                    try:
-                        if p.pid is not None:
-                            if sys.platform != 'win32':
-                                os.killpg(p.pid, signal.SIGTERM)
-                            else:
-                                p.terminate()
-                    except (ProcessLookupError, PermissionError):
-                        pass
-                    try:
-                        p.join(timeout=5)
-                    except Exception:
-                        pass
-                if p.is_alive():
-                    # Escalate to SIGKILL if SIGTERM didn't work
-                    try:
-                        if p.pid is not None:
-                            if sys.platform != 'win32':
-                                os.killpg(p.pid, signal.SIGKILL)
-                            else:
-                                p.kill()
-                    except (ProcessLookupError, PermissionError):
-                        pass
-                    try:
-                        p.join(timeout=2)
-                    except Exception:
-                        pass
-
-            # Shutdown the manager in a daemon thread to avoid hanging
-            def _shutdown_manager():
-                try:
-                    manager.shutdown()
-                except Exception:
-                    pass
-
-            shutdown_thread = threading.Thread(target=_shutdown_manager, daemon=True)
-            shutdown_thread.start()
-            shutdown_thread.join(timeout=5)
-        finally:
-            signal.signal(signal.SIGINT, prev_handler)
-
-        if self.interrupted:
-            print(f"\nMultiprocess ECM stopped. Completed {total_curves_completed} curves before interrupt.")
-
-        # Build FactorResult with recursive factoring of any composite factors
-        result = FactorResult()
-        for factor, sigma in zip(all_factors, all_sigmas):
-            # Fully factor each discovered factor to get all prime factors
-            # This handles cases where ECM finds a composite factor (product of primes)
-            # Use _fully_factor_composite which calls primitives directly (no recursion through run_ecm_v2)
-            prime_factors = self._fully_factor_composite(factor)
-            for prime in prime_factors:
-                result.add_factor(prime, sigma)
-
-        result.curves_run = total_curves_completed
-        result.execution_time = time.time() - start_time
-        result.success = len(result.factors) > 0
-        result.raw_output = '\n\n'.join(all_raw_outputs) if all_raw_outputs else None
-        result.interrupted = self.interrupted  # Signal if execution was interrupted
-
-        return result
+        batch_result = self._engine.run_cpu_workers(batch, num_processes)
+        return batch_result.to_factor_result()
 
     def _run_tlevel_pipelined(self, config: TLevelConfig) -> FactorResult:
         """
         Execute T-level targeting in pipelined mode (GPU + CPU running concurrently).
 
         GPU thread produces residues, CPU thread consumes and processes them.
-        Stops early when factor found to avoid wasted computation.
+        Delegates to CompositeExecutionEngine.run_pipelined() with a TLevelBatchProducer.
 
         Args:
             config: T-level configuration object with use_two_stage=True
@@ -515,431 +221,36 @@ class ECMWrapper(BaseWrapper):
         Returns:
             FactorResult with discovered factors
         """
-        from lib.ecm_math import (get_optimal_b1_for_tlevel, calculate_tlevel,
-                                  calculate_curves_to_target_direct, TLEVEL_TRANSITION_CACHE)
-
         self.logger.info(f"Starting PIPELINED progressive ECM with target t{config.target_t_level:.1f} (GPU+CPU concurrent)")
-        start_time = time.time()
 
-        # Shared state between threads
-        residue_queue: queue.Queue[Any] = queue.Queue(maxsize=2)  # Small queue for backpressure
-        shutdown_event = threading.Event()
-        self.stop_event.clear()        # Reset from any previous run's factor-found
-        self.interrupted = False       # Reset from any previous run's interrupt
+        producer = TLevelBatchProducer(
+            start_t_level=config.start_t_level,
+            target_t_level=config.target_t_level,
+            composite=config.composite,
+            b2_multiplier=config.b2_multiplier,
+            max_batch_curves=config.max_batch_curves,
+            logger=self.logger,
+        )
 
-        # Results accumulation (protected by lock)
-        result_lock = threading.Lock()
-        all_factors = []
-        all_sigmas = []
-        total_curves = 0
-        curve_history = []  # Completed curves (for actual t-level)
+        batch_result = self._engine.run_pipelined(
+            batch_producer=producer,
+            composite=config.composite,
+            stage2_workers=config.threads,
+            verbose=config.verbose,
+            progress_interval=config.progress_interval,
+            gpu_device=config.gpu_device,
+            gpu_curves=config.gpu_curves,
+            no_submit=config.no_submit,
+            project=config.project,
+            work_id=config.work_id,
+            start_t_level=config.start_t_level,
+        )
 
-        # Current t-level tracking
-        current_t_level = config.start_t_level
-
-        # Projected t-level tracking (for GPU lookahead)
-        # This tracks what the t-level WILL BE once queued work completes
-        projected_lock = threading.Lock()
-        projected_curve_history = []  # Includes queued but not yet completed curves
-        projected_t_level = config.start_t_level
-
-        # Build step targets
-        step_targets = []
-        t = 20.0
-        while t < config.target_t_level:
-            if t > current_t_level:
-                step_targets.append(t)
-            t += 5.0
-        if config.target_t_level not in step_targets and config.target_t_level > current_t_level:
-            step_targets.append(config.target_t_level)
-
-        def gpu_producer():
-            """GPU thread: Run stage 1 for each batch, put residues in queue"""
-            nonlocal projected_t_level
-
-            self.logger.info(f"[GPU Thread] Starting, will process {len(step_targets)} t-level steps")
-
-            for step_target in step_targets:
-                # Check for shutdown (factor found in CPU thread)
-                if shutdown_event.is_set():
-                    self.logger.info("[GPU Thread] Factor found, stopping production")
-                    break
-
-                # Check for user interrupt
-                if self.interrupted:
-                    self.logger.info("[GPU Thread] User interrupt, stopping")
-                    shutdown_event.set()
-                    break
-
-                # Use PROJECTED t-level (includes queued but not completed work)
-                # This prevents over-producing curves when GPU is ahead of CPU
-                with projected_lock:
-                    current_projected = projected_t_level
-
-                # Skip if projected t-level already exceeds target
-                if current_projected >= step_target:
-                    self.logger.info(f"[GPU Thread] Skipping t{step_target:.1f} (projected t{current_projected:.2f} already exceeds)")
-                    continue
-
-                # Get optimal B1
-                b1, _ = get_optimal_b1_for_tlevel(step_target)
-
-                # Calculate B2 based on multiplier (for two-stage mode)
-                b2_for_calculation = int(b1 * config.b2_multiplier)
-
-                # Calculate curves needed based on PROJECTED t-level
-                # Always use B2-aware calculation for two-stage mode (cache assumes default B2)
-                curves = calculate_curves_to_target_direct(
-                    current_projected, step_target, b1, 3, b2=b2_for_calculation
-                )
-                if curves:
-                    self.logger.info(f"[GPU Thread] B2-aware: t{current_projected:.2f} → t{step_target:.1f} = {curves} curves at B1={b1}, B2={b2_for_calculation}, p=3")
-
-                if curves is None or curves <= 0:
-                    self.logger.warning(f"[GPU Thread] Could not calculate curves for t{current_projected:.3f} → t{step_target:.1f}, skipping")
-                    continue
-
-                # Chunk large batches if max_batch_curves is set
-                # This allows the CPU to start processing sooner, potentially finding factors earlier
-                max_batch = config.max_batch_curves
-                remaining_curves = curves
-                batch_num = 0
-
-                while remaining_curves > 0:
-                    # Check for shutdown between batches
-                    if shutdown_event.is_set() or self.interrupted:
-                        self.logger.info(f"[GPU Thread] Stopping mid-step (shutdown or interrupt)")
-                        break
-
-                    # Determine batch size
-                    batch_curves = min(remaining_curves, max_batch) if max_batch else remaining_curves
-                    batch_num += 1
-
-                    if max_batch and curves > max_batch:
-                        self.logger.info(f"[GPU Thread] Starting stage 1 batch {batch_num}: {batch_curves} curves at B1={b1} (projected t{current_projected:.2f} → t{step_target:.1f}, {remaining_curves} remaining)")
-                    else:
-                        self.logger.info(f"[GPU Thread] Starting stage 1: {batch_curves} curves at B1={b1} (projected t{current_projected:.2f} → t{step_target:.1f})")
-
-                    # Create residue file
-                    residue_file = Path(f"/tmp/tlevel_residue_{int(time.time() * 1000)}.txt")
-
-                    # Run stage 1
-                    stage1_start = time.time()
-                    try:
-                        stage1_success, stage1_factor, _, stage1_output, all_stage1_factors = self._run_stage1(
-                            composite=config.composite,
-                            b1=b1,
-                            curves=batch_curves,
-                            residue_file=residue_file,
-                            use_gpu=True,
-                            verbose=config.verbose,
-                            gpu_device=config.gpu_device,
-                            gpu_curves=config.gpu_curves
-                        )
-                        stage1_time = time.time() - stage1_start
-
-                        # Get ACTUAL curve count from residue file (GPU may run more than requested due to batch rounding)
-                        # The ECM output parsing only catches one batch, residue file has the real count
-                        if residue_file.exists():
-                            residue_info = self._parse_residue_file(residue_file)
-                            actual_curves = residue_info.get('curve_count', batch_curves)
-                            if actual_curves != batch_curves:
-                                self.logger.debug(f"[GPU Thread] Residue file has {actual_curves} curves (requested {batch_curves})")
-                        else:
-                            actual_curves = batch_curves  # Fallback if no residue (factor found?)
-
-                        # Check for shutdown before putting to queue (prevents deadlock if CPU thread stopped consuming)
-                        if shutdown_event.is_set():
-                            self.logger.info(f"[GPU Thread] Shutdown detected after stage 1 completion, discarding batch")
-                            # Clean up residue file since it won't be processed
-                            if residue_file.exists():
-                                residue_file.unlink()
-                            break
-
-                        # Put work item in queue (blocks if queue is full)
-                        # Use b2_for_calculation which respects config.b2_multiplier
-                        residue_queue.put({
-                            'residue_file': residue_file,
-                            'b1': b1,
-                            'b2': b2_for_calculation,
-                            'curves': actual_curves,
-                            'stage1_factor': stage1_factor,
-                            'all_factors': all_stage1_factors,
-                            'stage1_time': stage1_time,
-                            'stage1_output': stage1_output,
-                            'step_target': step_target,
-                            'stage1_success': stage1_success
-                        })
-
-                        # Update PROJECTED t-level to account for this queued batch
-                        # This prevents over-producing curves while CPU is still catching up
-                        with projected_lock:
-                            projected_curve_history.append(f"{actual_curves}@{b1},{int(b2_for_calculation)},p=3")
-                            # Pass starting t-level so new curves add to base, not start from t0
-                            projected_t_level = calculate_tlevel(projected_curve_history, base_tlevel=config.start_t_level)
-                            current_projected = projected_t_level  # Update for next iteration's logging
-                            self.logger.info(f"[GPU Thread] Stage 1 batch complete in {stage1_time:.1f}s, projected t-level now {projected_t_level:.2f}")
-
-                        # Decrement remaining
-                        remaining_curves -= actual_curves
-
-                        # If factor found, stop producing
-                        if stage1_factor:
-                            self.logger.info(f"[GPU Thread] Factor found in stage 1, stopping production")
-                            break
-
-                    except Exception as e:
-                        self.logger.error(f"[GPU Thread] Error in stage 1: {e}")
-                        break  # Exit the batch loop on error
-
-            # Send sentinel (only if CPU thread is still running and consuming)
-            if not shutdown_event.is_set():
-                self.logger.info("[GPU Thread] All batches complete, signaling CPU thread")
-                residue_queue.put(None)
-            else:
-                self.logger.info("[GPU Thread] All batches complete, CPU already stopped (shutdown event set)")
-
-        def cpu_consumer():
-            """CPU thread: Process stage 2 from residue queue"""
-            nonlocal current_t_level, total_curves
-
-            self.logger.info(f"[CPU Thread] Starting with {config.threads} workers")
-
-            while True:
-                # Check for user interrupt
-                if self.interrupted:
-                    self.logger.info("[CPU Thread] User interrupt, draining queue")
-                    shutdown_event.set()
-                    break
-
-                # Get next work item (poll with timeout so we can check for shutdown)
-                self.logger.info("[CPU Thread] Waiting for next work item from queue...")
-                work_item = None
-                got_item = False
-                while not got_item:
-                    if self.interrupted or shutdown_event.is_set():
-                        self.logger.info("[CPU Thread] Shutdown detected while waiting for work")
-                        break
-                    try:
-                        work_item = residue_queue.get(timeout=1.0)
-                        got_item = True
-                    except queue.Empty:
-                        continue
-
-                if not got_item:
-                    break
-
-                # Check for sentinel
-                if work_item is None:
-                    self.logger.info("[CPU Thread] Received stop signal")
-                    residue_queue.task_done()
-                    break
-
-                self.logger.info(f"[CPU Thread] Received work item (stage1_factor={work_item.get('stage1_factor') is not None})")
-
-                try:
-                    residue_file = work_item['residue_file']
-                    b1 = work_item['b1']
-                    b2 = work_item['b2']
-                    curves = work_item['curves']
-                    stage1_factor = work_item['stage1_factor']
-                    all_stage1_factors = work_item['all_factors']
-                    stage1_time = work_item['stage1_time']
-                    step_target = work_item['step_target']
-                    stage1_success = work_item['stage1_success']
-
-                    # Handle stage 1 factor
-                    if stage1_factor:
-                        self.logger.info(f"[CPU Thread] Factor found in stage 1: {stage1_factor}")
-                        with result_lock:
-                            # all_stage1_factors is list of (factor, sigma) tuples - unpack them
-                            for f, s in all_stage1_factors:
-                                all_factors.append(f)
-                                all_sigmas.append(s)
-                            total_curves += curves
-                            # Track with B2=0 (stage 1 only)
-                            curve_history.append(f"{curves}@{b1},0,p=3")
-                            current_t_level = calculate_tlevel(curve_history, base_tlevel=config.start_t_level)
-
-                        # Submit results with factor (b2=0 since stage 2 never ran)
-                        if not config.no_submit and curves > 0:
-                            # Build FactorResult from stage 1 factors for consistent submission
-                            s1_result = FactorResult()
-                            for f, s in all_stage1_factors:
-                                s1_result.add_factor(f, s)
-                            s1_result.curves_run = curves
-                            s1_result.execution_time = stage1_time
-
-                            step_results = s1_result.to_dict(config.composite, 'ecm')
-                            step_results['b1'] = b1
-                            step_results['b2'] = 0  # Stage 1 only
-                            step_results['parametrization'] = 3
-                            if config.work_id:
-                                step_results['work_id'] = config.work_id
-                            self.submit_result(step_results, config.project, 'gmp-ecm-ecm')
-
-                        # Signal GPU to stop
-                        self.logger.info("[CPU Thread] Stopping GPU production (factor found)")
-                        shutdown_event.set()
-                        residue_queue.task_done()
-                        # Clean up residue file
-                        if residue_file.exists():
-                            residue_file.unlink()
-                        break
-
-                    # Run stage 2
-                    if stage1_success and residue_file.exists():
-                        self.logger.info(f"[CPU Thread] Starting stage 2: {curves} curves at B1={b1}, B2={b2}")
-                        stage2_start = time.time()
-
-                        _, all_stage2_factors, curves_completed, stage2_time, sigma = self._run_stage2_multithread(
-                            residue_file=residue_file,
-                            b1=b1,
-                            b2=b2,
-                            workers=config.threads,
-                            verbose=config.verbose,
-                            progress_interval=config.progress_interval
-                        )
-
-                        self.logger.info(f"[CPU Thread] Stage 2 complete in {stage2_time:.1f}s")
-
-                        # Update results
-                        with result_lock:
-                            if all_stage2_factors:
-                                all_factors.extend(all_stage2_factors)
-                                all_sigmas.extend([sigma] * len(all_stage2_factors))
-                                self.logger.info(f"[CPU Thread] Factor found in stage 2: {all_stage2_factors}")
-                                # Signal GPU to stop
-                                shutdown_event.set()
-
-                            total_curves += curves_completed
-                            # Track with actual B2
-                            curve_history.append(f"{curves_completed}@{b1},{int(b2)},p=3")
-                            current_t_level = calculate_tlevel(curve_history, base_tlevel=config.start_t_level)
-                            self.logger.info(f"[CPU Thread] Current t-level: {current_t_level:.2f}")
-
-                            if all_stage2_factors:
-                                self.logger.info("[CPU Thread] Factor found, will break after cleanup")
-                                # Submit results with factor before breaking
-                                if not config.no_submit and curves_completed > 0:
-                                    # Build FactorResult for consistent submission
-                                    s2_result = FactorResult()
-                                    for f in all_stage2_factors:
-                                        s2_result.add_factor(f, sigma)
-                                    s2_result.curves_run = curves_completed
-                                    s2_result.execution_time = stage1_time + stage2_time
-
-                                    step_results = s2_result.to_dict(config.composite, 'ecm')
-                                    step_results['b1'] = b1
-                                    step_results['b2'] = b2
-                                    step_results['parametrization'] = 3
-                                    if config.work_id:
-                                        step_results['work_id'] = config.work_id
-                                    self.submit_result(step_results, config.project, 'gmp-ecm-ecm')
-                                residue_queue.task_done()
-                                # Clean up
-                                if residue_file.exists():
-                                    residue_file.unlink()
-                                break
-
-                        self.logger.info("[CPU Thread] Stage 2 complete (no factor), cleaning up")
-
-                        # Submit results for this batch (outside the lock to avoid blocking)
-                        if not config.no_submit and curves_completed > 0:
-                            step_results = {
-                                'success': True,
-                                'factors_found': [],
-                                'curves_completed': curves_completed,
-                                'execution_time': stage1_time + stage2_time,
-                                'composite': config.composite,
-                                'method': 'ecm',
-                                'b1': b1,
-                                'b2': b2,
-                                'parametrization': 3  # Two-stage uses GPU param
-                            }
-                            if config.work_id:
-                                step_results['work_id'] = config.work_id
-                            submit_response = self.submit_result(step_results, config.project, 'gmp-ecm-ecm')
-                            if not submit_response:
-                                self.logger.warning(f"[CPU Thread] Failed to submit results for B1={b1}")
-                    else:
-                        self.logger.warning(f"[CPU Thread] Stage 1 failed or no residue file")
-
-                    # Clean up residue file
-                    if residue_file.exists():
-                        residue_file.unlink()
-
-                    residue_queue.task_done()
-                    self.logger.info("[CPU Thread] Batch complete, looping for next work item")
-
-                except Exception as e:
-                    self.logger.error(f"[CPU Thread] Error processing batch: {e}")
-                    residue_queue.task_done()
-                    continue
-
-            # Drain queue to prevent GPU thread from blocking on put()
-            # This happens when CPU breaks early (e.g., factor found)
-            drained = 0
-            while True:
-                try:
-                    # Non-blocking get: if queue empty, raises queue.Empty immediately
-                    item = residue_queue.get_nowait()
-                    if item is not None:
-                        # Clean up any residue files that weren't processed
-                        residue_file = item.get('residue_file')
-                        if residue_file and Path(residue_file).exists():
-                            Path(residue_file).unlink()
-                        drained += 1
-                    residue_queue.task_done()
-                except queue.Empty:
-                    break
-            if drained > 0:
-                self.logger.info(f"[CPU Thread] Drained {drained} unprocessed items from queue")
-
-        # Start both threads
-        gpu_thread = threading.Thread(target=gpu_producer, name="GPU-Stage1")
-        cpu_thread = threading.Thread(target=cpu_consumer, name="CPU-Stage2")
-
-        gpu_thread.start()
-        cpu_thread.start()
-
-        # Wait for completion, ensuring subprocesses are cleaned up on abort
-        try:
-            gpu_thread.join()
-            cpu_thread.join()
-        except (KeyboardInterrupt, SystemExit):
-            self.logger.info("Pipelined execution interrupted - terminating subprocesses...")
-            self.interrupted = True
-            self.stop_event.set()  # Signal Stage2Executor workers to stop
-            shutdown_event.set()  # Signal GPU/CPU threads to stop
-            # Kill any running subprocesses (GPU ecm process, Stage2Executor workers)
-            self._terminate_all_subprocesses()
-            s2_exec = getattr(self, '_active_stage2_executor', None)
-            if s2_exec is not None:
-                with s2_exec.process_lock:
-                    for p in s2_exec.running_processes:
-                        if p.poll() is None:
-                            try:
-                                p.terminate()
-                            except OSError:
-                                pass
-            # Give threads a moment to notice their subprocess died and exit
-            gpu_thread.join(timeout=5)
-            cpu_thread.join(timeout=5)
-            # Fall through to build partial result (don't re-raise)
-
-        # Build result
-        result = FactorResult()
-        for factor, sigma in zip(all_factors, all_sigmas):
-            result.add_factor(factor, sigma)
-        result.curves_run = total_curves
-        result.execution_time = time.time() - start_time
-        result.success = len(all_factors) > 0
-        result.t_level_achieved = current_t_level
-        result.interrupted = self.interrupted
+        # Convert BatchResult to FactorResult with t-level info
+        result = batch_result.to_factor_result()
+        result.t_level_achieved = getattr(batch_result, 't_level_achieved', 0.0)
+        curve_history = getattr(batch_result, 'curve_history', [])
         result.curve_summary = self._parse_curve_history(curve_history)
-
-        self.logger.info(f"Pipelined t-level execution complete: {total_curves} curves, t{current_t_level:.2f} achieved")
 
         return result
 
@@ -1273,7 +584,7 @@ class ECMWrapper(BaseWrapper):
         # Execution
         verbose: bool = False,
         maxmem: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> ECMPrimitiveResult:
         """
         Execute GMP-ECM primitive operation.
 
@@ -1418,7 +729,7 @@ class ECMWrapper(BaseWrapper):
         curves: int,
         residue_file: Path,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> ECMPrimitiveResult:
         """
         Run stage 1 only, save residue to file.
 
@@ -1449,7 +760,7 @@ class ECMWrapper(BaseWrapper):
         b1: int,
         b2: Optional[int],
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> ECMPrimitiveResult:
         """
         Run stage 2 from residue file.
 
@@ -1480,65 +791,6 @@ class ECMWrapper(BaseWrapper):
             residue_load=residue_file,
             **kwargs
         )
-
-    def _build_factor_result(self, prim_result: Dict[str, Any], start_time: float) -> FactorResult:
-        """
-        Convert primitive result dict to FactorResult object.
-
-        Recursively factors any composite factors found to ensure
-        all returned factors are prime (or small composites).
-
-        Args:
-            prim_result: Result dictionary from _execute_ecm_primitive()
-            start_time: Timestamp when execution started (from time.time())
-
-        Returns:
-            FactorResult object with populated fields
-        """
-        # Use factory method for base fields, then customize
-        execution_time = time.time() - start_time
-        result = FactorResult.from_primitive_result(prim_result, execution_time)
-
-        # Clear factors - we'll re-add after recursive factoring
-        original_factors = list(zip(prim_result.get('factors', []), prim_result.get('sigmas', [])))
-        result.factors = []
-        result.sigmas = []
-
-        # Recursively factor each discovered factor to get all primes
-        for factor, sigma in original_factors:
-            # Fully factor this composite to get all prime factors
-            prime_factors = self._fully_factor_found_result(factor, quiet=False)
-
-            # Add each prime factor with the original sigma
-            # (the sigma that found the composite factor)
-            for prime in prime_factors:
-                result.add_factor(prime, sigma)
-
-        return result
-
-    def _create_residue_path(self, config: TwoStageConfig) -> Path:
-        """
-        Create residue file path with auto-mkdir.
-
-        If config specifies save_residues path, uses that. Otherwise creates
-        an auto-generated path in the residue directory.
-
-        Args:
-            config: TwoStageConfig with optional save_residues path
-
-        Returns:
-            Path object for residue file
-        """
-        if config.save_residues:
-            return Path(config.save_residues)
-
-        # Auto-generate residue path
-        residue_dir = Path(self.config['execution']['residue_dir'])
-        residue_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        composite_hash = hashlib.md5(config.composite.encode()).hexdigest()[:8]
-        return residue_dir / f"stage1_{composite_hash}_{timestamp}.txt"
-
 
     def _preserve_failed_upload(self, residue_file: Path) -> None:
         """
@@ -1626,60 +878,6 @@ class ECMWrapper(BaseWrapper):
         else:
             # No stage1_attempt_id - can't upload
             return None
-
-    def _run_stage1(self, composite: str, b1: int, curves: int,
-                   residue_file: Path, use_gpu: bool, verbose: bool,
-                   gpu_device: Optional[int] = None, gpu_curves: Optional[int] = None,
-                   sigma: Optional[Union[str, int]] = None, param: Optional[int] = None) -> tuple[bool, Optional[str], int, str, List[tuple[str, Optional[str]]]]:
-        """
-        Run Stage 1 with GPU or CPU and save residues.
-
-        This is a convenience wrapper around _run_stage1_primitive() that provides
-        a tuple-based return format for easier unpacking in main block code.
-
-        Returns:
-            tuple: (success, factor, actual_curves, raw_output, all_factors)
-        """
-        # Call the primitive
-        result = self._run_stage1_primitive(
-            composite=composite,
-            b1=b1,
-            curves=curves,
-            residue_file=residue_file,
-            use_gpu=use_gpu,
-            gpu_device=gpu_device,
-            gpu_curves=gpu_curves,
-            sigma=sigma,
-            param=param,
-            verbose=verbose
-        )
-
-        # Convert dict result to tuple format for backward compatibility
-        success = result['success']
-        factor = result['factors'][-1] if result['factors'] else None  # Use last factor
-        actual_curves = result['curves_completed']
-        output = result['raw_output']
-        all_factors = list(zip(result['factors'], result['sigmas']))
-
-        return success, factor, actual_curves, output, all_factors
-
-    def _run_stage2_multithread(self, residue_file: Path, b1: int, b2: Optional[int],
-                               workers: int, verbose: bool, early_termination: bool = True,
-                               progress_interval: int = 0) -> Tuple[Optional[str], List[str], int, float, Optional[str]]:
-        """
-        Run Stage 2 with multiple CPU workers.
-
-        This is now a thin wrapper around Stage2Executor.
-
-        Returns:
-            Tuple of (factor, all_factors, curves_completed, execution_time, sigma)
-        """
-        executor = Stage2Executor(self, residue_file, b1, b2, None, workers, verbose)
-        self._active_stage2_executor: Optional[Stage2Executor] = executor
-        try:
-            return executor.execute(early_termination, progress_interval)
-        finally:
-            self._active_stage2_executor = None
 
     def _split_residue_file(self, residue_file: Path, num_chunks: int) -> List[Path]:
         """Split residue file into chunks for parallel processing"""

@@ -211,6 +211,47 @@ class SubmissionQueue:
             self.logger.error(f"Failed to queue work completion: {e}")
             return None
 
+    def enqueue_residue_abandonment(
+        self,
+        residue_id: int,
+        client_id: str
+    ) -> Optional[Path]:
+        """
+        Enqueue a failed residue abandonment call for later retry.
+
+        Used when cleanup_on_failure can't reach the server to release
+        a claimed residue back to the available pool.
+
+        Args:
+            residue_id: Residue ID to abandon
+            client_id: Client identifier
+
+        Returns:
+            Path to the queued item file, or None on error
+        """
+        self._ensure_dirs()
+        item = {
+            "type": "residue_abandon",
+            "created_at": datetime.datetime.now().isoformat(),
+            "attempts": 0,
+            "payload": {
+                "residue_id": residue_id,
+                "client_id": client_id,
+            },
+        }
+
+        filename = self._generate_filename("residue_abandon")
+        filepath = self.completions_dir / filename
+
+        try:
+            with open(filepath, 'w') as f:
+                json.dump(item, f, indent=2)
+            self.logger.info(f"Queued residue abandonment: {filepath.name}")
+            return filepath
+        except Exception as e:
+            self.logger.error(f"Failed to queue residue abandonment: {e}")
+            return None
+
     def enqueue_residue_completion(
         self,
         residue_id: int,
@@ -393,6 +434,12 @@ class SubmissionQueue:
                     stage2_attempt_id=payload["stage2_attempt_id"]
                 )
                 return result is not None
+
+            elif item_type == "residue_abandon":
+                return api_client.abandon_residue(
+                    client_id=payload["client_id"],
+                    residue_id=payload["residue_id"]
+                )
 
             else:
                 self.logger.error(f"Unknown queue item type: {item_type}")

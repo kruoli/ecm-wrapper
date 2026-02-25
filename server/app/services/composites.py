@@ -187,14 +187,25 @@ class CompositeService:
             prior_t_level=prior_t_level  # T-level from work done before import
         )
 
+        # Calculate target t-level automatically based on digit length and SNFS data
+        composite.target_t_level = self.t_level_calculator.calculate_target_t_level(
+            digit_length=digit_length,
+            snfs_difficulty=snfs_difficulty
+        )
+
+        # Set current_t_level from prior_t_level if provided
+        if prior_t_level is not None:
+            composite.current_t_level = prior_t_level
+
         db.add(composite)
         db.flush()  # Get ID and make visible within transaction
         db.refresh(composite)
 
         logger.info(
-            "Created new composite: %s (%s digits) - ID: %s",
+            "Created new composite: %s (%s digits, target t%.1f) - ID: %s",
             number[:20] + "..." if len(number) > 20 else number,
             composite.digit_length,
+            composite.target_t_level,
             composite.id
         )
 

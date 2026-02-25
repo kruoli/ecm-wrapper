@@ -11,6 +11,8 @@ Handles:
 import logging
 import hashlib
 import re
+
+import math
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 from datetime import datetime, timedelta
@@ -30,7 +32,9 @@ logger = logging.getLogger(__name__)
 class ResidueManager:
     """Manages ECM residue files for decoupled two-stage processing."""
 
-    CHKCONST = 4294967291 # from GMP-ECM's ecm/ecm-ecm.h:170
+    ALLOWED_EVAL_CHARS = "0123456789+-*/^()" # prevent abusing eval(…), DO NOT CHANGE!
+    CHKCONST = 4294967291 # from GMP-ECM's CHKSUMMOD (ecm/ecm-ecm.h:170)
+    EXPONENTATION_PATTERN = re.compile(r'(\d+)\*\*(\d+)')
 
     def __init__(self):
         """Initialize the residue manager."""
@@ -87,6 +91,7 @@ class ResidueManager:
         param_of_residue_index = available_keys.index("PARAM")
         param_of_residue = int(split_elements[param_of_residue_index][1])
         n_str_index = available_keys.index("N")
+        n_str: str
         n_str = split_elements[n_str_index][1] # hexadecimal number with prefix OR decimal expression
         curve_count = sum(1 for line in lines if "SIGMA=" in line) # count curves (each line with SIGMA= is a curve)
 
@@ -102,15 +107,39 @@ class ResidueManager:
             if "CHECKSUM" not in available_keys:
                 raise ValueError("An original GMP-ECM residue had no checksum")
 
-            if n_str.isdecimal():
+            if n_str.isdecimal(): # pure decimal
                 composite = int(n_str)
-            elif not n_str.strip("0123456789+-*/^()"): # only mathematical characters
-                composite = int(eval(n_str.replace("^", "**").replace("/", "//")))
+
+            elif n_str[:2].lower() == "0x" and n_str[2:].isdecimal(): # hexadecimal
+                composite = int(n_str[2:], 16)
+
+            elif not n_str.strip(self.ALLOWED_EVAL_CHARS): # only mathematical characters allowed
+                python_expr: str
+                python_expr = n_str.replace("^", "**").replace("/", "//")
+
+                # only allow one exponentiation in expression (sufficient for OPN numbers)
+                exponentiation_count = python_expr.count("**")
+                if exponentiation_count > 1:
+                    raise ValueError(f"Only one exponentation per expression allowed")
+
+                elif exponentiation_count > 0:
+                    match = self.EXPONENTATION_PATTERN.search(python_expr)
+                    if not match:
+                        ValueError(f"Exponentiations do not support brackets nor negative exponents")
+
+                    # make sure the resulting number is reasonably small
+                    base = int(match.group(1))
+                    exponent = int(match.group(2))
+                    if exponent * math.log10(base) > 100000:
+                        raise ValueError(f"N too big")
+
+                composite = int(eval(python_expr))
+
             else:
                 raise ValueError(f"N has an unknown format: {n_str}")
 
             b1_index = available_keys.index("B1")
-            b1_in = int(split_elements[b1_index][1])
+            b1 = int(split_elements[b1_index][1])
 
             # Check residues for validity
             for line in lines:
@@ -121,26 +150,29 @@ class ResidueManager:
                 checksum = int(split_elements[checksum_index][1])
 
                 # Calculate checksum of line
-                checksum_calc = b1_in
+                checksum_calc = b1
                 sigma_index = available_keys.index("SIGMA")
                 sigma = int(split_elements[sigma_index][1])
+                # Note: differing from most checksum implementations, GMP-ECM always does a MOD operation first
+                #       and a MUL operation second, which look like this:
+                #       mpz_mul_ui(checksum_calc, checksum_calc, mpz_fdiv_ui(some_val, CHKCONST))
                 checksum_calc *= sigma % self.CHKCONST
                 checksum_calc *= composite % self.CHKCONST
                 x_index = available_keys.index("X")
-                x = int(split_elements[x_index][1], 0) # X is always in hexadecimal format
+                x = int(split_elements[x_index][1], 0) # field X is always in hexadecimal format
                 checksum_calc *= x % self.CHKCONST
-                checksum_calc *= param_of_residue + 1
+                checksum_calc *= param_of_residue + 1 # does not need a MOD operation
                 checksum_calc %= self.CHKCONST
 
                 if checksum != checksum_calc:
                     raise ValueError("A line did not match its expected checksum")
 
-        if curve_count == 0:
+        if not curve_count:
             raise ValueError("No curves found in residue file")
 
         return {
-            'composite': composite,
-            'b1': b1_in,
+            'composite': str(composite),
+            'b1': b1,
             'parametrization': param_of_residue,
             'curve_count': curve_count
         }

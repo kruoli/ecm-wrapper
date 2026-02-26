@@ -85,7 +85,7 @@ class ResidueFileManager:
                         curve_count += 1
 
             # Validate: composite and curves are required, B1 is optional
-            # (P95/mprime residues don't include B1; it comes from the server)
+            # (P95/mprime residues don't include neither B1 nor its parametrisation; the former comes from the server)
             if composite and curve_count > 0:
                 b1_value = b1 if b1 else 0
                 self.logger.info(
@@ -142,10 +142,10 @@ class ResidueFileManager:
             # Detect format: single-line vs old format (multi-line)
             # Single-line formats (each line is a complete curve):
             #   GPU: METHOD=ECM; PARAM=...; SIGMA=...; N=...; ...
-            #   P95/mprime: PARAM=0; N=0x<hex>; QX=0x<hex>; SIGMA=<decimal>
+            #   P95/mprime: N=0x<hex>; QX=0x<hex>; SIGMA=<decimal>
             # Old format: separate N=, B1=, SIGMA= lines
             is_single_line_format = any(
-                'SIGMA=' in line and ';' in line and ('METHOD=ECM' in line or 'PARAM=' in line)
+                'SIGMA=' in line and ';' in line and 'N=' in line
                 for line in lines[:5]
             )
             self.logger.debug(f"Detected {'single-line' if is_single_line_format else 'multi-line'} residue file format")

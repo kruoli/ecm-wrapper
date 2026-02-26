@@ -190,12 +190,20 @@ class ResidueFileManager:
             total_curves = len(curve_blocks)
             curves_per_chunk = max(1, total_curves // num_chunks)
             # Handle remainder curves
-            remainder = total_curves % num_chunks
+            remainder = total_curves % num_chunks if total_curves > num_chunks else 0
 
             self.logger.info(
-                f"Splitting {total_curves} curves into {num_chunks} chunks "
-                f"(~{curves_per_chunk} curves per chunk)"
+                f"Splitting {total_curves} curve{"s" if total_curves != 1 else ""} into "
+                f"{num_chunks} chunk{"s" if num_chunks != 1 else ""} "
+                f"(~{curves_per_chunk} curve{"s" if curves_per_chunk != 1 else ""} per chunk)"
             )
+
+            if total_curves < num_chunks:
+                num_chunks = total_curves
+                self.logger.info(
+                    f"Reducing to {num_chunks} chunk{"s" if num_chunks != 1 else ""} "
+                     "since there are fewer curves than workers"
+                )
 
             # Create chunk files - limit to num_chunks
             chunk_files = []

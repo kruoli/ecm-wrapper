@@ -66,6 +66,7 @@ jobs:
           # Write secrets from GitHub Actions
           echo "🔐 Writing secrets..."
           echo '${{ secrets.POSTGRES_PASSWORD }}' > server/secrets/postgres_password.txt
+          echo '${{ secrets.DATABASE_URL }}' > server/secrets/database_url.txt
           echo '${{ secrets.API_SECRET_KEY }}' > server/secrets/api_secret_key.txt
           echo '${{ secrets.ADMIN_API_KEY }}' > server/secrets/admin_api_key.txt
           chmod 600 server/secrets/*.txt

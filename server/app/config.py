@@ -18,7 +18,12 @@ def read_secret_file(file_path: str) -> Optional[str]:
 
 def get_database_url() -> str:
     """Construct database URL from environment or secret files."""
-    # Check if full DATABASE_URL is provided
+    # Check if full DATABASE_URL is provided (env var or secret file)
+    url_file = os.getenv("DATABASE_URL_FILE")
+    if url_file:
+        url = read_secret_file(url_file)
+        if url:
+            return url
     if "DATABASE_URL" in os.environ:
         url = os.getenv("DATABASE_URL")
         if url:

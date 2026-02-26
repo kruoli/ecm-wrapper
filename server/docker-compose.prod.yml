@@ -27,7 +27,9 @@ services:
     ports:
       - "8000:8000"  # Expose API on host port 8000 for nginx proxy
     environment:
-      # Database connection - password read from secret file at runtime
+      # Database connection - set DATABASE_URL secret for external DB,
+      # or use POSTGRES_* vars for the bundled postgres service
+      DATABASE_URL_FILE: /run/secrets/database_url
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ecm_distributed
@@ -38,12 +40,8 @@ services:
       ADMIN_API_KEY_FILE: /run/secrets/admin_api_key
     volumes:
       - residue_data:/app/data/residues
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - ecm_network
     secrets:
+      - database_url
       - postgres_password
       - api_secret_key
       - admin_api_key
@@ -58,6 +56,8 @@ volumes:
   residue_data:
 
 secrets:
+  database_url:
+    file: ./secrets/database_url.txt
   postgres_password:
     file: ./secrets/postgres_password.txt
   api_secret_key:

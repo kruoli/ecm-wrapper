@@ -87,9 +87,12 @@ class ResidueManager:
         split_elements = [el.split('=', 1) for el in line_elements]
         available_keys = [parts[0] for parts in split_elements if len(parts) > 1]
 
+        param_of_residue: int
+        param_of_residue = 0 # default for Prime95/mprime residues
+
         # Common parameters
-        param_of_residue_index = available_keys.index("PARAM")
-        param_of_residue = int(split_elements[param_of_residue_index][1])
+        if "N" not in available_keys:
+            raise ValueError("A residue was missing its N")
         n_str_index = available_keys.index("N")
         n_str: str
         n_str = split_elements[n_str_index][1] # hexadecimal number with prefix OR decimal expression
@@ -105,7 +108,16 @@ class ResidueManager:
 
         else: # GMP-ECM format
             if "CHECKSUM" not in available_keys:
-                raise ValueError("An original GMP-ECM residue had no checksum")
+                raise ValueError("GMP-ECM residues must have a checksum")
+            if "PARAM" not in available_keys:
+                raise ValueError("A GMP-ECM residue was missing its parametrisation")
+            if "B1" not in available_keys:
+                raise ValueError("A GMP-ECM residue was missing its B1")
+
+            param_of_residue_index = available_keys.index("PARAM")
+            param_of_residue = int(split_elements[param_of_residue_index][1])
+            b1_index = available_keys.index("B1")
+            b1 = int(split_elements[b1_index][1])
 
             if n_str.isdecimal(): # pure decimal
                 composite = int(n_str)
@@ -130,16 +142,13 @@ class ResidueManager:
                     # make sure the resulting number is reasonably small
                     base = int(match.group(1))
                     exponent = int(match.group(2))
-                    if exponent * math.log10(base) > 100000:
-                        raise ValueError(f"N too big")
+                    if exponent * math.log10(base) > 100000: # limit of around 100K digits
+                        raise ValueError(f"N is too big")
 
                 composite = int(eval(python_expr))
 
             else:
                 raise ValueError(f"N has an unknown format: {n_str}")
-
-            b1_index = available_keys.index("B1")
-            b1 = int(split_elements[b1_index][1])
 
             # Check residues for validity
             for line in lines:

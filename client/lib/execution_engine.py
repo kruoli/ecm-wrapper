@@ -770,6 +770,7 @@ class CompositeExecutionEngine:
                                     f"{all_stage2_factors}"
                                 )
                                 shutdown_event.set()
+                                self.wrapper.stop_event.set()
 
                             total_curves += curves_completed
                             curve_history.append(

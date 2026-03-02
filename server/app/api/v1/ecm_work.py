@@ -412,10 +412,10 @@ async def get_p1_work(
         # Filter to composites that still need PM1/PP1 at the required B1
         # Uses correlated NOT EXISTS against ecm_attempts (hits composite_id,method index)
         if check_pm1 and check_pp1:
-            # method='p1': needs work if EITHER pm1 OR pp1 is missing
+            # method='p1': needs work only if BOTH pm1 AND pp1 are missing
             pm1_covered = _pm1pp1_exists_subquery(db, 'pm1', required_b1)
             pp1_covered = _pm1pp1_exists_subquery(db, 'pp1', required_b1)
-            query = query.filter(or_(~pm1_covered, ~pp1_covered))
+            query = query.filter(and_(~pm1_covered, ~pp1_covered))
         elif check_pm1:
             pm1_covered = _pm1pp1_exists_subquery(db, 'pm1', required_b1)
             query = query.filter(~pm1_covered)

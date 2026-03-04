@@ -152,6 +152,29 @@ class CompositeExecutionEngine:
             except Exception:
                 pass  # Manager connection may be broken
 
+            # Wait for workers to finish current curve and drain their results
+            deadline = time.time() + 15  # Give workers up to 15s to wrap up
+            while completed_workers < len(processes) and time.time() < deadline:
+                try:
+                    result = result_queue.get(timeout=1.0)
+                    process_result(result)
+                    completed_workers += 1
+                except queue.Empty:
+                    if not any(p.is_alive() for p in processes):
+                        # All dead, drain anything left
+                        while True:
+                            try:
+                                result = result_queue.get_nowait()
+                                process_result(result)
+                                completed_workers += 1
+                            except queue.Empty:
+                                break
+                        break
+                except KeyboardInterrupt:
+                    # Second Ctrl+C during drain — give up waiting
+                    self.logger.info("Second interrupt, skipping result collection")
+                    break
+
         # Clean up processes and manager
         self._cleanup_processes(processes, manager)
 
@@ -771,6 +794,7 @@ class CompositeExecutionEngine:
                                 )
                                 shutdown_event.set()
                                 self.wrapper.stop_event.set()
+                                self.wrapper._signal_subprocesses_interrupt()
 
                             total_curves += curves_completed
                             curve_history.append(

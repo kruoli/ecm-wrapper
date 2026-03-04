@@ -60,7 +60,7 @@ class Settings(BaseSettings):
 
     # Work assignment
     default_work_timeout_minutes: int = Field(default=60, ge=1, le=1440, description="Work timeout in minutes")
-    max_work_items_per_client: int = Field(default=5, ge=1, le=100, description="Max work items per client")
+    max_work_items_per_client: int = Field(default=12, ge=1, le=100, description="Max work items per client")
 
     # T-level calculation
     t_level_binary_path: str = Field(

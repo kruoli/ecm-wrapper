@@ -318,7 +318,11 @@ def main():
                     # Explicit t-level mode: stop after finding factors
                     break
             else:
-                # No factors found - we've reached the target t-level
+                # No factors found
+                if result.interrupted:
+                    achieved = result.t_level_achieved if result.t_level_achieved else current_t_level
+                    output.warning(f"Interrupted at t{achieved:.2f} (target was t{target_t_level:.1f})")
+                    break
                 if is_progressive:
                     output.info(f"Reached t{target_t_level:.1f} with no factor found")
                 break

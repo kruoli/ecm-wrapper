@@ -399,6 +399,20 @@ class ECMWrapper(BaseWrapper):
                     all_factors.extend(step_result.factors)
                     all_sigmas.extend(step_result.sigmas)
                     total_curves += step_result.curves_run
+
+                    # Track partial curves in history for accurate t-level
+                    if step_result.curves_run > 0:
+                        effective_param = 3 if config.use_two_stage else config.parametrization
+                        if config.use_two_stage:
+                            actual_b2 = int(b1 * config.b2_multiplier)
+                            curve_history.append(f"{step_result.curves_run}@{b1},{actual_b2},p={effective_param}")
+                        else:
+                            curve_history.append(f"{step_result.curves_run}@{b1},p={effective_param}")
+                        try:
+                            current_t_level = calculate_tlevel(curve_history, base_tlevel=config.start_t_level)
+                            self.logger.info(f"T-level after partial run: {current_t_level:.2f}")
+                        except (subprocess.CalledProcessError, ValueError, OSError):
+                            pass
                     break
 
                 # Accumulate results

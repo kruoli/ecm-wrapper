@@ -176,6 +176,7 @@ class TLevelConfig(ECMConfigValidation):
     progress_interval: int = 0  # Show progress every N curves (0 = disabled)
     max_batch_curves: Optional[int] = None  # Max curves per GPU batch (enables chunking for pipelined mode)
     b2_multiplier: float = 100.0  # B2 = B1 * multiplier for two-stage mode (default 100)
+    b2_dictionary: Optional[Dict[int, int]] = None  # B1 → B2 lookup (overrides b2_multiplier)
 
     # GPU support
     gpu_device: Optional[int] = None
@@ -201,6 +202,12 @@ class TLevelConfig(ECMConfigValidation):
             self.threads = self.workers
         elif self.threads != 1:
             self.workers = self.threads
+
+    def get_b2_for_b1(self, b1: int) -> int:
+        """Resolve B2 for a given B1: dictionary lookup, then multiplier fallback."""
+        if self.b2_dictionary and b1 in self.b2_dictionary:
+            return self.b2_dictionary[b1]
+        return int(b1 * self.b2_multiplier)
 
         # Auto-set parametrization for two-stage mode if not explicitly set
         if self.use_two_stage and self.parametrization == 1:

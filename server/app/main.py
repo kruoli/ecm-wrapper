@@ -1,5 +1,10 @@
 import asyncio
 import logging
+import sys
+
+# Raise Python 3.11+ integer string conversion limit for large composites
+# Default is 4300 digits; ECM works with numbers that can exceed this
+sys.set_int_max_str_digits(100000)
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware

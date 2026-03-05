@@ -228,6 +228,7 @@ class ECMWrapper(BaseWrapper):
             target_t_level=config.target_t_level,
             composite=config.composite,
             b2_multiplier=config.b2_multiplier,
+            b2_dictionary=config.b2_dictionary,
             max_batch_curves=config.max_batch_curves,
             logger=self.logger,
         )
@@ -404,7 +405,7 @@ class ECMWrapper(BaseWrapper):
                     if step_result.curves_run > 0:
                         effective_param = 3 if config.use_two_stage else config.parametrization
                         if config.use_two_stage:
-                            actual_b2 = int(b1 * config.b2_multiplier)
+                            actual_b2 = config.get_b2_for_b1(b1)
                             curve_history.append(f"{step_result.curves_run}@{b1},{actual_b2},p={effective_param}")
                         else:
                             curve_history.append(f"{step_result.curves_run}@{b1},p={effective_param}")
@@ -430,7 +431,7 @@ class ECMWrapper(BaseWrapper):
                 # than GMP's default B2. Must include B2 in curve history to prevent overestimating progress.
                 # Example: 100@11e6,p=3 → t33.9 (wrong!), 100@11e6,11e8,p=3 → t32.2 (correct)
                 if config.use_two_stage:
-                    actual_b2 = int(b1 * config.b2_multiplier)
+                    actual_b2 = config.get_b2_for_b1(b1)
                     # Format B2 as integer (no decimals) for t-level binary compatibility
                     curve_history.append(f"{step_result.curves_run}@{b1},{actual_b2},p={effective_param}")
                 else:
@@ -440,7 +441,7 @@ class ECMWrapper(BaseWrapper):
                 # Submit this batch's results if enabled
                 if not config.no_submit and step_result.curves_run > 0:
                     # Calculate B2 for submission (two-stage uses B1*multiplier, else use GMP default)
-                    submission_b2 = int(b1 * config.b2_multiplier) if config.use_two_stage else None
+                    submission_b2 = config.get_b2_for_b1(b1) if config.use_two_stage else None
 
                     step_results = step_result.to_dict(config.composite, 'ecm')
                     step_results['b1'] = b1

@@ -299,36 +299,34 @@ class WorkMode(ABC):
         self._drain_queue()
 
         try:
-            b2_dict = dict()
-            k_dict = dict()
-            if self.args.b2_dictionary is not None:
+            b2_dict: Dict[int, int] = dict()
+            k_dict: Dict[int, int] = dict()
+            self._b2_dictionary: Optional[Dict[int, int]] = None
+            if getattr(self.args, 'b2_dictionary', None) is not None:
+                from lib.arg_parser import load_b2_dictionary
+                b2_dict = load_b2_dictionary(self.args.b2_dictionary)
+                # Also load k values (3rd column) with inline parsing
                 try:
-                    with open(self.args.b2_dictionary, 'r') as b2_dict_file:
-                        for line in b2_dict_file:
-                            if line.startswith('#') or line.startswith("'") or line.startswith('--') or not line:
+                    with open(self.args.b2_dictionary, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line.startswith('#') or line.startswith("'") or line.startswith('--'):
                                 continue
-                            entries = [l for l in line.strip().split(' ') if l]
-                            if len(entries) < 2: # extra entries are treated as comments
-                                print("Warning: A line in the B2 dictionary had a wrong format!")
-                                continue
-                            key = 0
-                            value = 0
-                            k = 0
-                            try:
-                                key = int(entries[0]) if 'e' not in entries[0].lower() else int(float(entries[0]) + 0.5)
-                                value = int(entries[1]) if 'e' not in entries[1].lower() else int(float(entries[1]) + 0.5)
-                                if len(entries) > 2:
+                            entries = line.split()
+                            if len(entries) >= 3:
+                                try:
                                     k_entry = entries[2]
                                     if not (k_entry.startswith('#') or k_entry.startswith("'") or k_entry.startswith('--')):
+                                        key = int(float(entries[0]))
                                         k = int(k_entry)
-                            except ValueError:
-                                print("Warning: An entry in the B2 dictionary had the wrong format!")
-                                continue
-                            b2_dict[key] = value
-                            if k > 0:
-                                k_dict[key] = k
-                except:
-                    print("The B2 file could not be accessed/loaded! Using defaults…")
+                                        if k > 0:
+                                            k_dict[key] = k
+                                except ValueError:
+                                    pass
+                except OSError:
+                    pass
+                if b2_dict:
+                    self._b2_dictionary = b2_dict
 
             while self.should_continue():
                 # Drain submission queue before each work request
@@ -1241,14 +1239,16 @@ class StandardAutoWorkMode(WorkMode):
     def execute_work(self, work: Dict[str, Any]) -> FactorResult:
         composite = work['composite']
 
-        has_b1_b2 = self.args.b1 is not None and self.args.b2 is not None
+        has_b1 = self.args.b1 is not None
         has_client_tlevel = hasattr(self.args, 'tlevel') and self.args.tlevel is not None
 
-        # Determine execution mode
-        if has_client_tlevel or (not has_b1_b2 and not has_client_tlevel):
-            return self._execute_tlevel_mode(work, composite, has_client_tlevel)
-        else:
+        # Determine execution mode:
+        # - Explicit B1 (with or without B2) → B1/B2 mode
+        # - Explicit --tlevel or no B1/tlevel → t-level mode
+        if has_b1 and not has_client_tlevel:
             return self._execute_b1b2_mode(work, composite)
+        else:
+            return self._execute_tlevel_mode(work, composite, has_client_tlevel)
 
     def _execute_tlevel_mode(self, work: Dict[str, Any], composite: str,
                              has_client_tlevel: bool) -> FactorResult:
@@ -1286,6 +1286,7 @@ class StandardAutoWorkMode(WorkMode):
             max_batch_curves=max_batch,
             use_two_stage=getattr(self.args, 'two_stage', False),
             b2_multiplier=getattr(self.args, 'b2_multiplier', None) or 100.0,
+            b2_dictionary=getattr(self, '_b2_dictionary', None),
             project=self.args.project,
             no_submit=False,
             work_id=self.current_work_id,

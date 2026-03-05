@@ -20,7 +20,7 @@ from typing import Optional
 
 from lib.ecm_executor import ECMWrapper
 from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
-from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_workers_default, get_max_batch_default, parse_int_with_scientific, validate_ecm_args
+from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_workers_default, get_max_batch_default, parse_int_with_scientific, validate_ecm_args, load_b2_dictionary
 from lib.stage1_helpers import submit_stage1_complete_workflow
 from lib.results_builder import results_for_stage1
 from lib.user_output import UserOutput
@@ -61,6 +61,11 @@ def main():
 
     # Get max_batch default from config (for two-stage GPU batching)
     max_batch = getattr(args, 'max_batch', None) or get_max_batch_default(wrapper.config)
+
+    # Load B2 dictionary if specified
+    b2_dictionary = None
+    if getattr(args, 'b2_dictionary', None):
+        b2_dictionary = load_b2_dictionary(args.b2_dictionary)
 
     # Resolve B1 from args or config based on method
     # This provides a sensible default when --b1 is not specified
@@ -270,6 +275,7 @@ def main():
                 progress_interval=args.progress_interval or 0,
                 max_batch_curves=max_batch,
                 b2_multiplier=getattr(args, 'b2_multiplier', None) or 100.0,
+                b2_dictionary=b2_dictionary,
                 project=args.project,
                 no_submit=not args.submit,
                 gpu_device=gpu_device,

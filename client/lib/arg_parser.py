@@ -39,6 +39,38 @@ def parse_int_with_scientific(value: str) -> int:
         raise argparse.ArgumentTypeError(f"Invalid integer or scientific notation: {value}") from e
 
 
+def load_b2_dictionary(filepath: str) -> Dict[int, int]:
+    """
+    Load a B1 → B2 mapping from a dictionary file.
+
+    File format: one entry per line, "B1 B2" separated by space.
+    Lines starting with #, ', or -- are comments. Supports scientific notation.
+
+    Returns:
+        Dict mapping B1 values to B2 values.
+    """
+    b2_dict: Dict[int, int] = {}
+    try:
+        with open(filepath, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or line.startswith("'") or line.startswith('--'):
+                    continue
+                entries = line.split()
+                if len(entries) < 2:
+                    print(f"Warning: Skipping malformed B2 dictionary line: {line}")
+                    continue
+                try:
+                    key = int(float(entries[0]))
+                    value = int(float(entries[1]))
+                    b2_dict[key] = value
+                except ValueError:
+                    print(f"Warning: Skipping invalid B2 dictionary entry: {line}")
+    except OSError as e:
+        print(f"Warning: Could not load B2 dictionary '{filepath}': {e}")
+    return b2_dict
+
+
 def create_ecm_parser() -> argparse.ArgumentParser:
     """Create argument parser for ECM wrapper."""
     parser = argparse.ArgumentParser(description='ECM Wrapper Client')
@@ -51,6 +83,8 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     parser.add_argument('--b1', type=parse_int_with_scientific, help='B1 bound (supports scientific notation, e.g., 26e7)')
     parser.add_argument('--b2', type=parse_int_with_scientific, help='B2 bound (supports scientific notation, e.g., 4e11). Use -1 for GMP-ECM default, 0 for stage 1 only')
     parser.add_argument('--b2-multiplier', type=float, help='Dynamic B2 calculation: B2 = B1 * multiplier (e.g., 1000 for B2=1000*B1). Overridden by explicit --b2')
+    parser.add_argument('--b2-dictionary', type=str, default=None,
+                       help='File which maps B1 to B2 values (one entry per line, separated by space); falls back to b2-multiplier if no matching entry')
     parser.add_argument('--curves', '-c', type=int, help='Number of curves')
     parser.add_argument('--max-batch', type=int,
                        help='Max curves per GPU batch in two-stage t-level mode (enables chunking for earlier factor discovery)')

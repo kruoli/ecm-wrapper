@@ -106,9 +106,11 @@ class CompositeExecutionEngine:
 
         def process_result(result: dict) -> None:
             nonlocal total_curves_completed
-            total_curves_completed += result['curves_completed']
+            if result is None:
+                return
+            total_curves_completed += result.get('curves_completed', 0)
 
-            if result['factor_found']:
+            if result.get('factor_found'):
                 factor = result['factor_found']
                 # Deduplicate: multiple workers can find the same factor
                 if factor not in all_factors:
@@ -130,6 +132,16 @@ class CompositeExecutionEngine:
                     process_result(result)
                     completed_workers += 1
                 except queue.Empty:
+                    # Check if stop was requested externally (e.g. work mode signal handler)
+                    if self.wrapper.stop_event.is_set() or self.wrapper.interrupted:
+                        self.logger.info("Multiprocess ECM stop detected via signal handler")
+                        interrupted = True
+                        self.wrapper.interrupted = True
+                        try:
+                            stop_event.set()
+                        except Exception:
+                            pass
+                        break
                     # Timeout waiting for result - check if processes are still alive
                     if not any(p.is_alive() for p in processes):
                         # Drain any remaining results from the queue before breaking
@@ -152,28 +164,33 @@ class CompositeExecutionEngine:
             except Exception:
                 pass  # Manager connection may be broken
 
-            # Wait for workers to finish current curve and drain their results
-            deadline = time.time() + 15  # Give workers up to 15s to wrap up
-            while completed_workers < len(processes) and time.time() < deadline:
-                try:
-                    result = result_queue.get(timeout=1.0)
-                    process_result(result)
-                    completed_workers += 1
-                except queue.Empty:
-                    if not any(p.is_alive() for p in processes):
-                        # All dead, drain anything left
-                        while True:
-                            try:
-                                result = result_queue.get_nowait()
-                                process_result(result)
-                                completed_workers += 1
-                            except queue.Empty:
-                                break
+        # If interrupted, drain remaining worker results before cleanup
+        if interrupted:
+            try:
+                deadline = time.time() + 15  # Give workers up to 15s to wrap up
+                while completed_workers < len(processes) and time.time() < deadline:
+                    try:
+                        result = result_queue.get(timeout=1.0)
+                        process_result(result)
+                        completed_workers += 1
+                    except queue.Empty:
+                        if not any(p.is_alive() for p in processes):
+                            # All dead, drain anything left
+                            while True:
+                                try:
+                                    result = result_queue.get_nowait()
+                                    process_result(result)
+                                    completed_workers += 1
+                                except queue.Empty:
+                                    break
+                            break
+                    except KeyboardInterrupt:
+                        # Another Ctrl+C during drain — give up waiting
+                        self.logger.info("Interrupt during drain, skipping result collection")
                         break
-                except KeyboardInterrupt:
-                    # Second Ctrl+C during drain — give up waiting
-                    self.logger.info("Second interrupt, skipping result collection")
-                    break
+            except (BrokenPipeError, EOFError, ConnectionError, OSError):
+                # Manager connection broken — can't drain results
+                self.logger.info("Manager connection lost, skipping result collection")
 
         # Clean up processes and manager
         self._cleanup_processes(processes, manager)
@@ -960,6 +977,7 @@ class TLevelBatchProducer:
         target_t_level: float,
         composite: str,
         b2_multiplier: float = 100.0,
+        b2_dictionary: Optional[Dict[int, int]] = None,
         max_batch_curves: Optional[int] = None,
         logger: Optional[Any] = None,
     ):
@@ -969,6 +987,7 @@ class TLevelBatchProducer:
         self._calculate_curves = calculate_curves_to_target_direct
         self.composite = composite
         self.b2_multiplier = b2_multiplier
+        self.b2_dictionary = b2_dictionary
         self.max_batch_curves = max_batch_curves
         self.logger = logger
         self.start_t_level = start_t_level
@@ -1037,7 +1056,10 @@ class TLevelBatchProducer:
 
             # Get optimal B1 and calculate curves
             b1, _ = self._get_optimal_b1(step_target)
-            b2 = int(b1 * self.b2_multiplier)
+            if self.b2_dictionary and b1 in self.b2_dictionary:
+                b2 = self.b2_dictionary[b1]
+            else:
+                b2 = int(b1 * self.b2_multiplier)
 
             curves = self._calculate_curves(
                 current_projected, step_target, b1, 3, b2=b2

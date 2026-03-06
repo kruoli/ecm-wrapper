@@ -264,11 +264,14 @@ async def download_residue(
 
     logger.info(f"Client {client_id} downloading residue {residue_id}")
 
-    return FileResponse(
+    response = FileResponse(
         path=str(file_path),
         media_type="text/plain",
         filename=f"residue_{residue_id}.txt"
     )
+    # Prevent Cloudflare from caching/intercepting file downloads
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.post("/{residue_id}/complete", response_model=ResidueCompleteResponse)

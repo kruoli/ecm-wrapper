@@ -712,33 +712,42 @@ class APIClient:
 
         headers = {'X-Client-ID': client_id}
 
-        try:
-            response = requests.get(
-                url,
-                headers=headers,
-                timeout=120,  # Longer timeout for file download
-                stream=True
-            )
-            response.raise_for_status()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(
+                    url,
+                    headers=headers,
+                    timeout=120,  # Longer timeout for file download
+                    stream=True
+                )
+                response.raise_for_status()
 
-            # Write file in chunks
-            with open(output_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+                # Write file in chunks
+                with open(output_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
 
-            file_size = Path(output_path).stat().st_size
-            self.logger.info(
-                f"Downloaded residue {residue_id} to {output_path} ({file_size} bytes)"
-            )
-            return True
+                file_size = Path(output_path).stat().st_size
+                self.logger.info(
+                    f"Downloaded residue {residue_id} to {output_path} ({file_size} bytes)"
+                )
+                return True
 
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Failed to download residue {residue_id}: {e}")
-            return False
-        except IOError as e:
-            self.logger.error(f"Failed to write residue file: {e}")
-            return False
+            except requests.exceptions.RequestException as e:
+                self.logger.error(f"Download attempt {attempt + 1}/{max_retries} failed for residue {residue_id}: {e}")
+                if attempt < max_retries - 1:
+                    import time
+                    wait = 5 * (attempt + 1)
+                    self.logger.info(f"Retrying in {wait}s...")
+                    time.sleep(wait)
+                else:
+                    return False
+            except IOError as e:
+                self.logger.error(f"Failed to write residue file: {e}")
+                return False
+        return False
 
     def complete_residue(
         self,

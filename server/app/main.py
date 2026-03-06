@@ -10,7 +10,6 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -68,8 +67,9 @@ Base.metadata.create_all(bind=engine)
 # Get settings
 settings = get_settings()
 
-# Initialize rate limiter
-limiter = Limiter(key_func=get_remote_address)
+# Initialize rate limiter with real client IP (behind Cloudflare/reverse proxy)
+from .rate_limit import get_real_client_ip
+limiter = Limiter(key_func=get_real_client_ip)
 
 # Create FastAPI app
 app = FastAPI(
@@ -113,6 +113,18 @@ async def root():
         "docs": "/docs",
         "health": "/health"
     }
+
+@app.get("/robots.txt")
+async def robots_txt():
+    """Disallow crawlers from expensive detail pages."""
+    content = (
+        "User-agent: *\n"
+        "Disallow: /api/v1/dashboard/composites/\n"
+        "Disallow: /api/v1/admin/\n"
+        "Allow: /api/v1/dashboard/\n"
+        "Allow: /api/v1/dashboard/testing-status\n"
+    )
+    return Response(content=content, media_type="text/plain")
 
 @app.get("/favicon.ico")
 async def favicon():

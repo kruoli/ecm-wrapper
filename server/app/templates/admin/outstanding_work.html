@@ -225,11 +225,11 @@ function applyFilters(event) {
     if (status) params.set('status', status);
     if (method) params.set('method', method);
 
-    location.href = `/api/v1/admin/outstanding-work?${params.toString()}`;
+    navigateWithAuth(`/api/v1/admin/outstanding-work?${params.toString()}`);
 }
 
 function clearFilters() {
-    location.href = '/api/v1/admin/outstanding-work';
+    navigateWithAuth('/api/v1/admin/outstanding-work');
 }
 
 function expireWork(workId) {
@@ -274,7 +274,7 @@ function navigatePage(newOffset) {
     const params = new URLSearchParams(location.search);
     params.set('offset', newOffset);
     params.set('limit', '{{ limit }}');
-    location.href = `/api/v1/admin/outstanding-work?${params.toString()}`;
+    navigateWithAuth(`/api/v1/admin/outstanding-work?${params.toString()}`);
 }
 </script>
 {% endblock %}

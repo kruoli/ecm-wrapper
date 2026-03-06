@@ -201,7 +201,7 @@
 function changeDaysFilter(event) {
     event.preventDefault();
     const days = document.getElementById('days-filter').value;
-    location.href = `/api/v1/admin/recent-composites?days=${days}&limit={{ limit }}`;
+    navigateWithAuth(`/api/v1/admin/recent-composites?days=${days}&limit={{ limit }}`);
 }
 
 function activateComposite(compositeId) {
@@ -323,7 +323,7 @@ function navigatePage(newOffset) {
     const params = new URLSearchParams(location.search);
     params.set('offset', newOffset);
     params.set('limit', '{{ limit }}');
-    location.href = `/api/v1/admin/recent-composites?${params.toString()}`;
+    navigateWithAuth(`/api/v1/admin/recent-composites?${params.toString()}`);
 }
 </script>
 {% endblock %}

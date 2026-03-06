@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
+from slowapi import Limiter
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func, case, distinct
 from typing import Any, List, Optional
@@ -12,8 +13,10 @@ from ...services.composites import CompositeService
 from ...templates import templates
 from ...utils.query_helpers import get_aggregated_attempts, prefetch_factor_counts_for_attempts, get_residues_filtered, calculate_pagination
 from ...constants import get_b1_above_tlevel
+from ...rate_limit import get_real_client_ip
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_client_ip)
 
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(
@@ -511,6 +514,7 @@ async def find_composite_public(
 
 
 @router.get("/composites/{composite_id}/details", response_class=HTMLResponse)
+@limiter.limit("30/minute")
 async def get_composite_details_public(
     composite_id: int,
     request: Request,

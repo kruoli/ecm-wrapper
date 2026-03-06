@@ -281,7 +281,7 @@ function deleteComposite(compositeId) {
 }
 
 function navigatePage(newOffset) {
-    location.href = `/api/v1/admin/inactive-composites?offset=${newOffset}&limit={{ limit }}`;
+    navigateWithAuth(`/api/v1/admin/inactive-composites?offset=${newOffset}&limit={{ limit }}`);
 }
 </script>
 {% endblock %}

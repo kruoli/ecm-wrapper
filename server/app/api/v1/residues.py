@@ -9,13 +9,12 @@ Provides endpoints for:
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Header, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import Optional
-from datetime import datetime
 import logging
 
-from ...database import get_db
+from ...database import get_db, SessionLocal
 from ...dependencies import get_residue_manager
 from ...models.residues import ECMResidue
 from ...models.composites import Composite
@@ -225,41 +224,42 @@ async def get_residue_work(
 async def download_residue(
     residue_id: int,
     client_id: str = Header(..., alias="X-Client-ID", description="Client identifier"),
-    db: Session = Depends(get_db),
-    residue_manager: ResidueManager = Depends(get_residue_manager)
 ):
     """
     Download a residue file for stage 2 processing.
 
     Only the client who claimed the residue can download it.
-
-    Args:
-        residue_id: ID of the residue to download
-        client_id: ID of the requesting client (must match claimer)
-        db: Database session
-
-    Returns:
-        File content as response
+    Uses a manual DB session so the connection is released before
+    file streaming begins (avoids holding a connection during transfer).
     """
-    residue = get_or_404(
-        db.query(ECMResidue).filter(ECMResidue.id == residue_id).first(),
-        "Residue",
-        str(residue_id)
-    )
+    from pathlib import Path
 
-    # Verify client has claimed this residue
-    if residue.claimed_by != client_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Residue {residue_id} is not claimed by client {client_id}"
-        )
+    # Use a manual session so we release the DB connection before streaming
+    db = SessionLocal()
+    try:
+        residue = db.query(ECMResidue).filter(ECMResidue.id == residue_id).first()
+        if not residue:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Residue {residue_id} not found"
+            )
 
-    # Get file path
-    file_path = residue_manager.get_residue_file_path(db, residue_id)
+        if residue.claimed_by != client_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Residue {residue_id} is not claimed by client {client_id}"
+            )
+
+        storage_path = residue.storage_path
+    finally:
+        db.close()
+
+    # DB connection is now released — file transfer won't hold it open
+    file_path = Path(storage_path) if storage_path else None
     if not file_path or not file_path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Residue file not found on disk"
+            detail="Residue file not found on disk"
         )
 
     logger.info(f"Client {client_id} downloading residue {residue_id}")

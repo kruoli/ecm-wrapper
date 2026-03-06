@@ -108,25 +108,34 @@ async def testing_status(
     # Get milestone groups (not paginated, shows overall progress)
     milestone_groups = composite_service.get_milestone_groups(db)
 
-    # Build query with filters
-    query = db.query(Composite).filter(Composite.is_fully_factored == False)
-
-    # Apply filters
+    # Build base filter for unfactored composites
+    base_filter = [Composite.is_fully_factored == False]
     if min_t_level is not None:
-        query = query.filter(Composite.current_t_level >= min_t_level)
+        base_filter.append(Composite.current_t_level >= min_t_level)
     if max_t_level is not None:
-        query = query.filter(Composite.current_t_level <= max_t_level)
+        base_filter.append(Composite.current_t_level <= max_t_level)
     if min_priority is not None:
-        query = query.filter(Composite.priority >= min_priority)
+        base_filter.append(Composite.priority >= min_priority)
     if snfs_difficulty is not None:
-        query = query.filter(Composite.snfs_difficulty == snfs_difficulty)
+        base_filter.append(Composite.snfs_difficulty == snfs_difficulty)
 
     # Count total before pagination
-    total = query.count()
+    total = db.query(func.count(Composite.id)).filter(*base_filter).scalar() or 0
 
-    # Apply ordering and pagination
-    query = query.order_by(Composite.priority.desc(), Composite.digit_length.asc())
-    composites = query.offset(offset).limit(limit).all()
+    # Select only the columns needed (avoids loading huge number/current_composite text)
+    composites = db.query(
+        Composite.id,
+        Composite.digit_length,
+        Composite.priority,
+        Composite.current_t_level,
+        Composite.prior_t_level,
+        Composite.target_t_level,
+        Composite.ecm_progress,
+    ).filter(
+        *base_filter
+    ).order_by(
+        Composite.priority.desc(), Composite.digit_length.asc()
+    ).offset(offset).limit(limit).all()
 
     # Get method counts for all composites in this page using aggregation (fixes N+1 query problem)
     composite_ids = [c.id for c in composites]
@@ -262,25 +271,25 @@ async def p1_testing_status(
 
     Shows which composites have had P-1 and/or P+1 run at the required B1 level.
     """
-    from sqlalchemy import and_
-
-    # Build base query for active, unfactored composites with target t-levels
-    base_query = db.query(Composite).filter(
-        and_(
-            Composite.is_active == True,
-            Composite.is_fully_factored == False,
-            Composite.target_t_level.isnot(None),
-        )
-    )
-
-    # Apply t-level filters
+    # Build base filter for active, unfactored composites with target t-levels
+    base_filter = [
+        Composite.is_active == True,
+        Composite.is_fully_factored == False,
+        Composite.target_t_level.isnot(None),
+    ]
     if min_target_tlevel is not None:
-        base_query = base_query.filter(Composite.target_t_level >= min_target_tlevel)
+        base_filter.append(Composite.target_t_level >= min_target_tlevel)
     if max_target_tlevel is not None:
-        base_query = base_query.filter(Composite.target_t_level <= max_target_tlevel)
+        base_filter.append(Composite.target_t_level <= max_target_tlevel)
 
-    # Get all matching composite IDs first (for summary stats)
-    all_composites = base_query.order_by(Composite.target_t_level.asc()).all()
+    # Select only the columns needed (avoids loading huge number/current_composite text)
+    all_composites = db.query(
+        Composite.id,
+        Composite.digit_length,
+        Composite.target_t_level,
+    ).filter(
+        *base_filter
+    ).order_by(Composite.target_t_level.asc()).all()
 
     # Pre-compute PM1/PP1 coverage for all composites
     composite_ids = [c.id for c in all_composites]

@@ -197,9 +197,9 @@
             {% for milestone in [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80] %}
             {% set group = milestone_groups.get(milestone, {}) %}
             {% set total = group.get('total', 0) %}
-            {% set complete = group.get('complete', [])|length %}
-            {% set in_progress = group.get('in_progress', [])|length %}
-            {% set not_started = group.get('not_started', [])|length %}
+            {% set complete = group.get('complete', 0) %}
+            {% set in_progress = group.get('in_progress', 0) %}
+            {% set not_started = group.get('not_started', 0) %}
             {% set pct = (complete / total * 100)|round(1) if total > 0 else 0 %}
 
             <div class="milestone-card">

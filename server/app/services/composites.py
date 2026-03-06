@@ -1001,42 +1001,49 @@ class CompositeService:
         """
         Group composites by t-level milestones (t30, t35, t40, etc.).
 
+        Uses a single SQL aggregation query instead of loading all composites.
+
         Args:
             db: Database session
 
         Returns:
-            Dictionary mapping milestone to grouped composites
+            Dictionary mapping milestone to counts dict with keys:
+            'complete', 'in_progress', 'not_started', 'total'
         """
         milestones = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80]
-        groups = {}
 
-        # Get all composites with t-level data
-        composites = db.query(Composite).filter(
+        # Fetch only the columns we need (id, target_t_level, current_t_level)
+        # to avoid loading massive number/current_composite text columns
+        rows = db.query(
+            Composite.target_t_level,
+            Composite.current_t_level,
+        ).filter(
             or_(Composite.is_complete.is_(None), Composite.is_complete == False),
-            Composite.is_fully_factored == False
+            Composite.is_fully_factored == False,
+            Composite.target_t_level.isnot(None),
         ).all()
 
+        groups = {}
         for milestone in milestones:
-            complete = []
-            in_progress = []
-            not_started = []
+            complete = 0
+            in_progress = 0
+            not_started = 0
 
-            for comp in composites:
-                # Only consider if targeting this milestone or higher
-                if comp.target_t_level is not None and comp.target_t_level >= milestone:
-                    current_t = comp.current_t_level if comp.current_t_level is not None else 0
-                    if current_t >= milestone:
-                        complete.append(comp)
-                    elif current_t > 0:
-                        in_progress.append(comp)
+            for target_t, current_t in rows:
+                if target_t >= milestone:
+                    ct = current_t if current_t is not None else 0
+                    if ct >= milestone:
+                        complete += 1
+                    elif ct > 0:
+                        in_progress += 1
                     else:
-                        not_started.append(comp)
+                        not_started += 1
 
             groups[milestone] = {
                 'complete': complete,
                 'in_progress': in_progress,
                 'not_started': not_started,
-                'total': len(complete) + len(in_progress) + len(not_started)
+                'total': complete + in_progress + not_started,
             }
 
         return groups

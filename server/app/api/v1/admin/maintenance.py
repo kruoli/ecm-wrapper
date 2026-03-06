@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from fastapi import APIRouter, BackgroundTasks, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from ....database import get_db
 from ....dependencies import verify_admin_key, get_composite_service
@@ -54,12 +54,15 @@ async def calculate_t_levels_for_all_composites(
 
     calculator = TLevelCalculator()
 
-    # Get composites to update
+    # Get composites to update (defer heavy text columns not needed for t-level calc)
+    base_query = db.query(Composite).options(
+        defer(Composite.number), defer(Composite.current_composite)
+    )
     if recalculate_all:
-        composites = db.query(Composite).all()
+        composites = base_query.all()
         operation_type = "Recalculated all"
     else:
-        composites = db.query(Composite).filter(
+        composites = base_query.filter(
             Composite.target_t_level.is_(None)
         ).all()
         operation_type = "Updated new"
@@ -125,6 +128,7 @@ def _recalculate_all_t_levels_background():
     from ....models.composites import Composite
     from ....services.t_level_calculator import TLevelCalculator
     from ....database import SessionLocal
+    from sqlalchemy.orm import defer
 
     global _recalculation_status
 
@@ -133,7 +137,10 @@ def _recalculate_all_t_levels_background():
 
     try:
         calculator = TLevelCalculator()
-        composites = db.query(Composite).all()
+        # Defer heavy text columns not needed for t-level calculation
+        composites = db.query(Composite).options(
+            defer(Composite.number), defer(Composite.current_composite)
+        ).all()
 
         _recalculation_status["total"] = len(composites)
         _recalculation_status["progress"] = 0

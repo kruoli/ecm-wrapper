@@ -402,8 +402,8 @@ async def get_p1_work(
         # Exclude composites with active work assignments
         active_work_composites = db.query(WorkAssignment.composite_id).filter(
             WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
-        ).subquery()
-        query = query.filter(~Composite.id.in_(active_work_composites))  # type: ignore[arg-type]
+        ).scalar_subquery()
+        query = query.filter(~Composite.id.in_(active_work_composites))
 
         # Build SQL CASE expression: map target_t_level -> required B1
         # (one step above target in the optimal B1 table)

@@ -23,7 +23,6 @@ from sqlalchemy.orm import Session
 from ....config import get_settings
 from ....database import get_db
 from ....dependencies import verify_admin_key, get_composite_service
-from ....models.factors import Factor
 from ....schemas.composites import BulkCompositeRequest
 from ....services.composites import CompositeService
 from ....templates import templates
@@ -255,6 +254,9 @@ async def get_composite_details_page(
         "Composite"
     )
 
+    # Get method breakdown for tabbed interface (same as public page)
+    method_breakdown = composite_service.get_method_breakdown(composite_id, db)
+
     return templates.TemplateResponse("admin/composite_details.html", {
         "request": request,
         "composite": details['composite'],
@@ -263,8 +265,8 @@ async def get_composite_details_page(
         "active_work": details['active_work'],
         "all_factors": details['all_factors'],
         "factors_with_group_orders": details['factors_with_group_orders'],
-        "db": db,
-        "Factor": Factor
+        "method_breakdown": method_breakdown,
+        "factor_counts": method_breakdown.get('_factor_counts', {}),
     })
 
 

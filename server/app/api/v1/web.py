@@ -548,8 +548,7 @@ async def get_composite_details_public(
         "all_factors": details['all_factors'],
         "factors_with_group_orders": details['factors_with_group_orders'],
         "method_breakdown": method_breakdown,
-        "db": db,
-        "Factor": Factor
+        "factor_counts": method_breakdown.get('_factor_counts', {}),
     })
 
 

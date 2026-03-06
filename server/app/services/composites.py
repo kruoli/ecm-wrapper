@@ -953,11 +953,15 @@ class CompositeService:
         from ..models import Factor
         attempt_ids = [a.id for a in all_attempts]
         factors_by_attempt = {}
+        factor_counts_by_attempt = {}
         if attempt_ids:
             factors_query = db.query(Factor).filter(
                 Factor.found_by_attempt_id.in_(attempt_ids)
             ).all()
-            factors_by_attempt = {f.found_by_attempt_id: f for f in factors_query}
+            for f in factors_query:
+                factors_by_attempt[f.found_by_attempt_id] = f
+                factor_counts_by_attempt[f.found_by_attempt_id] = \
+                    factor_counts_by_attempt.get(f.found_by_attempt_id, 0) + 1
 
         for method in ['ecm', 'pm1', 'pp1']:
             # Use ALL attempts for display, sorted by date descending (most recent first)
@@ -994,6 +998,9 @@ class CompositeService:
                 # Display includes ALL attempts (superseded marked in template)
                 'attempts': method_all_attempts
             }
+
+        # Attach factor counts so templates don't need to query the DB
+        breakdown['_factor_counts'] = factor_counts_by_attempt
 
         return breakdown
 

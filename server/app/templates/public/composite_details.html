@@ -234,10 +234,10 @@
                         <td>{{ "{:,}".format(attempt.curves_completed) }}</td>
                         <td class="number-display">
                             {% if attempt.factor_found %}
-                            {% set attempt_factors = db.query(Factor).filter(Factor.found_by_attempt_id == attempt.id).all() %}
-                            {% if attempt_factors|length > 1 %}
-                            <span style="cursor: help;" title="This attempt found {{ attempt_factors|length }} factors total">
-                                {{ esc(attempt.factor_found[:30]) }}... <strong style="color: #2ecc71;">[+{{ attempt_factors|length - 1 }} more]</strong>
+                            {% set fc = factor_counts.get(attempt.id, 1) %}
+                            {% if fc > 1 %}
+                            <span style="cursor: help;" title="This attempt found {{ fc }} factors total">
+                                {{ esc(attempt.factor_found[:30]) }}... <strong style="color: #2ecc71;">[+{{ fc - 1 }} more]</strong>
                             </span>
                             {% else %}
                             {{ esc(attempt.factor_found) }}

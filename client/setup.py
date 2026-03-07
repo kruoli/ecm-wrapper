@@ -98,6 +98,48 @@ def check_gpu() -> tuple:
     return False, None
 
 
+def verify_ecm_installation() -> bool:
+    """Run a quick ECM test via ecm_wrapper to verify the full pipeline works."""
+    # 85643 = 131 × 653 — small enough to factor instantly at B1=1000
+    test_composite = "85643"
+    script_dir = Path(__file__).parent
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script_dir / "ecm_wrapper.py"),
+             "--composite", test_composite, "--b1", "1000", "--curves", "5"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=str(script_dir)
+        )
+
+        output = result.stdout + result.stderr
+
+        if "Factor found" in output or "factors_found" in output:
+            print("  ECM found a factor — everything is working!")
+            return True
+        elif result.returncode == 0:
+            print("  ECM ran successfully (no factor found, but the pipeline works)")
+            return True
+        else:
+            print("  WARNING: ecm_wrapper exited with an error:")
+            # Show last few relevant lines
+            for line in output.strip().split('\n')[-5:]:
+                print(f"  {line}")
+            return False
+
+    except FileNotFoundError:
+        print("  ERROR: Could not run ecm_wrapper.py")
+        return False
+    except subprocess.TimeoutExpired:
+        print("  WARNING: ECM test timed out after 60 seconds")
+        return False
+    except Exception as e:
+        print(f"  ERROR: {e}")
+        return False
+
+
 def main():
     print()
     print("=" * 60)
@@ -362,6 +404,19 @@ def main():
         print()
         print("For more options, run: python3 ecm_client.py --help")
         print()
+
+        # Offer verification test
+        if get_yes_no("Run a quick test to verify ECM is working?", default=True):
+            print()
+            print("Running ECM verification (factoring a small test number)...")
+            if verify_ecm_installation():
+                print()
+                print("Setup and verification complete! You're ready to go.")
+            else:
+                print()
+                print("ECM verification failed. Please check your ECM binary path")
+                print(f"and that client.local.yaml is correct.")
+            print()
     else:
         print("\nSetup cancelled. No files were written.")
 

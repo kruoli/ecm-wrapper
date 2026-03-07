@@ -976,7 +976,7 @@ class TLevelBatchProducer:
         start_t_level: float,
         target_t_level: float,
         composite: str,
-        b2_multiplier: float = 100.0,
+        b2_multiplier: float = 500.0,
         b2_dictionary: Optional[Dict[int, int]] = None,
         max_batch_curves: Optional[int] = None,
         logger: Optional[Any] = None,

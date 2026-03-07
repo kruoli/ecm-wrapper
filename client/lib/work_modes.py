@@ -1285,7 +1285,7 @@ class StandardAutoWorkMode(WorkMode):
             progress_interval=getattr(self.args, 'progress_interval', 0),
             max_batch_curves=max_batch,
             use_two_stage=getattr(self.args, 'two_stage', False),
-            b2_multiplier=getattr(self.args, 'b2_multiplier', None) or 100.0,
+            b2_multiplier=getattr(self.args, 'b2_multiplier', None) or 500.0,
             b2_dictionary=getattr(self, '_b2_dictionary', None),
             project=self.args.project,
             no_submit=False,

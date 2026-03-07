@@ -449,7 +449,7 @@ class TestECMConfigIntegration:
         assert config.start_t_level == 0.0
         assert config.threads == 1
         assert config.use_two_stage is False
-        assert config.b2_multiplier == 100.0
+        assert config.b2_multiplier == 500.0
 
 
 class TestFactorResultIntegration:

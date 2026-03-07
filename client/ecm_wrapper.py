@@ -274,7 +274,7 @@ def main():
                 use_two_stage=args.two_stage or False,
                 progress_interval=args.progress_interval or 0,
                 max_batch_curves=max_batch,
-                b2_multiplier=getattr(args, 'b2_multiplier', None) or 100.0,
+                b2_multiplier=getattr(args, 'b2_multiplier', None) or 500.0,
                 b2_dictionary=b2_dictionary,
                 project=args.project,
                 no_submit=not args.submit,

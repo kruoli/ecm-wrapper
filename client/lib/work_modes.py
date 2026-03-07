@@ -782,7 +782,7 @@ class Stage2ConsumerMode(WorkMode):
             b2 = int(b1 * self.args.b2_multiplier)
             print(f"Using dynamic B2 = B1 * {self.args.b2_multiplier} = {b2}")
         else:
-            b2 = work.get('suggested_b2', b1 * 100)
+            b2 = work.get('suggested_b2', b1 * 500)
 
         self._b2 = b2
         self._k = k if k > 0 else None

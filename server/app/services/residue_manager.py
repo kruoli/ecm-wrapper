@@ -620,9 +620,9 @@ class ResidueManager:
         if not residue:
             return None
 
-        # Standard B2 = 100 * B1 is a common heuristic
+        # Standard B2 = 500 * B1 as default heuristic
         # For GPU work, even larger ratios can be beneficial
-        suggested_b2 = residue.b1 * 100
+        suggested_b2 = residue.b1 * 500
 
         # Cap at a reasonable maximum (e.g., 10 trillion)
         max_b2 = 10_000_000_000_000

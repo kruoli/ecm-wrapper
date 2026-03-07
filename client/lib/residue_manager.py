@@ -193,15 +193,15 @@ class ResidueFileManager:
             remainder = total_curves % num_chunks if total_curves > num_chunks else 0
 
             self.logger.info(
-                f"Splitting {total_curves} curve{"s" if total_curves != 1 else ""} into "
-                f"{num_chunks} chunk{"s" if num_chunks != 1 else ""} "
-                f"(~{curves_per_chunk} curve{"s" if curves_per_chunk != 1 else ""} per chunk)"
+                f"Splitting {total_curves} curves into "
+                f"{num_chunks} chunks "
+                f"(~{curves_per_chunk} curves per chunk)"
             )
 
             if total_curves < num_chunks:
                 num_chunks = total_curves
                 self.logger.info(
-                    f"Reducing to {num_chunks} chunk{"s" if num_chunks != 1 else ""} "
+                    f"Reducing to {num_chunks} chunks "
                      "since there are fewer curves than workers"
                 )
 

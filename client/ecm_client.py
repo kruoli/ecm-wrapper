@@ -15,6 +15,11 @@ use ecm_wrapper.py instead.
 """
 
 import sys
+
+if sys.version_info < (3, 9):
+    print(f"Error: Python 3.9+ is required (you have Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro})")
+    sys.exit(1)
+
 from pathlib import Path
 
 from lib.ecm_executor import ECMWrapper

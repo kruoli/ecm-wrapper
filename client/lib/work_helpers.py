@@ -81,6 +81,31 @@ def print_work_status(stage_name: str, completed_count: int,
     return False
 
 
+_no_work_count = 0
+
+
+def _handle_no_work(logger, label: str) -> None:
+    """Handle repeated 'no work available' with escalating warnings."""
+    global _no_work_count
+    _no_work_count += 1
+
+    if _no_work_count >= 5 and _no_work_count % 5 == 0:
+        logger.warning(
+            f"No {label} work available {_no_work_count} times in a row. "
+            f"If this persists, check for stale work assignments on the server "
+            f"(admin dashboard -> outstanding work) or restart with a fresh client_id."
+        )
+
+    logger.info(f"No {label} work available, waiting 30 seconds before retry...")
+    time.sleep(30)
+
+
+def _reset_no_work_count() -> None:
+    """Reset counter when work is successfully received."""
+    global _no_work_count
+    _no_work_count = 0
+
+
 def request_ecm_work(api_client, client_id: str, args: argparse.Namespace,
                     logger) -> Optional[Dict[str, Any]]:
     """
@@ -106,8 +131,9 @@ def request_ecm_work(api_client, client_id: str, args: argparse.Namespace,
     )
 
     if not work:
-        logger.info("No work available, waiting 30 seconds before retry...")
-        time.sleep(30)
+        _handle_no_work(logger, "ECM")
+    else:
+        _reset_no_work_count()
 
     return work
 
@@ -149,7 +175,8 @@ def request_p1_work(api_client, client_id: str, args: argparse.Namespace,
     )
 
     if not work:
-        logger.info("No P1 work available, waiting 30 seconds before retry...")
-        time.sleep(30)
+        _handle_no_work(logger, "P1")
+    else:
+        _reset_no_work_count()
 
     return work

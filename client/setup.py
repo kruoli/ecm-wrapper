@@ -9,11 +9,16 @@ Usage:
     python3 setup.py
 """
 
+import sys
+
+if sys.version_info < (3, 9):
+    print(f"Error: Python 3.9+ is required (you have Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro})")
+    sys.exit(1)
+
 import os
 import platform
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 

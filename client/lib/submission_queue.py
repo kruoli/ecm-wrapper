@@ -211,6 +211,47 @@ class SubmissionQueue:
             self.logger.error(f"Failed to queue work completion: {e}")
             return None
 
+    def enqueue_work_abandonment(
+        self,
+        work_id: str,
+        client_id: str
+    ) -> Optional[Path]:
+        """
+        Enqueue a failed work abandonment call for later retry.
+
+        Used when cleanup_on_failure can't reach the server to release
+        a work assignment back to the pool.
+
+        Args:
+            work_id: Work assignment ID to abandon
+            client_id: Client identifier
+
+        Returns:
+            Path to the queued item file, or None on error
+        """
+        self._ensure_dirs()
+        item = {
+            "type": "work_abandon",
+            "created_at": datetime.datetime.now().isoformat(),
+            "attempts": 0,
+            "payload": {
+                "work_id": work_id,
+                "client_id": client_id,
+            },
+        }
+
+        filename = self._generate_filename("work_abandon")
+        filepath = self.completions_dir / filename
+
+        try:
+            with open(filepath, 'w') as f:
+                json.dump(item, f, indent=2)
+            self.logger.info(f"Queued work abandonment: {filepath.name}")
+            return filepath
+        except Exception as e:
+            self.logger.error(f"Failed to queue work abandonment: {e}")
+            return None
+
     def enqueue_residue_abandonment(
         self,
         residue_id: int,
@@ -351,6 +392,19 @@ class SubmissionQueue:
                 item_type = item.get("type", "unknown")
                 item["attempts"] = item.get("attempts", 0) + 1
 
+                max_attempts = 200
+                if item["attempts"] > max_attempts:
+                    self.logger.warning(
+                        f"Discarding {item_type} after {item['attempts']} failed attempts: {filepath.name}"
+                    )
+                    filepath.unlink(missing_ok=True)
+                    if item_type == "residue_upload":
+                        residue_path = item.get("residue_file")
+                        if residue_path:
+                            Path(residue_path).unlink(missing_ok=True)
+                    fail_count += 1
+                    continue
+
                 ok = self._retry_item(api_client, item)
 
                 if ok:
@@ -427,6 +481,12 @@ class SubmissionQueue:
                     client_id=payload["client_id"]
                 )
 
+            elif item_type == "work_abandon":
+                return api_client.abandon_work(
+                    work_id=payload["work_id"],
+                    client_id=payload["client_id"]
+                )
+
             elif item_type == "residue_complete":
                 result = api_client.complete_residue(
                     client_id=payload["client_id"],
@@ -452,3 +512,16 @@ class SubmissionQueue:
                 f"(likely expired or already completed)"
             )
             return True  # Treat as success to remove from queue
+
+        except Exception as e:
+            error_str = str(e)
+            # Detect permanent failures that will never succeed on retry
+            if any(phrase in error_str for phrase in [
+                "Duplicate", "already exists", "checksum matches",
+                "not claimed by client", "not found"
+            ]):
+                self.logger.warning(
+                    f"Discarding {item_type} from queue: permanent error: {error_str}"
+                )
+                return True  # Remove from queue
+            raise  # Re-raise for transient errors

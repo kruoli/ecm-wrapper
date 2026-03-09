@@ -53,15 +53,21 @@ def handle_shutdown(
     # Abandon active work assignment
     if current_work_id:
         output.info(f"Abandoning work assignment {current_work_id}...")
-        wrapper.abandon_work(current_work_id, reason="client_interrupted")
+        if not wrapper.abandon_work(current_work_id, reason="client_interrupted"):
+            wrapper.submission_queue.enqueue_work_abandonment(
+                current_work_id, wrapper.client_id
+            )
 
     # Abandon active residue work
     if current_residue_id:
         output.info(f"Abandoning residue work {current_residue_id}...")
-        wrapper.api_client.abandon_residue(
+        if not wrapper.api_client.abandon_residue(
             wrapper.client_id,
             current_residue_id
-        )
+        ):
+            wrapper.submission_queue.enqueue_residue_abandonment(
+                current_residue_id, wrapper.client_id
+            )
 
     # Clean up local residue file
     if local_residue_file and local_residue_file.exists():

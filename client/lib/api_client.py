@@ -613,7 +613,15 @@ class APIClient:
         except FileNotFoundError:
             self.logger.error(f"Residue file not found: {residue_file_path}")
             return None
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 400:
+                try:
+                    detail = e.response.json().get("detail", "")
+                except (ValueError, AttributeError):
+                    detail = e.response.text
+                if "Duplicate residue" in detail or "checksum matches" in detail:
+                    self.logger.info(f"Residue already uploaded (server confirmed duplicate): {detail}")
+                    return {"already_uploaded": True, "detail": detail}
             error_details = ""
             if hasattr(e, 'response') and e.response is not None:
                 try:
@@ -621,6 +629,9 @@ class APIClient:
                 except (AttributeError, ValueError, UnicodeDecodeError):
                     pass
             self.logger.error(f"Failed to upload residue: {e}{error_details}")
+            return None
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Failed to upload residue: {e}")
             return None
 
     def get_residue_work(

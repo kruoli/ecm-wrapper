@@ -168,8 +168,8 @@ class WorkMode(ABC):
         """
         if self.current_work_id:
             if not self.wrapper.abandon_work(self.current_work_id, reason="execution_error"):
-                # Network likely down - queue completion so assignment gets released on reconnect
-                self.wrapper.submission_queue.enqueue_work_completion(
+                # Network likely down - queue abandonment so assignment gets released on reconnect
+                self.wrapper.submission_queue.enqueue_work_abandonment(
                     self.current_work_id, self.ctx.client_id
                 )
             self.current_work_id = None

@@ -199,15 +199,19 @@ class CompositeExecutionEngine:
             print(f"\nMultiprocess ECM stopped. Completed {total_curves_completed} curves before interrupt.")
 
         # Build BatchResult with recursive factoring of any composite factors
+        # Deduplicate primes after full factoring: if Worker A finds prime p and
+        # Worker B finds composite p*q, the prime p appears in both expansions.
+        # Only count each distinct prime once (multiplicities are handled by the
+        # caller via division, not by counting occurrences in this list).
         batch_result = BatchResult()
+        seen_primes: set = set()
         for factor, sigma in zip(all_factors, all_sigmas):
-            # Fully factor each discovered factor to get all prime factors
-            # This handles cases where ECM finds a composite factor (product of primes)
-            # Use _fully_factor_composite which calls primitives directly (no recursion through run_ecm_v2)
             prime_factors = self.wrapper._fully_factor_composite(factor)
             for prime in prime_factors:
-                batch_result.factors.append(prime)
-                batch_result.sigmas.append(sigma)
+                if prime not in seen_primes:
+                    seen_primes.add(prime)
+                    batch_result.factors.append(prime)
+                    batch_result.sigmas.append(sigma)
 
         batch_result.curves_run = total_curves_completed
         batch_result.execution_time = time.time() - start_time

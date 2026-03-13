@@ -216,6 +216,111 @@ class WorkMode(ABC):
         self.wrapper.shutdown_level = 0
         self.wrapper.stop_event.clear()
 
+    # --- Shared submission helpers ---
+
+    def _submit_ecm_results(
+        self,
+        results_dict: Dict[str, Any],
+        program_name: str = 'gmp-ecm-ecm',
+        error_label: str = "ECM"
+    ) -> bool:
+        """
+        Submit standard ECM results to server.
+
+        Common pattern for B1/B2-mode ECM and multiprocess submissions.
+        Validates curves > 0, submits via wrapper, handles failure.
+
+        Args:
+            results_dict: Pre-built results dict with composite, b1, b2, etc.
+            program_name: Program identifier for API (e.g., 'gmp-ecm-ecm', 'gmp-ecm-pm1')
+            error_label: Label for error messages
+
+        Returns:
+            True if submission succeeded
+        """
+        if results_dict.get('curves_completed', 0) == 0:
+            self.logger.error(f"Zero curves completed for {error_label}, execution may have failed (check ECM binary path)")
+            return False
+
+        submit_response = self.wrapper.submit_result(
+            results_dict, self.args.project, program_name
+        )
+
+        if not submit_response:
+            self.logger.error(f"Failed to submit {error_label} results")
+            return False
+
+        return True
+
+    def _submit_stage2_results(
+        self,
+        work: Dict[str, Any],
+        result: FactorResult,
+        b2: Optional[int],
+        factor: Optional[str],
+        sigma: Optional[str],
+        raw_output: str,
+        residue_id: Optional[int],
+        residue_checksum: Optional[str],
+    ) -> tuple[bool, Optional[int], bool]:
+        """
+        Submit stage 2 results and extract attempt_id from primary endpoint.
+
+        Common pattern for Stage2ConsumerMode and AdaptiveCPUMode stage 2 paths.
+
+        Args:
+            work: Work assignment dict (needs 'composite', 'b1', 'curve_count', 'parametrization')
+            result: FactorResult from execution
+            b2: B2 value used (-1 means GMP-ECM default, stored as None)
+            factor: Primary factor found (or None)
+            sigma: Sigma value that found the factor
+            raw_output: Aggregated raw output from workers
+            residue_id: Server residue ID (for fallback message)
+            residue_checksum: Residue file checksum (for orphan detection)
+
+        Returns:
+            Tuple of (success, stage2_attempt_id, primary_submission_failed)
+        """
+        if not result.success:
+            self.logger.error(result.error_message or "Stage 2 execution failed")
+            return False, None, False
+
+        results = {
+            'composite': work['composite'],
+            'b1': work['b1'],
+            'b2': None if b2 == -1 else b2,
+            'curves_requested': work['curve_count'],
+            'curves_completed': result.curves_run,
+            'factors_found': result.factors,
+            'factor_found': factor,
+            'sigma': sigma,
+            'raw_output': raw_output or f"Stage 2 from residue {residue_id}",
+            'method': 'ecm',
+            'parametrization': work.get('parametrization', 3),
+            'execution_time': result.execution_time,
+            'residue_checksum': residue_checksum,
+        }
+
+        print("Submitting stage 2 results...")
+        submit_response = self.wrapper.submit_result(results, self.args.project, 'gmp-ecm-ecm')
+
+        if not submit_response:
+            self.logger.error("Failed to submit stage 2 results")
+            return False, None, False
+
+        primary = submit_response.primary_response
+        if primary:
+            stage2_attempt_id = primary.get('attempt_id')
+            if not stage2_attempt_id:
+                self.logger.error("No attempt_id returned from primary endpoint")
+                return False, None, False
+            print(f"Stage 2 attempt ID: {stage2_attempt_id}")
+            return True, stage2_attempt_id, False
+        else:
+            self.logger.warning("Primary endpoint submission failed (other endpoints may have succeeded)")
+            self.logger.warning("Skipping residue completion - failed submission saved for retry via resend_failed.py")
+            return True, None, True
+
     def _setup_signal_handler(self) -> None:
         """
         Install signal handler for graceful shutdown (3 levels).
@@ -750,13 +855,18 @@ class Stage2ConsumerMode(WorkMode):
         return sha256.hexdigest()
 
     def request_work(self) -> Optional[Dict[str, Any]]:
+        # CLI --max-b1 takes priority, then config stage2_max_b1
+        max_b1 = getattr(self.args, 'max_b1', None)
+        if max_b1 is None:
+            max_b1 = self.wrapper.config.get('programs', {}).get('gmp_ecm', {}).get('stage2_max_b1')
+
         residue_work = self.api_client.get_residue_work(
             client_id=self.ctx.client_id,
             min_target_tlevel=getattr(self.args, 'min_target_tlevel', None),
             max_target_tlevel=getattr(self.args, 'max_target_tlevel', None),
             min_priority=getattr(self.args, 'priority', None),
             min_b1=getattr(self.args, 'min_b1', None),
-            max_b1=getattr(self.args, 'max_b1', None),
+            max_b1=max_b1,
             claim_timeout_hours=24
         )
 
@@ -878,53 +988,14 @@ class Stage2ConsumerMode(WorkMode):
         return result
 
     def submit_results(self, work: Dict[str, Any], result: FactorResult) -> bool:
-        if not result.success:
-            self.logger.error(result.error_message or "Stage 2 execution failed")
-            return False
-
-        # Build results dict
-        results = {
-            'composite': work['composite'],
-            'b1': work['b1'],
-            'b2': None if self._b2 == -1 else self._b2,
-            'curves_requested': work['curve_count'],
-            'curves_completed': result.curves_run,
-            'factors_found': result.factors,
-            'factor_found': self._factor,
-            'sigma': self._sigma,
-            'raw_output': self._raw_output or f"Stage 2 from residue {self.current_residue_id}",
-            'method': 'ecm',
-            'parametrization': work.get('parametrization', 3),
-            'execution_time': result.execution_time,
-            'residue_checksum': self._residue_checksum,  # For orphan detection
-        }
-
-        print("Submitting stage 2 results...")
-        program_name = 'gmp-ecm-ecm'
-        submit_response = self.wrapper.submit_result(results, self.args.project, program_name)
-
-        if not submit_response:
-            self.logger.error("Failed to submit stage 2 results")
-            return False
-
-        # Use primary endpoint's response for attempt_id (needed for complete_residue)
-        primary = submit_response.primary_response
-        if primary:
-            stage2_attempt_id = primary.get('attempt_id')
-            if not stage2_attempt_id:
-                self.logger.error("No attempt_id returned from primary endpoint")
-                return False
-            print(f"Stage 2 attempt ID: {stage2_attempt_id}")
-            self._stage2_attempt_id = stage2_attempt_id
-            self._primary_submission_failed = False
-        else:
-            # Primary failed but another endpoint succeeded - can't call complete_residue
-            self.logger.warning("Primary endpoint submission failed (other endpoints may have succeeded)")
-            self.logger.warning("Skipping residue completion - failed submission saved for retry via resend_failed.py")
-            self._stage2_attempt_id = None
-            self._primary_submission_failed = True
-
-        return True
+        success, attempt_id, primary_failed = self._submit_stage2_results(
+            work, result, self._b2, self._factor, self._sigma,
+            self._raw_output, self.current_residue_id, self._residue_checksum
+        )
+        if success:
+            self._stage2_attempt_id = attempt_id
+            self._primary_submission_failed = primary_failed
+        return success
 
     def complete_work(self, work: Dict[str, Any]) -> None:
         assert self.current_residue_id is not None  # Set in on_work_started
@@ -1393,25 +1464,10 @@ class StandardAutoWorkMode(WorkMode):
                 return False
             return True
 
-        # Reject if no curves were actually run (e.g. binary not found)
-        if result.curves_run == 0:
-            self.logger.error("Zero curves completed, execution may have failed (check ECM binary path)")
-            return False
-
         # B1/B2 modes need to submit here
         self._results_dict['work_id'] = self.current_work_id
         program_name = f"gmp-ecm-{self._results_dict.get('method', 'ecm')}"
-        submit_response = self.wrapper.submit_result(
-            self._results_dict,
-            self.args.project,
-            program_name
-        )
-
-        if not submit_response:
-            self.logger.error("Failed to submit results, abandoning work assignment")
-            return False
-
-        return True
+        return self._submit_ecm_results(self._results_dict, program_name)
 
     # complete_work() inherited from WorkMode base class
 
@@ -1596,11 +1652,16 @@ class AdaptiveCPUMode(WorkMode):
     # --- Work request: try stage 2 first, then ECM ---
 
     def request_work(self) -> Optional[Dict[str, Any]]:
+        # CLI --max-b1 takes priority, then config stage2_max_b1
+        max_b1 = getattr(self.args, 'max_b1', None)
+        if max_b1 is None:
+            max_b1 = self.wrapper.config.get('programs', {}).get('gmp_ecm', {}).get('stage2_max_b1')
+
         # Try stage 2 residues first (no wait on failure - fall through to ECM)
         residue_work = self.api_client.get_residue_work(
             client_id=self.ctx.client_id,
             min_b1=getattr(self.args, 'min_b1', None),
-            max_b1=getattr(self.args, 'max_b1', None),
+            max_b1=max_b1,
             claim_timeout_hours=24
         )
 
@@ -1794,66 +1855,18 @@ class AdaptiveCPUMode(WorkMode):
             return self._submit_ecm(work, result)
 
     def _submit_stage2(self, work: Dict[str, Any], result: FactorResult) -> bool:
-        if not result.success:
-            self.logger.error(result.error_message or "Stage 2 execution failed")
-            return False
-
-        results = {
-            'composite': work['composite'],
-            'b1': work['b1'],
-            'b2': None if self._s2_b2 == -1 else self._s2_b2,
-            'curves_requested': work['curve_count'],
-            'curves_completed': result.curves_run,
-            'factors_found': result.factors,
-            'factor_found': self._s2_factor,
-            'sigma': self._s2_sigma,
-            'raw_output': self._s2_raw_output or f"Stage 2 from residue {self.current_residue_id}",
-            'method': 'ecm',
-            'parametrization': work.get('parametrization', 3),
-            'execution_time': result.execution_time,
-            'residue_checksum': self._s2_residue_checksum,
-        }
-
-        print("Submitting stage 2 results...")
-        submit_response = self.wrapper.submit_result(results, self.args.project, 'gmp-ecm-ecm')
-
-        if not submit_response:
-            self.logger.error("Failed to submit stage 2 results")
-            return False
-
-        primary = submit_response.primary_response
-        if primary:
-            stage2_attempt_id = primary.get('attempt_id')
-            if not stage2_attempt_id:
-                self.logger.error("No attempt_id returned from primary endpoint")
-                return False
-            print(f"Stage 2 attempt ID: {stage2_attempt_id}")
-            self._s2_stage2_attempt_id = stage2_attempt_id
-            self._s2_primary_submission_failed = False
-        else:
-            self.logger.warning("Primary endpoint submission failed")
-            self._s2_stage2_attempt_id = None
-            self._s2_primary_submission_failed = True
-
-        return True
+        success, attempt_id, primary_failed = self._submit_stage2_results(
+            work, result, self._s2_b2, self._s2_factor, self._s2_sigma,
+            self._s2_raw_output, self.current_residue_id, self._s2_residue_checksum
+        )
+        if success:
+            self._s2_stage2_attempt_id = attempt_id
+            self._s2_primary_submission_failed = primary_failed
+        return success
 
     def _submit_ecm(self, work: Dict[str, Any], result: FactorResult) -> bool:
-        if result.curves_run == 0:
-            self.logger.error("Zero curves completed, execution may have failed")
-            return False
-
         assert self._ecm_results_dict is not None
-        submit_response = self.wrapper.submit_result(
-            self._ecm_results_dict,
-            self.args.project,
-            'gmp-ecm-ecm'
-        )
-
-        if not submit_response:
-            self.logger.error("Failed to submit ECM results")
-            return False
-
-        return True
+        return self._submit_ecm_results(self._ecm_results_dict, 'gmp-ecm-ecm')
 
     # --- Completion ---
 

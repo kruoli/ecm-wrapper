@@ -3,7 +3,8 @@
 ECM Client Setup Script
 
 Interactive setup wizard to create client.local.yaml configuration file.
-Run this before using ecm_client.py for the first time.
+Run this before using ecm_client.py for the first time, or re-run to
+change your settings (existing values are used as defaults).
 
 Usage:
     python3 setup.py
@@ -20,6 +21,7 @@ import platform
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 
 def get_input(prompt: str, default: str = "", required: bool = False) -> str:
@@ -64,6 +66,64 @@ def detect_cpu_cores() -> int:
         return 4
 
 
+def detect_total_ram_gb() -> Optional[float]:
+    """Detect total system RAM in GB. Returns None if detection fails."""
+    try:
+        if sys.platform == 'linux':
+            with open('/proc/meminfo') as f:
+                for line in f:
+                    if line.startswith('MemTotal:'):
+                        # MemTotal is in kB
+                        kb = int(line.split()[1])
+                        return kb / (1024 * 1024)
+        elif sys.platform == 'darwin':
+            result = subprocess.run(
+                ['sysctl', '-n', 'hw.memsize'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                return int(result.stdout.strip()) / (1024 ** 3)
+    except Exception:
+        pass
+    return None
+
+
+# Approximate per-worker peak memory for GMP-ECM stage 2 at various B1 levels
+# (with GMP-ECM's default B2). These are conservative estimates.
+_B1_MEMORY_TABLE = [
+    # (max_b1, approx GB per worker)
+    (11_000_000,    0.3),
+    (43_000_000,    0.7),
+    (110_000_000,   1.5),
+    (260_000_000,   3.0),
+    (850_000_000,   6.0),
+    (2_900_000_000, 15.0),
+]
+
+
+def suggest_max_b1(total_ram_gb: float, workers: int) -> Optional[int]:
+    """Suggest a max B1 value based on available RAM and worker count.
+
+    Reserves ~2 GB for the OS and other processes, then divides the rest
+    across workers. Returns the highest B1 that fits, or None if even the
+    largest B1 fits comfortably.
+    """
+    usable_gb = max(total_ram_gb - 2.0, 1.0)
+    per_worker_gb = usable_gb / workers
+
+    best_b1: Optional[int] = None
+    for b1, mem_gb in _B1_MEMORY_TABLE:
+        if per_worker_gb >= mem_gb:
+            best_b1 = b1
+        else:
+            break
+
+    # If every entry fits, no limit needed
+    if best_b1 == _B1_MEMORY_TABLE[-1][0]:
+        return None
+    return best_b1
+
+
 def detect_hostname() -> str:
     """Detect machine hostname."""
     try:
@@ -103,9 +163,35 @@ def check_gpu() -> tuple:
     return False, None
 
 
+def load_existing_config() -> Dict[str, Any]:
+    """Load existing client.local.yaml if present, return as nested dict."""
+    config_path = Path("client.local.yaml")
+    if not config_path.exists():
+        return {}
+    try:
+        import yaml
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        return config if isinstance(config, dict) else {}
+    except Exception:
+        return {}
+
+
+def get_nested(config: Dict[str, Any], *keys: str, default: Any = None) -> Any:
+    """Safely get a nested config value."""
+    current = config
+    for key in keys:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key, default)
+        if current is None:
+            return default
+    return current
+
+
 def verify_ecm_installation() -> bool:
     """Run a quick ECM test via ecm_wrapper to verify the full pipeline works."""
-    # 85643 = 131 × 653 — small enough to factor instantly at B1=1000
+    # 85643 = 131 x 653 -- small enough to factor instantly at B1=1000
     test_composite = "85643"
     script_dir = Path(__file__).parent
 
@@ -122,7 +208,7 @@ def verify_ecm_installation() -> bool:
         output = result.stdout + result.stderr
 
         if "Factor found" in output or "factors_found" in output:
-            print("  ECM found a factor — everything is working!")
+            print("  ECM found a factor -- everything is working!")
             return True
         elif result.returncode == 0:
             print("  ECM ran successfully (no factor found, but the pipeline works)")
@@ -145,23 +231,44 @@ def verify_ecm_installation() -> bool:
         return False
 
 
+def format_b1_human(b1: Optional[int]) -> str:
+    """Format a B1 value for display (e.g., 110000000 -> '110M')."""
+    if b1 is None:
+        return "none"
+    if b1 >= 1_000_000_000:
+        return f"{b1 / 1_000_000_000:.0f}B"
+    if b1 >= 1_000_000:
+        return f"{b1 / 1_000_000:.0f}M"
+    if b1 >= 1_000:
+        return f"{b1 / 1_000:.0f}K"
+    return str(b1)
+
+
+def yaml_quote_path(path: str) -> str:
+    """Quote a path for YAML if it contains special characters."""
+    if " " in path or path.startswith("~"):
+        return f'"{path}"'
+    return path
+
+
 def main():
     print()
     print("=" * 60)
     print("  ECM Client Setup Wizard")
     print("=" * 60)
     print()
-    print("This wizard will help you create a client.local.yaml file")
-    print("with your personal settings for the ECM factorization client.")
-    print()
 
-    # Check if config already exists
+    # Load existing config for defaults
     config_path = Path("client.local.yaml")
-    if config_path.exists():
-        print("WARNING: client.local.yaml already exists!")
-        if not get_yes_no("Do you want to overwrite it?", default=False):
-            print("\nSetup cancelled. Your existing configuration was preserved.")
-            return
+    existing = load_existing_config()
+
+    if existing:
+        print("Existing client.local.yaml found. Your current values will")
+        print("be shown as defaults -- press Enter to keep them.")
+        print()
+    else:
+        print("This wizard will help you create a client.local.yaml file")
+        print("with your personal settings for the ECM factorization client.")
         print()
 
     # ============================================================
@@ -172,12 +279,15 @@ def main():
     print("-" * 60)
     print()
 
+    existing_username = get_nested(existing, 'client', 'username', default="")
     username = get_input(
         "Enter your username (for tracking your contributions)",
+        default=existing_username,
         required=True
     )
 
-    default_machine = detect_hostname()
+    existing_machine = get_nested(existing, 'client', 'cpu_name', default="")
+    default_machine = existing_machine or detect_hostname()
     machine_name = get_input(
         "Enter a name for this machine",
         default=default_machine
@@ -192,18 +302,23 @@ def main():
     print("-" * 60)
     print()
 
+    existing_endpoint = get_nested(existing, 'api', 'endpoint', default="")
+
     print("The ECM client submits results to a coordination server.")
     print("The default production server is: https://ecm.kyleaskine.com/api/v1")
     print()
 
-    use_default_api = get_yes_no("Use the default production server?", default=True)
-    if use_default_api:
-        api_endpoint = "https://ecm.kyleaskine.com/api/v1"
+    if existing_endpoint:
+        api_endpoint = get_input("API endpoint URL", default=existing_endpoint)
     else:
-        api_endpoint = get_input(
-            "Enter API endpoint URL",
-            default="http://localhost:8000/api/v1"
-        )
+        use_default_api = get_yes_no("Use the default production server?", default=True)
+        if use_default_api:
+            api_endpoint = "https://ecm.kyleaskine.com/api/v1"
+        else:
+            api_endpoint = get_input(
+                "Enter API endpoint URL",
+                default="http://localhost:8000/api/v1"
+            )
 
     # ============================================================
     # GPU Configuration
@@ -215,17 +330,21 @@ def main():
     print()
 
     has_gpu, gpu_name = check_gpu()
+    existing_gpu = get_nested(existing, 'programs', 'gmp_ecm', 'gpu_enabled', default=None)
 
     if has_gpu:
         print(f"Detected GPU: {gpu_name}")
-        gpu_enabled = get_yes_no("Enable GPU acceleration?", default=True)
+        gpu_default = existing_gpu if existing_gpu is not None else True
+        gpu_enabled = get_yes_no("Enable GPU acceleration?", default=gpu_default)
     else:
         print("No NVIDIA GPU detected.")
-        gpu_enabled = get_yes_no("Enable GPU anyway? (for manual setup)", default=False)
+        gpu_default = existing_gpu if existing_gpu is not None else False
+        gpu_enabled = get_yes_no("Enable GPU anyway? (for manual setup)", default=gpu_default)
 
+    existing_gpu_device = get_nested(existing, 'programs', 'gmp_ecm', 'gpu_device', default=0)
     gpu_device = 0
     if gpu_enabled:
-        gpu_device_str = get_input("GPU device number", default="0")
+        gpu_device_str = get_input("GPU device number", default=str(existing_gpu_device))
         try:
             gpu_device = int(gpu_device_str)
         except ValueError:
@@ -240,6 +359,8 @@ def main():
     print("-" * 60)
     print()
 
+    existing_ecm_path = get_nested(existing, 'programs', 'gmp_ecm', 'path', default="")
+
     # Try to find ECM binary
     ecm_paths = [
         "~/ecm",
@@ -250,7 +371,9 @@ def main():
     ]
     detected_ecm = find_binary("ecm", ecm_paths)
 
-    if detected_ecm:
+    if existing_ecm_path:
+        ecm_path = get_input("Path to ECM binary", default=existing_ecm_path)
+    elif detected_ecm:
         print(f"Detected ECM binary: {detected_ecm}")
         use_detected = get_yes_no("Use this ECM binary?", default=True)
         if use_detected:
@@ -279,7 +402,8 @@ def main():
     cpu_cores = detect_cpu_cores()
     print(f"Detected {cpu_cores} CPU cores.")
 
-    default_workers = min(cpu_cores, 8)  # Reasonable default
+    existing_workers = get_nested(existing, 'programs', 'gmp_ecm', 'workers', default=None)
+    default_workers = existing_workers if existing_workers is not None else min(cpu_cores, 8)
     workers_str = get_input(
         "Number of parallel workers for stage 2 / multiprocess",
         default=str(default_workers)
@@ -290,6 +414,70 @@ def main():
         workers = default_workers
 
     # ============================================================
+    # Stage 2 Memory Limit (max B1 for residues)
+    # ============================================================
+    print()
+    print("-" * 60)
+    print("STAGE 2 MEMORY LIMIT")
+    print("-" * 60)
+    print()
+
+    print("Each stage 2 worker uses memory that scales with B1.")
+    print(f"With {workers} workers running in parallel, the total")
+    print("memory needed is roughly workers x per-worker usage.")
+    print()
+
+    total_ram = detect_total_ram_gb()
+    suggested = None
+    existing_max_b1 = get_nested(existing, 'programs', 'gmp_ecm', 'stage2_max_b1', default=None)
+
+    if total_ram:
+        print(f"Detected {total_ram:.0f} GB RAM.")
+        suggested = suggest_max_b1(total_ram, workers)
+        if suggested:
+            print(f"Recommended max B1 for {workers} workers: {format_b1_human(suggested)} ({suggested:,})")
+        else:
+            print(f"Your system has plenty of RAM for {workers} workers -- no limit needed.")
+    else:
+        print("Could not detect system RAM. Reference table")
+        print(f"(for {workers} workers running simultaneously):")
+        print()
+        # Show a dynamic table based on worker count
+        for label_gb in [8, 16, 32, 64]:
+            rec = suggest_max_b1(label_gb, workers)
+            if rec:
+                print(f"  {label_gb:>3} GB RAM  ->  stage2_max_b1: {rec:<13,} ({format_b1_human(rec)})")
+            else:
+                print(f"  {label_gb:>3} GB RAM  ->  no limit needed")
+    print()
+
+    # Determine default for the prompt
+    if existing_max_b1:
+        default_max_b1_display = str(existing_max_b1)
+    elif suggested:
+        default_max_b1_display = str(suggested)
+    else:
+        default_max_b1_display = ""
+
+    max_b1_str = get_input(
+        "Max B1 for stage 2 residues (Enter for no limit)",
+        default=default_max_b1_display
+    )
+
+    stage2_max_b1: Optional[int] = None
+    if max_b1_str:
+        try:
+            stage2_max_b1 = int(float(max_b1_str))
+        except ValueError:
+            print(f"  Could not parse '{max_b1_str}', using no limit")
+            stage2_max_b1 = None
+
+    if stage2_max_b1:
+        print(f"  -> Will only accept stage 2 residues with B1 <= {format_b1_human(stage2_max_b1)}")
+    else:
+        print("  -> No limit (will accept all stage 2 residues)")
+
+    # ============================================================
     # Optional: YAFU Binary
     # ============================================================
     print()
@@ -298,7 +486,14 @@ def main():
     print("-" * 60)
     print()
 
-    configure_yafu = get_yes_no("Do you have YAFU installed?", default=False)
+    existing_yafu_path = get_nested(existing, 'programs', 'yafu', 'path', default=None)
+    existing_yafu_threads = get_nested(existing, 'programs', 'yafu', 'threads', default=None)
+
+    if existing_yafu_path:
+        configure_yafu = get_yes_no("Keep YAFU configured?", default=True)
+    else:
+        configure_yafu = get_yes_no("Do you have YAFU installed?", default=False)
+
     yafu_path = None
     yafu_threads = workers
 
@@ -310,14 +505,14 @@ def main():
         ]
         detected_yafu = find_binary("yafu", yafu_paths)
 
-        if detected_yafu:
-            print(f"Detected YAFU binary: {detected_yafu}")
-            yafu_path = get_input("Path to YAFU", default=detected_yafu)
-        else:
-            yafu_path = get_input("Enter path to YAFU binary")
+        yafu_default = existing_yafu_path or detected_yafu or ""
+        if yafu_default and not existing_yafu_path:
+            print(f"Detected YAFU binary: {yafu_default}")
+        yafu_path = get_input("Path to YAFU", default=yafu_default)
 
         if yafu_path:
-            yafu_threads_str = get_input("YAFU threads", default=str(workers))
+            default_yafu_threads = existing_yafu_threads if existing_yafu_threads is not None else workers
+            yafu_threads_str = get_input("YAFU threads", default=str(default_yafu_threads))
             try:
                 yafu_threads = int(yafu_threads_str)
             except ValueError:
@@ -347,31 +542,23 @@ def main():
         "",
         "programs:",
         "  gmp_ecm:",
-    ]
-
-    # ECM path - use quotes if it contains special characters
-    if " " in ecm_path or ecm_path.startswith("~"):
-        config_lines.append(f'    path: "{ecm_path}"')
-    else:
-        config_lines.append(f"    path: {ecm_path}")
-
-    config_lines.extend([
+        f"    path: {yaml_quote_path(ecm_path)}",
         f"    gpu_enabled: {'true' if gpu_enabled else 'false'}",
         f"    gpu_device: {gpu_device}",
         f"    workers: {workers}",
-    ])
+    ]
+
+    if stage2_max_b1 is not None:
+        config_lines.append(f"    stage2_max_b1: {stage2_max_b1}")
 
     # Optional YAFU config
     if yafu_path:
         config_lines.extend([
             "",
             "  yafu:",
+            f"    path: {yaml_quote_path(yafu_path)}",
+            f"    threads: {yafu_threads}",
         ])
-        if " " in yafu_path or yafu_path.startswith("~"):
-            config_lines.append(f'    path: "{yafu_path}"')
-        else:
-            config_lines.append(f"    path: {yafu_path}")
-        config_lines.append(f"    threads: {yafu_threads}")
 
     config_lines.append("")  # Trailing newline
 
@@ -406,6 +593,8 @@ def main():
         print()
         print("  # Test without submitting (ecm_wrapper.py)")
         print("  python3 ecm_wrapper.py --composite \"123456789\" --curves 10 --b1 11000")
+        print()
+        print("To change your settings later, just run setup.py again.")
         print()
         print("For more options, run: python3 ecm_client.py --help")
         print()

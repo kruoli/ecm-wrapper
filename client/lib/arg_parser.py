@@ -71,8 +71,74 @@ def load_b2_dictionary(filepath: str) -> Dict[int, int]:
     return b2_dict
 
 
+def _add_core_ecm_params(parser: argparse.ArgumentParser) -> None:
+    """Add core ECM parameters shared by ECM and client parsers: B1, B2, method, etc.
+
+    Note: --curves is NOT included here because the ECM parser needs the -c alias
+    while the client parser does not. Each parser adds --curves separately.
+    """
+    parser.add_argument('--b1', type=parse_int_with_scientific,
+                       help='B1 bound (supports scientific notation, e.g., 26e7)')
+    parser.add_argument('--b2', type=parse_int_with_scientific,
+                       help='B2 bound (supports scientific notation, e.g., 4e11). Use -1 for GMP-ECM default')
+    parser.add_argument('--b2-multiplier', type=float,
+                       help='Dynamic B2 calculation: B2 = B1 * multiplier (e.g., 1000 for B2=1000*B1). Overridden by explicit --b2')
+    parser.add_argument('--b2-dictionary', type=str, default=None,
+                       help='File which maps B1 to B2 values (one entry per line, separated by space)')
+    parser.add_argument('--max-batch', type=int,
+                       help='Max curves per GPU batch in two-stage t-level mode (enables chunking for earlier factor discovery)')
+    parser.add_argument('--method', choices=['ecm', 'pm1', 'pp1'], default='ecm',
+                       help='Factorization method (ECM, P-1, P+1)')
+
+
+def _add_gpu_options(parser: argparse.ArgumentParser) -> None:
+    """Add GPU-related options."""
+    parser.add_argument('--gpu', action='store_true', help='Use GPU acceleration')
+    parser.add_argument('--no-gpu', action='store_true', help='Disable GPU acceleration')
+    parser.add_argument('--gpu-device', type=int, help='GPU device number')
+    parser.add_argument('--gpu-curves', type=int, help='Number of curves per GPU batch')
+
+
+def _add_sigma_and_param(parser: argparse.ArgumentParser) -> None:
+    """Add sigma/parametrization options."""
+    parser.add_argument('--sigma', type=str, help='Sigma value (integer or parametrization:value)')
+    parser.add_argument('--param', type=int, choices=[0, 1, 2, 3], help='ECM parametrization (0-3)')
+
+
+def _add_execution_options(parser: argparse.ArgumentParser) -> None:
+    """Add execution mode options: multiprocess, two-stage, workers."""
+    parser.add_argument('--multiprocess', action='store_true',
+                       help='Use multi-process mode: parallel full ECM cycles (CPU-optimized)')
+    parser.add_argument('--two-stage', action='store_true',
+                       help='Use two-stage mode: GPU stage 1 + multi-threaded CPU stage 2')
+    parser.add_argument('--workers', type=int,
+                       help='Number of parallel workers (processes for multiprocess, threads for stage2)')
+
+
+def _add_work_filter_options(parser: argparse.ArgumentParser) -> None:
+    """Add server work filtering: work-count, min/max-digits, priority, work-type."""
+    parser.add_argument('--work-count', type=int,
+                       help='Number of work assignments to complete before exiting (default: unlimited)')
+    parser.add_argument('--min-digits', type=int, help='Minimum composite digit length')
+    parser.add_argument('--max-digits', type=int, help='Maximum composite digit length')
+    parser.add_argument('--priority', type=int, help='Minimum priority level')
+    parser.add_argument('--work-type', choices=['standard', 'progressive'], default='standard',
+                       help='Work assignment strategy: standard (smallest first) or progressive (least ECM done first)')
+
+
+def _add_behavior_options(parser: argparse.ArgumentParser) -> None:
+    """Add behavior options: verbose, progress-interval, continue-after-factor, maxmem."""
+    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
+    parser.add_argument('--progress-interval', type=int, default=0,
+                       help='Show progress updates every N completed curves (0 = disabled)')
+    parser.add_argument('--continue-after-factor', action='store_true',
+                       help='Continue processing all curves even after finding a factor')
+    parser.add_argument('--maxmem', type=int,
+                       help='Maximum memory in MB for GMP-ECM stage 2 (-maxmem flag)')
+
+
 def create_ecm_parser() -> argparse.ArgumentParser:
-    """Create argument parser for ECM wrapper."""
+    """Create argument parser for ECM wrapper (local/manual factorization)."""
     parser = argparse.ArgumentParser(description='ECM Wrapper Client')
 
     # Configuration
@@ -80,14 +146,10 @@ def create_ecm_parser() -> argparse.ArgumentParser:
 
     # Core parameters
     parser.add_argument('--composite', '-n', help='Number to factor (not required in --auto-work mode)')
-    parser.add_argument('--b1', type=parse_int_with_scientific, help='B1 bound (supports scientific notation, e.g., 26e7)')
-    parser.add_argument('--b2', type=parse_int_with_scientific, help='B2 bound (supports scientific notation, e.g., 4e11). Use -1 for GMP-ECM default, 0 for stage 1 only')
-    parser.add_argument('--b2-multiplier', type=float, help='Dynamic B2 calculation: B2 = B1 * multiplier (e.g., 1000 for B2=1000*B1). Overridden by explicit --b2')
-    parser.add_argument('--b2-dictionary', type=str, default=None,
-                       help='File which maps B1 to B2 values (one entry per line, separated by space); falls back to b2-multiplier if no matching entry')
+    _add_core_ecm_params(parser)
     parser.add_argument('--curves', '-c', type=int, help='Number of curves')
-    parser.add_argument('--max-batch', type=int,
-                       help='Max curves per GPU batch in two-stage t-level mode (enables chunking for earlier factor discovery)')
+
+    # ECM-specific t-level (nargs='?' with sentinel for auto-calc)
     parser.add_argument('--tlevel', '-t', type=float, nargs='?', const=-1.0,
                        help='Target t-level. If specified without a value, auto-calculates as 4/13 of digit length and runs progressively until factored.')
     parser.add_argument('--start-tlevel', type=float, help='Starting t-level (for resuming, requires --tlevel)')
@@ -97,12 +159,7 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     # Auto-work mode
     parser.add_argument('--auto-work', action='store_true',
                        help='Continuously request and process work assignments from server (uses server t-levels unless --b1/--b2 or --tlevel specified)')
-    parser.add_argument('--work-count', type=int, help='Number of work assignments to complete before exiting (auto-work mode, default: unlimited)')
-    parser.add_argument('--min-digits', type=int, help='Minimum composite digit length (auto-work mode)')
-    parser.add_argument('--max-digits', type=int, help='Maximum composite digit length (auto-work mode)')
-    parser.add_argument('--priority', type=int, help='Minimum priority filter (auto-work mode)')
-    parser.add_argument('--work-type', choices=['standard', 'progressive'], default='standard',
-                       help='Work assignment strategy: standard (smallest first) or progressive (least ECM done first, default: standard)')
+    _add_work_filter_options(parser)
 
     # Decoupled two-stage mode (stage 1 and stage 2 run separately)
     parser.add_argument('--stage1-only', action='store_true',
@@ -110,42 +167,14 @@ def create_ecm_parser() -> argparse.ArgumentParser:
     parser.add_argument('--upload', action='store_true',
                        help='Upload residue file to server after stage 1 (for --stage1-only mode)')
 
-    # GPU options
-    parser.add_argument('--gpu', action='store_true', help='Use GPU acceleration (CGBN)')
-    parser.add_argument('--no-gpu', action='store_true', help='Disable GPU acceleration')
-    parser.add_argument('--gpu-device', type=int, help='GPU device number to use')
-    parser.add_argument('--gpu-curves', type=int, help='Number of curves to compute in parallel on GPU')
-
-    # Sigma and parametrization for reproducibility
-    parser.add_argument('--sigma', type=str, help='Specific sigma value to use (format: "N" or "3:N")')
-    parser.add_argument('--param', type=int, choices=[0, 1, 2, 3], help='ECM parametrization (0-3)')
-
-    # Memory limit
-    parser.add_argument('--maxmem', type=int, help='Maximum memory in MB for GMP-ECM stage 2 (-maxmem flag)')
-
-    # Method and verbosity
-    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose ECM output')
-    parser.add_argument('--progress-interval', type=int, default=0,
-                       help='Show progress updates every N completed curves (0 = disabled)')
-    parser.add_argument('--method', choices=['ecm', 'pm1', 'pp1'], default='ecm',
-                       help='Factorization method (ECM, P-1, P+1)')
-
-    # Advanced modes
-    parser.add_argument('--two-stage', action='store_true',
-                       help='Use two-stage mode: GPU stage 1 + multi-threaded CPU stage 2')
-    parser.add_argument('--multiprocess', action='store_true',
-                       help='Use multi-process mode: parallel full ECM cycles (CPU-optimized)')
-    parser.add_argument('--workers', type=int, default=0,
-                       help='Number of parallel workers (processes for multiprocess, threads for stage2; default: CPU count)')
+    _add_gpu_options(parser)
+    _add_sigma_and_param(parser)
+    _add_execution_options(parser)
+    _add_behavior_options(parser)
 
     # Residue file handling
     parser.add_argument('--save-residues', type=str, help='Save stage 1 residues with specified filename in configured residue_dir')
     parser.add_argument('--stage2-only', type=str, help='Run stage 2 only on residue file path')
-
-    # Factor handling
-    parser.add_argument('--continue-after-factor', action='store_true',
-                       help='Continue processing all curves even after finding a factor')
-
 
     return parser
 
@@ -187,46 +216,20 @@ Examples:
                        help='Target a specific composite (queries server for t-level status)')
 
     # Work filtering
-    parser.add_argument('--work-count', type=int,
-                       help='Number of work items to process (default: unlimited)')
+    _add_work_filter_options(parser)
     parser.add_argument('--min-target-tlevel', type=float,
                        help='Minimum target t-level (filter work by difficulty)')
     parser.add_argument('--max-target-tlevel', type=float,
                        help='Maximum target t-level (filter work by difficulty)')
-    parser.add_argument('--min-digits', type=int,
-                       help='Minimum composite digit length')
-    parser.add_argument('--max-digits', type=int,
-                       help='Maximum composite digit length')
-    parser.add_argument('--priority', type=int,
-                       help='Minimum priority level')
-    parser.add_argument('--work-type', choices=['standard', 'progressive'], default='standard',
-                       help='Work assignment strategy: standard (smallest first) or progressive (least ECM done first)')
 
-    # Execution parameters (override server defaults)
+    # Client-specific t-level (simple float, no auto-calc sentinel)
     parser.add_argument('--tlevel', type=float,
                        help='Target t-level (overrides server t-level)')
-    parser.add_argument('--b1', type=parse_int_with_scientific,
-                       help='B1 parameter (overrides server default, supports scientific notation e.g., 52e6)')
-    parser.add_argument('--b2', type=parse_int_with_scientific,
-                       help='B2 parameter (overrides server default, -1 for GMP-ECM default, supports scientific notation)')
-    parser.add_argument('--b2-multiplier', type=float,
-                       help='Dynamic B2 = B1 * multiplier (for stage2-only mode)')
-    parser.add_argument('--b2-dictionary', type=str, default=None,
-                       help='File which maps B1 to B2 values (one entry per line, separated by space); falls back to calculating it if no matching entry could be found')
-    parser.add_argument('--curves', type=int,
-                       help='Curves per batch')
-    parser.add_argument('--max-batch', type=int,
-                       help='Max curves per GPU batch in two-stage t-level mode (enables chunking for earlier factor discovery)')
-    parser.add_argument('--method', choices=['ecm', 'pm1', 'pp1'], default='ecm',
-                       help='Factorization method (default: ecm)')
 
-    # Execution modes
-    parser.add_argument('--multiprocess', action='store_true',
-                       help='Use multiprocess parallelization')
-    parser.add_argument('--workers', type=int,
-                       help='Number of parallel workers (processes for multiprocess, threads for stage2)')
-    parser.add_argument('--two-stage', action='store_true',
-                       help='Use two-stage GPU+CPU mode')
+    # Shared ECM params, execution modes
+    _add_core_ecm_params(parser)
+    parser.add_argument('--curves', type=int, help='Curves per batch')
+    _add_execution_options(parser)
 
     # Work mode selection (mutually exclusive)
     stage_group = parser.add_mutually_exclusive_group()
@@ -255,37 +258,15 @@ Examples:
     parser.add_argument('--max-b1', type=parse_int_with_scientific,
                        help='Maximum B1 filter for --stage2-only (supports scientific notation, e.g., 26e7)')
 
-    # GPU/compute
-    parser.add_argument('--gpu', action='store_true',
-                       help='Use GPU acceleration')
-    parser.add_argument('--no-gpu', action='store_true',
-                       help='Disable GPU even if enabled in config')
-    parser.add_argument('--gpu-device', type=int,
-                       help='GPU device number')
-    parser.add_argument('--gpu-curves', type=int,
-                       help='Number of curves per GPU batch')
-    parser.add_argument('--param', type=int, choices=[0, 1, 2, 3],
-                       help='ECM parametrization (0-3)')
-    parser.add_argument('--sigma', type=str,
-                       help='Sigma value (integer or parametrization:value)')
-    parser.add_argument('--maxmem', type=int,
-                       help='Maximum memory in MB for GMP-ECM stage 2 (-maxmem flag)')
-
-    # Execution behavior
-    parser.add_argument('--continue-after-factor', action='store_true',
-                       help='Continue running curves even after finding a factor')
-    parser.add_argument('--progress-interval', type=int, default=0,
-                       help='Report progress every N curves (0=disable)')
+    _add_gpu_options(parser)
+    _add_sigma_and_param(parser)
+    _add_behavior_options(parser)
 
     # API settings
     parser.add_argument('--project', type=str,
                        help='Project name for submissions')
     parser.add_argument('--no-submit', action='store_true',
                        help='Skip result submission to server')
-
-    # Logging
-    parser.add_argument('-v', '--verbose', action='store_true',
-                       help='Enable verbose output')
 
     # Hidden: for backward compatibility, auto-work is implied
     parser.add_argument('--auto-work', action='store_true', dest='auto_work_explicit',

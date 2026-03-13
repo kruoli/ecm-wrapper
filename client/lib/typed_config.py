@@ -88,6 +88,7 @@ class GMPECMConfig:
     gpu_device: int = 0
     gpu_curves: Optional[int] = None
     workers: int = 8  # Parallel workers (multiprocess ECM, stage2 threads)
+    stage2_max_b1: Optional[int] = None  # Max B1 for stage 2 residues (RAM limit)
     pm1_b1: int = 2900000000
     pm1_b2: int = 1000000000000000
     pp1_b1: int = 110000000

@@ -30,6 +30,7 @@ programs:
     gpu_enabled: true
     gpu_device: 0
     workers: 16  # Adjust based on your CPU cores
+    # stage2_max_b1: 110000000  # Uncomment to limit stage 2 residues by B1 (for low-RAM machines)
 
   yafu:
     path: /home/user/yafu/yafu  # Full path to your YAFU binary

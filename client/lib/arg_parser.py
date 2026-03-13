@@ -228,8 +228,12 @@ Examples:
     parser.add_argument('--two-stage', action='store_true',
                        help='Use two-stage GPU+CPU mode')
 
-    # Decoupled two-stage and P-1/P+1 modes (mutually exclusive)
+    # Work mode selection (mutually exclusive)
     stage_group = parser.add_mutually_exclusive_group()
+    stage_group.add_argument('--adaptive', action='store_true',
+                            help='Adaptive CPU mode: prioritize stage 2 residues, fall back to ECM (default if no mode specified)')
+    stage_group.add_argument('--standard', action='store_true',
+                            help='Standard auto-work mode: t-level or B1/B2 based execution')
     stage_group.add_argument('--pm1', action='store_true',
                             help='Run P-1 factorization (1 curve per composite)')
     stage_group.add_argument('--pp1', action='store_true',
@@ -237,7 +241,7 @@ Examples:
     stage_group.add_argument('--p1', action='store_true',
                             help='Run P-1 (1 curve) + P+1 (3 curves) per composite')
     stage_group.add_argument('--stage1-only', action='store_true',
-                            help='Stage 1 only: upload residue to server')
+                            help='Stage 1 only (GPU producer): upload residue to server')
     stage_group.add_argument('--stage2-only', action='store_true',
                             help='Stage 2 only: download residue from server')
 

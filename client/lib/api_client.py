@@ -749,7 +749,6 @@ class APIClient:
             except requests.exceptions.RequestException as e:
                 self.logger.error(f"Download attempt {attempt + 1}/{max_retries} failed for residue {residue_id}: {e}")
                 if attempt < max_retries - 1:
-                    import time
                     wait = 5 * (attempt + 1)
                     self.logger.info(f"Retrying in {wait}s...")
                     time.sleep(wait)

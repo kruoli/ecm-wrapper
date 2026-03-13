@@ -817,7 +817,6 @@ class ECMWrapper(BaseWrapper):
             residue_file: Path to the residue file to preserve
         """
         import shutil
-        import time
 
         try:
             failed_dir = Path(self.config['execution'].get('failed_uploads_dir', 'data/failed_uploads'))

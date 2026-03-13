@@ -27,7 +27,7 @@ import time
 from .ecm_config import (
     ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
 )
-from .ecm_math import get_optimal_b1_for_tlevel
+from .ecm_math import get_optimal_b1_for_tlevel, get_max_tlevel_for_workers
 from .work_helpers import print_work_header, print_work_status, request_ecm_work, request_p1_work
 from .stage1_helpers import submit_stage1_complete_workflow
 from .error_helpers import check_work_limit_reached
@@ -143,15 +143,25 @@ class WorkMode(ABC):
         """
         pass
 
-    @abstractmethod
     def complete_work(self, work: Dict[str, Any]) -> None:
         """
         Mark work assignment as complete on server.
 
+        Default implementation completes via work_id. Override in subclasses
+        that use different identifiers (e.g., Stage2ConsumerMode uses residue_id).
+
         Args:
             work: Work assignment to complete
         """
-        pass
+        if not self.current_work_id:
+            return
+        try:
+            if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
+                self.wrapper.submission_queue.enqueue_work_completion(
+                    self.current_work_id, self.ctx.client_id
+                )
+        except ResourceNotFoundError:
+            self.logger.warning(f"Work {self.current_work_id} already expired/completed on server, skipping")
 
     def cleanup_on_failure(self, work: Optional[Dict[str, Any]], error: BaseException) -> None:
         """
@@ -677,15 +687,7 @@ class Stage1ProducerMode(WorkMode):
 
         return stage1_attempt_id is not None
 
-    def complete_work(self, work: Dict[str, Any]) -> None:
-        assert self.current_work_id is not None  # Set in on_work_started
-        try:
-            if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
-                self.wrapper.submission_queue.enqueue_work_completion(
-                    self.current_work_id, self.ctx.client_id
-                )
-        except ResourceNotFoundError:
-            self.logger.warning(f"Work {self.current_work_id} already expired/completed on server, skipping")
+    # complete_work() inherited from WorkMode base class
 
     def cleanup_on_failure(self, work: Optional[Dict[str, Any]], error: BaseException) -> None:
         if self.current_work_id:
@@ -718,8 +720,8 @@ class Stage2ConsumerMode(WorkMode):
 
     def __init__(self, ctx: WorkLoopContext):
         super().__init__(ctx)
-        self._b2 = None
-        self._k = None
+        self._b2: Optional[int] = None
+        self._k: Optional[int] = None
         self.local_residue_file: Optional[Path] = None
         self._residue_checksum: Optional[str] = None
         # Track curves for completion validation
@@ -731,6 +733,13 @@ class Stage2ConsumerMode(WorkMode):
         # Import here to avoid circular dependency
         from .stage2_executor import Stage2Executor
         self.Stage2Executor = Stage2Executor
+
+    def _cleanup_local_residue(self) -> None:
+        """Clean up local residue file if it exists."""
+        if self.local_residue_file and self.local_residue_file.exists():
+            self.local_residue_file.unlink()
+            self.logger.info(f"Deleted local residue file: {self.local_residue_file}")
+        self.local_residue_file = None
 
     def _compute_file_checksum(self, filepath: Path) -> str:
         """Compute SHA-256 checksum of file for residue verification."""
@@ -942,6 +951,7 @@ class Stage2ConsumerMode(WorkMode):
         else:
             # Completed enough curves or found a factor - mark as complete
             print("Completing residue work...")
+            assert self._stage2_attempt_id is not None  # Set in submit_results when primary succeeds
             try:
                 complete_result = self.api_client.complete_residue(
                     client_id=self.ctx.client_id,
@@ -964,9 +974,7 @@ class Stage2ConsumerMode(WorkMode):
                 self.logger.warning(f"Residue {self.current_residue_id} already expired/completed on server, skipping")
 
         # Clean up local residue file
-        if self.local_residue_file and self.local_residue_file.exists():
-            self.local_residue_file.unlink()
-            self.logger.info(f"Deleted local residue file: {self.local_residue_file}")
+        self._cleanup_local_residue()
 
     def on_work_completed(self, work: Dict[str, Any], result: FactorResult) -> None:
         self.current_residue_id = None
@@ -983,13 +991,10 @@ class Stage2ConsumerMode(WorkMode):
                 )
             self.current_residue_id = None
 
-        if self.local_residue_file and self.local_residue_file.exists():
-            self.local_residue_file.unlink()
-            self.local_residue_file = None
+        self._cleanup_local_residue()
 
     def cleanup_on_shutdown(self) -> None:
-        if self.local_residue_file and self.local_residue_file.exists():
-            self.local_residue_file.unlink()
+        self._cleanup_local_residue()
 
     def _handle_keyboard_interrupt(self) -> None:
         """Override to handle residue-specific cleanup."""
@@ -1008,7 +1013,7 @@ class P1WorkMode(WorkMode):
     """
     P-1/P+1 sweep mode: Run PM1 and/or PP1 across composites from server.
 
-    Uses the /ecm-work endpoint (same as standard ECM), calculates B1 one step
+    Uses the /p1-work endpoint, calculates B1 one step
     above the composite's target t-level, and sweeps across composites (one
     composite per work assignment).
 
@@ -1191,16 +1196,7 @@ class P1WorkMode(WorkMode):
 
         return success
 
-    def complete_work(self, work: Dict[str, Any]) -> None:
-        assert self.current_work_id is not None
-        try:
-            if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
-                self.wrapper.submission_queue.enqueue_work_completion(
-                    self.current_work_id, self.ctx.client_id
-                )
-        except ResourceNotFoundError:
-            self.logger.warning(f"Work {self.current_work_id} already expired/completed on server, skipping")
-
+    # complete_work() inherited from WorkMode base class
 
 
 class StandardAutoWorkMode(WorkMode):
@@ -1417,15 +1413,7 @@ class StandardAutoWorkMode(WorkMode):
 
         return True
 
-    def complete_work(self, work: Dict[str, Any]) -> None:
-        assert self.current_work_id is not None  # Set in on_work_started
-        try:
-            if not self.api_client.complete_work(self.current_work_id, self.ctx.client_id):
-                self.wrapper.submission_queue.enqueue_work_completion(
-                    self.current_work_id, self.ctx.client_id
-                )
-        except ResourceNotFoundError:
-            self.logger.warning(f"Work {self.current_work_id} already expired/completed on server, skipping")
+    # complete_work() inherited from WorkMode base class
 
 
 class CompositeTargetMode(StandardAutoWorkMode):
@@ -1519,9 +1507,442 @@ class CompositeTargetMode(StandardAutoWorkMode):
         pass
 
 
+class AdaptiveCPUMode(WorkMode):
+    """
+    Adaptive CPU mode: prioritizes stage 2 residue work, falls back to ECM.
+
+    Each loop iteration:
+    1. Check for stage 2 residue work (highest priority - completes GPU work)
+    2. If residues available: download and process stage 2
+    3. If no residues: request ECM work (progressive ordering, t-level capped
+       by worker count) and run multiprocess ECM
+    4. Loop back to step 1
+
+    This ensures CPU clients are never idle when useful work exists, and they
+    prioritize finishing stage 2 work (the bottleneck when GPUs produce residues
+    faster than CPUs can consume them).
+    """
+
+    mode_name = "Adaptive CPU"
+
+    def __init__(self, ctx: WorkLoopContext):
+        super().__init__(ctx)
+
+        # Resolve worker count once
+        self._workers = resolve_worker_count(self.args, self.wrapper.config)
+
+        # Calculate t-level cap based on worker count (only applies to ECM fallback)
+        # User can override with --max-target-tlevel
+        user_max = getattr(self.args, 'max_target_tlevel', None)
+        self._max_tlevel = user_max if user_max is not None else get_max_tlevel_for_workers(self._workers)
+
+        # Default progress_interval to 100 to avoid spamming console with thousands of lines
+        user_pi = getattr(self.args, 'progress_interval', 0)
+        self._progress_interval = user_pi if user_pi > 0 else 100
+
+        # Current work type tracking
+        self._current_mode: Optional[str] = None  # 'stage2' or 'ecm'
+
+        # Stage 2 state (reused across iterations)
+        self._s2_b2: Optional[int] = None
+        self._s2_k: Optional[int] = None
+        self._s2_local_residue_file: Optional[Path] = None
+        self._s2_residue_checksum: Optional[str] = None
+        self._s2_expected_curves: int = 0
+        self._s2_curves_completed: int = 0
+        self._s2_found_factor: bool = False
+        self._s2_raw_output: str = ""
+        self._s2_factor: Optional[str] = None
+        self._s2_sigma: Optional[str] = None
+        self._s2_stage2_attempt_id: Optional[int] = None
+        self._s2_primary_submission_failed: bool = False
+
+        # ECM state
+        self._ecm_results_dict: Optional[Dict[str, Any]] = None
+
+        # Import stage2 executor
+        from .stage2_executor import Stage2Executor
+        self.Stage2Executor = Stage2Executor
+
+    def _print_startup_banner(self) -> None:
+        print("=" * 60)
+        if self.ctx.work_count_limit:
+            print(f"{self.mode_name} - will process {self.ctx.work_count_limit} assignment(s)")
+        else:
+            print(f"{self.mode_name} - requesting work from server")
+        print(f"Workers: {self._workers}")
+        print(f"Priority: stage 2 residues > ECM (progressive, max t{self._max_tlevel:.0f})")
+        print("Ctrl+C once: finish current assignment, then exit")
+        print("Ctrl+C twice: stop after current curve")
+        print("Ctrl+C three times: abort immediately")
+        print("=" * 60)
+        print()
+
+    def _cleanup_s2_residue(self) -> None:
+        """Clean up local stage 2 residue file if it exists."""
+        if self._s2_local_residue_file and self._s2_local_residue_file.exists():
+            self._s2_local_residue_file.unlink()
+            self.logger.info(f"Deleted local residue file: {self._s2_local_residue_file}")
+        self._s2_local_residue_file = None
+
+    def _compute_file_checksum(self, filepath: Path) -> str:
+        """Compute SHA-256 checksum of file."""
+        sha256 = hashlib.sha256()
+        with open(filepath, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+
+    # --- Work request: try stage 2 first, then ECM ---
+
+    def request_work(self) -> Optional[Dict[str, Any]]:
+        # Try stage 2 residues first (no wait on failure - fall through to ECM)
+        residue_work = self.api_client.get_residue_work(
+            client_id=self.ctx.client_id,
+            min_b1=getattr(self.args, 'min_b1', None),
+            max_b1=getattr(self.args, 'max_b1', None),
+            claim_timeout_hours=24
+        )
+
+        if residue_work:
+            self._current_mode = 'stage2'
+            self.logger.info("Stage 2 residue work available, prioritizing")
+            return residue_work
+
+        # No residues - try ECM work with progressive ordering
+        work = self.api_client.get_ecm_work(
+            client_id=self.ctx.client_id,
+            min_target_tlevel=getattr(self.args, 'min_target_tlevel', None),
+            max_target_tlevel=self._max_tlevel,
+            priority=getattr(self.args, 'priority', None),
+            min_digits=getattr(self.args, 'min_digits', None),
+            max_digits=getattr(self.args, 'max_digits', None),
+            work_type='progressive'
+        )
+
+        if work:
+            self._current_mode = 'ecm'
+            return work
+
+        # Nothing available at all
+        self.logger.info("No work available (stage 2 or ECM), waiting 30 seconds...")
+        time.sleep(30)
+        return None
+
+    # --- Work started ---
+
+    def on_work_started(self, work: Dict[str, Any]) -> None:
+        if self._current_mode == 'stage2':
+            self._on_stage2_started(work)
+        else:
+            self._on_ecm_started(work)
+
+    def _on_stage2_started(self, work: Dict[str, Any]) -> None:
+        self.current_residue_id = work['residue_id']
+        self.current_work_id = None
+
+        self._s2_expected_curves = work['curve_count']
+        self._s2_curves_completed = 0
+        self._s2_found_factor = False
+        self._s2_raw_output = ""
+        self._s2_primary_submission_failed = False
+
+        b1 = work['b1']
+
+        # Determine B2
+        if self.args.b2 is not None:
+            b2 = self.args.b2
+        elif hasattr(self.args, 'b2_multiplier') and self.args.b2_multiplier is not None:
+            b2 = int(b1 * self.args.b2_multiplier)
+            print(f"Using dynamic B2 = B1 * {self.args.b2_multiplier} = {b2}")
+        else:
+            b2 = work.get('suggested_b2', b1 * 500)
+
+        self._s2_b2 = b2
+        self._s2_k = None
+        b2_display = "GMP-ECM default" if b2 == -1 else str(b2)
+
+        print_work_header(
+            work_id=str(self.current_residue_id),
+            composite=work['composite'],
+            digit_length=work['digit_length'],
+            params={
+                'Mode': 'Stage 2 (adaptive)',
+                'B1': b1,
+                'B2': b2_display,
+                'curves': work['curve_count'],
+                'Stage 1 attempt ID': work.get('stage1_attempt_id')
+            }
+        )
+
+    def _on_ecm_started(self, work: Dict[str, Any]) -> None:
+        super().on_work_started(work)
+
+        print_work_header(
+            work_id=self.current_work_id,
+            composite=work['composite'],
+            digit_length=work['digit_length'],
+            params={
+                'Mode': 'ECM multiprocess (adaptive)',
+                'Workers': self._workers,
+                'T-level': f"{work.get('current_t_level', 0):.1f} -> {work.get('target_t_level', 0):.1f}"
+            }
+        )
+
+    # --- Execution ---
+
+    def execute_work(self, work: Dict[str, Any]) -> FactorResult:
+        if self._current_mode == 'stage2':
+            return self._execute_stage2(work)
+        else:
+            return self._execute_ecm(work)
+
+    def _execute_stage2(self, work: Dict[str, Any]) -> FactorResult:
+        # Download residue file
+        residue_dir = Path(self.wrapper.config['execution'].get('residue_dir', 'data/residues'))
+        residue_dir.mkdir(parents=True, exist_ok=True)
+        self._s2_local_residue_file = residue_dir / f"s2_residue_{self.current_residue_id}.txt"
+
+        print("Downloading residue file...")
+        assert self.current_residue_id is not None
+        download_success = self.api_client.download_residue(
+            client_id=self.ctx.client_id,
+            residue_id=self.current_residue_id,
+            output_path=str(self._s2_local_residue_file)
+        )
+
+        if not download_success:
+            result = FactorResult()
+            result.success = False
+            result.error_message = "Failed to download residue file"
+            return result
+
+        file_size = self._s2_local_residue_file.stat().st_size
+        print(f"Downloaded {file_size} bytes")
+
+        self._s2_residue_checksum = self._compute_file_checksum(self._s2_local_residue_file)
+
+        print(f"Running stage 2 with {self._workers} workers...")
+        executor = self.Stage2Executor(
+            self.wrapper,
+            self._s2_local_residue_file,
+            work['b1'],
+            self._s2_b2,
+            self._s2_k,
+            self._workers,
+            self.args.verbose
+        )
+
+        factor, all_factors, curves, exec_time, sigma = executor.execute(
+            early_termination=True,
+            progress_interval=self._progress_interval
+        )
+
+        result = FactorResult()
+        result.success = True
+        result.curves_run = curves
+        result.execution_time = exec_time
+
+        if all_factors:
+            for f in all_factors:
+                result.add_factor(f, sigma)
+
+        self._s2_factor = factor
+        self._s2_sigma = sigma
+        self._s2_curves_completed = curves
+        self._s2_found_factor = bool(all_factors)
+        self._s2_raw_output = executor.raw_output
+
+        return result
+
+    def _execute_ecm(self, work: Dict[str, Any]) -> FactorResult:
+        composite = work['composite']
+        current_t = work.get('current_t_level', 0.0) or 0.0
+
+        # Get optimal B1 and expected curve count for the current t-level step
+        b1, curves = get_optimal_b1_for_tlevel(max(20, current_t))
+
+        print(f"Mode: multiprocess ECM (B1={b1}, curves={curves}, workers={self._workers})")
+
+        mp_config = MultiprocessConfig(
+            composite=composite,
+            b1=b1,
+            total_curves=curves,
+            num_processes=self._workers,
+            parametrization=1,  # CPU Montgomery
+            method='ecm',
+            verbose=self.args.verbose,
+            progress_interval=self._progress_interval
+        )
+        result = self.wrapper.run_multiprocess_v2(mp_config)
+
+        self._ecm_results_dict = result.to_dict(composite, 'ecm')
+        self._ecm_results_dict['b1'] = b1
+        self._ecm_results_dict['b2'] = None  # GMP-ECM default
+        self._ecm_results_dict['curves_requested'] = curves
+        self._ecm_results_dict['parametrization'] = 1
+        self._ecm_results_dict['work_id'] = self.current_work_id
+
+        return result
+
+    # --- Submission ---
+
+    def submit_results(self, work: Dict[str, Any], result: FactorResult) -> bool:
+        if self._current_mode == 'stage2':
+            return self._submit_stage2(work, result)
+        else:
+            return self._submit_ecm(work, result)
+
+    def _submit_stage2(self, work: Dict[str, Any], result: FactorResult) -> bool:
+        if not result.success:
+            self.logger.error(result.error_message or "Stage 2 execution failed")
+            return False
+
+        results = {
+            'composite': work['composite'],
+            'b1': work['b1'],
+            'b2': None if self._s2_b2 == -1 else self._s2_b2,
+            'curves_requested': work['curve_count'],
+            'curves_completed': result.curves_run,
+            'factors_found': result.factors,
+            'factor_found': self._s2_factor,
+            'sigma': self._s2_sigma,
+            'raw_output': self._s2_raw_output or f"Stage 2 from residue {self.current_residue_id}",
+            'method': 'ecm',
+            'parametrization': work.get('parametrization', 3),
+            'execution_time': result.execution_time,
+            'residue_checksum': self._s2_residue_checksum,
+        }
+
+        print("Submitting stage 2 results...")
+        submit_response = self.wrapper.submit_result(results, self.args.project, 'gmp-ecm-ecm')
+
+        if not submit_response:
+            self.logger.error("Failed to submit stage 2 results")
+            return False
+
+        primary = submit_response.primary_response
+        if primary:
+            stage2_attempt_id = primary.get('attempt_id')
+            if not stage2_attempt_id:
+                self.logger.error("No attempt_id returned from primary endpoint")
+                return False
+            print(f"Stage 2 attempt ID: {stage2_attempt_id}")
+            self._s2_stage2_attempt_id = stage2_attempt_id
+            self._s2_primary_submission_failed = False
+        else:
+            self.logger.warning("Primary endpoint submission failed")
+            self._s2_stage2_attempt_id = None
+            self._s2_primary_submission_failed = True
+
+        return True
+
+    def _submit_ecm(self, work: Dict[str, Any], result: FactorResult) -> bool:
+        if result.curves_run == 0:
+            self.logger.error("Zero curves completed, execution may have failed")
+            return False
+
+        assert self._ecm_results_dict is not None
+        submit_response = self.wrapper.submit_result(
+            self._ecm_results_dict,
+            self.args.project,
+            'gmp-ecm-ecm'
+        )
+
+        if not submit_response:
+            self.logger.error("Failed to submit ECM results")
+            return False
+
+        return True
+
+    # --- Completion ---
+
+    def complete_work(self, work: Dict[str, Any]) -> None:
+        if self._current_mode == 'stage2':
+            self._complete_stage2(work)
+        else:
+            # ECM mode uses standard work_id completion from base class
+            super().complete_work(work)
+
+    def _complete_stage2(self, work: Dict[str, Any]) -> None:
+        assert self.current_residue_id is not None
+
+        if self._s2_primary_submission_failed:
+            self.logger.warning(
+                f"Skipping complete_residue for residue {self.current_residue_id} - "
+                "primary endpoint submission failed"
+            )
+            self.api_client.abandon_residue(self.ctx.client_id, self.current_residue_id)
+            self._cleanup_s2_residue()
+            return
+
+        # Check completion ratio
+        completion_ratio = self._s2_curves_completed / self._s2_expected_curves if self._s2_expected_curves > 0 else 0
+
+        if not self._s2_found_factor and completion_ratio < 0.75:
+            print(f"Abandoning residue (only {self._s2_curves_completed}/{self._s2_expected_curves} curves = {completion_ratio:.1%})")
+            self.api_client.abandon_residue(self.ctx.client_id, self.current_residue_id)
+        else:
+            print("Completing residue work...")
+            assert self._s2_stage2_attempt_id is not None  # Set in _submit_stage2 when primary succeeds
+            try:
+                complete_result = self.api_client.complete_residue(
+                    client_id=self.ctx.client_id,
+                    residue_id=self.current_residue_id,
+                    stage2_attempt_id=self._s2_stage2_attempt_id
+                )
+                if complete_result:
+                    new_t_level = complete_result.get('new_t_level')
+                    if new_t_level is not None:
+                        print(f"T-level updated to {new_t_level:.2f}")
+                else:
+                    self.logger.warning("Failed to complete residue - queuing for retry")
+                    self.wrapper.submission_queue.enqueue_residue_completion(
+                        residue_id=self.current_residue_id,
+                        client_id=self.ctx.client_id,
+                        stage2_attempt_id=self._s2_stage2_attempt_id
+                    )
+            except ResourceNotFoundError:
+                self.logger.warning(f"Residue {self.current_residue_id} already expired/completed")
+
+        self._cleanup_s2_residue()
+
+    def on_work_completed(self, work: Dict[str, Any], result: FactorResult) -> None:
+        if self._current_mode == 'stage2':
+            self.current_residue_id = None
+            self._s2_local_residue_file = None
+            self._s2_primary_submission_failed = False
+        self._current_mode = None
+        self._ecm_results_dict = None
+        super().on_work_completed(work, result)
+
+    # --- Cleanup ---
+
+    def cleanup_on_failure(self, work: Optional[Dict[str, Any]], error: BaseException) -> None:
+        if self._current_mode == 'stage2':
+            if self.current_residue_id:
+                if not self.api_client.abandon_residue(self.ctx.client_id, self.current_residue_id):
+                    self.wrapper.submission_queue.enqueue_residue_abandonment(
+                        self.current_residue_id, self.ctx.client_id
+                    )
+                self.current_residue_id = None
+            self._cleanup_s2_residue()
+        else:
+            super().cleanup_on_failure(work, error)
+
+    def cleanup_on_shutdown(self) -> None:
+        self._cleanup_s2_residue()
+
+
 def get_work_mode(ctx: WorkLoopContext) -> WorkMode:
     """
     Factory function to create the appropriate WorkMode based on args.
+
+    Priority order:
+    1. Explicit mode flags (--composite, --pm1, --stage1-only, --stage2-only)
+    2. Adaptive CPU mode (--adaptive or interactive selection)
+    3. Standard auto-work mode (legacy default with explicit --standard flag,
+       or when B1/tlevel args are provided)
 
     Args:
         ctx: Work loop context with wrapper, client_id, and args
@@ -1539,5 +1960,7 @@ def get_work_mode(ctx: WorkLoopContext) -> WorkMode:
         return Stage1ProducerMode(ctx)
     elif getattr(args, 'stage2_only', False):
         return Stage2ConsumerMode(ctx)
+    elif getattr(args, 'adaptive', False):
+        return AdaptiveCPUMode(ctx)
     else:
         return StandardAutoWorkMode(ctx)

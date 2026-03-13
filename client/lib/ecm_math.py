@@ -21,6 +21,26 @@ TLEVEL_BINARY_DEFAULT = 'bin/t-level.exe' if sys.platform == 'win32' else 'bin/t
 logger = logging.getLogger(__name__)
 
 
+# Zimmermann's optimal B1 values and expected curves for GMP-ECM 7
+# Source: https://members.loria.fr/PZimmermann/records/ecmnet.html
+# Format: (digits/t-level, optimal_b1, expected_curves_ecm7)
+OPTIMAL_B1_TABLE = [
+    (20, 11000, 107),
+    (25, 50000, 261),
+    (30, 250000, 513),
+    (35, 1000000, 1071),
+    (40, 3000000, 2753),
+    (45, 11000000, 5208),
+    (50, 43000000, 8704),
+    (55, 110000000, 20479),
+    (60, 260000000, 47888),
+    (65, 850000000, 78923),
+    (70, 2900000000, 115153),
+    (75, 7600000000, 211681),
+    (80, 25000000000, 296479),
+]
+
+
 def trial_division(n: int, limit: int = 10**7) -> Tuple[List[int], int]:
     """
     Fast trial division to find small prime factors.
@@ -418,24 +438,6 @@ def get_optimal_b1_for_tlevel(target_tlevel: float) -> Tuple[int, int]:
         >>> b1 >= 250000
         True
     """
-    # Zimmermann's optimal B1 values and expected curves for GMP-ECM 7
-    # Format: (digits, optimal_b1, expected_curves_ecm7)
-    OPTIMAL_B1_TABLE = [
-        (20, 11000, 107),
-        (25, 50000, 261),
-        (30, 250000, 513),
-        (35, 1000000, 1071),
-        (40, 3000000, 2753),
-        (45, 11000000, 5208),
-        (50, 43000000, 8704),
-        (55, 110000000, 20479),
-        (60, 260000000, 47888),
-        (65, 850000000, 78923),
-        (70, 2900000000, 115153),
-        (75, 7600000000, 211681),
-        (80, 25000000000, 296479)
-    ]
-
     # Find exact match or next higher level
     for digits, b1, curves in OPTIMAL_B1_TABLE:
         if target_tlevel <= digits:
@@ -465,30 +467,37 @@ def get_b1_above_tlevel(target_t_level: float) -> int:
         >>> get_b1_above_tlevel(55)  # Next >= 55 is t55 (B1=110M), one above = t60
         260000000
     """
-    # Zimmermann's optimal B1 table (same as in get_optimal_b1_for_tlevel)
-    TABLE = [
-        (20, 11000),
-        (25, 50000),
-        (30, 250000),
-        (35, 1000000),
-        (40, 3000000),
-        (45, 11000000),
-        (50, 43000000),
-        (55, 110000000),
-        (60, 260000000),
-        (65, 850000000),
-        (70, 2900000000),
-        (75, 7600000000),
-        (80, 25000000000),
-    ]
-
-    for i, (digits, b1) in enumerate(TABLE):
+    for i, (digits, b1, _curves) in enumerate(OPTIMAL_B1_TABLE):
         if target_t_level <= digits:
             # Return next entry's B1 if available, else this one
-            if i + 1 < len(TABLE):
-                return TABLE[i + 1][1]
+            if i + 1 < len(OPTIMAL_B1_TABLE):
+                return OPTIMAL_B1_TABLE[i + 1][1]
             return b1
-    return TABLE[-1][1]
+    return OPTIMAL_B1_TABLE[-1][1]
+
+
+def get_max_tlevel_for_workers(workers: int) -> float:
+    """
+    Get a reasonable max target t-level for adaptive CPU mode based on worker count.
+
+    Higher t-level steps require exponentially more curves and time. This function
+    caps the target t-level so CPU workers don't get assigned work that would take
+    unreasonably long (e.g., weeks for a single step).
+
+    Args:
+        workers: Number of parallel CPU workers
+
+    Returns:
+        Maximum target t-level to request from server
+    """
+    if workers >= 16:
+        return 55.0
+    elif workers >= 5:
+        return 50.0
+    elif workers >= 3:
+        return 45.0
+    else:
+        return 40.0
 
 
 def calculate_target_tlevel(digit_length: int) -> float:

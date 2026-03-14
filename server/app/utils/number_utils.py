@@ -1,6 +1,42 @@
+import logging
 import math
 import re
 import random
+import subprocess
+
+logger = logging.getLogger(__name__)
+
+
+def _pari_ispseudoprime(n: str) -> 'bool | None':
+    """
+    Use PARI/GP's ispseudoprime() for fast PRP test on large numbers.
+
+    PARI/GP uses GMP for arbitrary-precision arithmetic (C, not Python),
+    making it orders of magnitude faster for numbers with thousands of digits.
+    """
+    script = f"print(ispseudoprime({n}))\nquit\n"
+    try:
+        result = subprocess.run(
+            ["gp", "-q", "-f"],
+            input=script.encode(),
+            capture_output=True,
+            timeout=120
+        )
+        if result.returncode == 0:
+            output = result.stdout.decode().strip()
+            return output == "1"
+        logger.warning(f"PARI/GP ispseudoprime failed (rc={result.returncode})")
+        return False
+    except subprocess.TimeoutExpired:
+        logger.error(f"PARI/GP ispseudoprime timed out on {len(n)}-digit number")
+        return False
+    except FileNotFoundError:
+        logger.warning("PARI/GP (gp) not found, falling back to Python Miller-Rabin")
+        return None  # Signal caller to use Python fallback
+    except Exception as e:
+        logger.error(f"PARI/GP ispseudoprime error: {e}")
+        return False
+
 
 def validate_integer(number_str) -> bool:
     """Validate that string represents a positive integer."""
@@ -129,17 +165,29 @@ def divide_factor(composite: str, factor: str) -> str:
 
 def is_probably_prime(n: str, trials: int = 10) -> bool:
     """
-    Miller-Rabin primality test.
+    Primality test using PARI/GP for large numbers, Python Miller-Rabin for small.
+
+    For numbers over 500 digits, pure-Python modular exponentiation is too slow
+    (a 9000-digit PRP test takes ~85 seconds). PARI/GP uses GMP (C) and handles
+    these in seconds.
 
     Args:
         n: Number to test (as string)
-        trials: Number of trials (default: 10, gives error probability < 2^-20)
+        trials: Number of Miller-Rabin trials for Python fallback
 
     Returns:
         True if probably prime, False if definitely composite
     """
     if not validate_integer(n):
         return False
+
+    # For large numbers, use PARI/GP (C/GMP) instead of pure Python
+    if len(n) > 500:
+        result = _pari_ispseudoprime(n)
+        if result is not None:
+            return result
+        # PARI/GP not available — fall through to Python (will be slow)
+        logger.warning(f"Falling back to Python Miller-Rabin for {len(n)}-digit number (will be slow)")
 
     n_int = int(n)
 

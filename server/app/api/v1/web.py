@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from slowapi import Limiter
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 from sqlalchemy import desc, func, case, distinct
 from typing import Any, List, Optional
 from datetime import datetime, timedelta
@@ -578,7 +578,7 @@ async def recent_curves(
         factor_counts_by_attempt = prefetch_factor_counts_for_attempts(db, attempts)
     else:
         # Get individual attempts
-        query = db.query(ECMAttempt).filter(ECMAttempt.superseded_by.is_(None))
+        query = db.query(ECMAttempt).options(defer(ECMAttempt.raw_output)).filter(ECMAttempt.superseded_by.is_(None))
 
         if client_id:
             query = query.filter(ECMAttempt.client_id == client_id)

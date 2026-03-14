@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Any, List, Dict
 
 from sqlalchemy import and_, desc, func, distinct
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 
 @dataclass
@@ -224,7 +224,7 @@ def get_recent_attempts(db: Session, limit: int = 100, method: Optional[str] = N
     """
     from ..models.attempts import ECMAttempt
 
-    query = db.query(ECMAttempt)
+    query = db.query(ECMAttempt).options(defer(ECMAttempt.raw_output))
 
     if method:
         query = query.filter(ECMAttempt.method == method)
@@ -316,7 +316,9 @@ def get_aggregated_attempts(
     # Cap total loaded attempts to avoid memory issues on large datasets.
     # Most recent attempts across all composites - simple and fast.
     max_detail_attempts = limit * attempts_per_composite
-    attempts_query = db.query(ECMAttempt).filter(
+    attempts_query = db.query(ECMAttempt).options(
+        defer(ECMAttempt.raw_output)
+    ).filter(
         ECMAttempt.composite_id.in_(composite_ids)
     )
     if method:
@@ -442,7 +444,9 @@ def get_composite_with_details(db: Session, composite_id: int):
     if not composite:
         return None
 
-    attempts = db.query(ECMAttempt).filter(
+    attempts = db.query(ECMAttempt).options(
+        defer(ECMAttempt.raw_output)
+    ).filter(
         ECMAttempt.composite_id == composite_id
     ).order_by(desc(ECMAttempt.created_at)).limit(50).all()
 

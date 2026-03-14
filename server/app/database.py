@@ -30,4 +30,9 @@ def get_db():
     try:
         yield db
     finally:
+        # Always rollback before closing to clear any failed/uncommitted transaction.
+        # This prevents PendingRollbackError when a connection with a dirty transaction
+        # is returned to the pool (e.g., after a request timeout or unhandled exception).
+        # rollback() is a no-op if the transaction was already committed.
+        db.rollback()
         db.close()

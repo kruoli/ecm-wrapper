@@ -1,18 +1,16 @@
 """
 Specialized admin dashboard routes for composite and work management.
 """
-import secrets
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from ....config import get_settings
 from ....database import get_db
+from ....dependencies import verify_admin_key_html
 from ....templates import templates
-from ....utils.html_helpers import get_unauthorized_redirect_html
 from ....utils.query_helpers import (
     get_inactive_composites,
     get_outstanding_work_assignments,
@@ -28,7 +26,7 @@ router = APIRouter()
 async def inactive_composites_dashboard(
     request: Request,
     db: Session = Depends(get_db),
-    x_admin_key: str = Header(None),
+    _admin: bool = Depends(verify_admin_key_html),
     limit: int = Query(100, ge=1, le=200, description="Items per page"),
     offset: int = Query(0, ge=0, description="Pagination offset")
 ):
@@ -36,11 +34,6 @@ async def inactive_composites_dashboard(
     Dashboard showing inactive composites that are not fully factored.
     Allows bulk activation.
     """
-    settings = get_settings()
-    # Security: Constant-time comparison to prevent timing attacks
-    if not x_admin_key or not secrets.compare_digest(x_admin_key, settings.admin_api_key):
-        return get_unauthorized_redirect_html()
-
     composites, total = get_inactive_composites(db, limit=limit, offset=offset)
     pagination = calculate_pagination(offset, limit, total)
 
@@ -55,7 +48,7 @@ async def inactive_composites_dashboard(
 async def outstanding_work_dashboard(
     request: Request,
     db: Session = Depends(get_db),
-    x_admin_key: str = Header(None),
+    _admin: bool = Depends(verify_admin_key_html),
     limit: int = Query(100, ge=1, le=200, description="Items per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     client_id: Optional[str] = Query(None, description="Filter by client ID"),
@@ -66,11 +59,6 @@ async def outstanding_work_dashboard(
     Dashboard showing outstanding work assignments with filtering.
     Allows expire and cancel actions.
     """
-    settings = get_settings()
-    # Security: Constant-time comparison to prevent timing attacks
-    if not x_admin_key or not secrets.compare_digest(x_admin_key, settings.admin_api_key):
-        return get_unauthorized_redirect_html()
-
     assignments, total = get_outstanding_work_assignments(
         db,
         limit=limit,
@@ -97,7 +85,7 @@ async def outstanding_work_dashboard(
 async def recent_composites_dashboard(
     request: Request,
     db: Session = Depends(get_db),
-    x_admin_key: str = Header(None),
+    _admin: bool = Depends(verify_admin_key_html),
     limit: int = Query(100, ge=1, le=200, description="Items per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     days: int = Query(30, ge=1, le=90, description="Days to look back")
@@ -106,11 +94,6 @@ async def recent_composites_dashboard(
     Dashboard showing recently added composites.
     Allows activate/deactivate, priority changes, and deletion.
     """
-    settings = get_settings()
-    # Security: Constant-time comparison to prevent timing attacks
-    if not x_admin_key or not secrets.compare_digest(x_admin_key, settings.admin_api_key):
-        return get_unauthorized_redirect_html()
-
     composites, total = get_recently_added_composites(db, days=days, limit=limit, offset=offset)
     pagination = calculate_pagination(offset, limit, total)
 
@@ -126,7 +109,7 @@ async def recent_composites_dashboard(
 async def residue_status_dashboard(
     request: Request,
     db: Session = Depends(get_db),
-    x_admin_key: str = Header(None),
+    _admin: bool = Depends(verify_admin_key_html),
     limit: int = Query(100, ge=1, le=200, description="Items per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     status: Optional[str] = Query(None, description="Filter by status"),
@@ -138,11 +121,6 @@ async def residue_status_dashboard(
     Dashboard showing residue status with comprehensive filtering.
     Allows release, download, delete actions and cleanup of expired residues.
     """
-    settings = get_settings()
-    # Security: Constant-time comparison to prevent timing attacks
-    if not x_admin_key or not secrets.compare_digest(x_admin_key, settings.admin_api_key):
-        return get_unauthorized_redirect_html()
-
     from ....services.residue_manager import ResidueManager
     residue_manager = ResidueManager()
 

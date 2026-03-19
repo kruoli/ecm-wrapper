@@ -14,6 +14,12 @@ from .config import get_settings
 
 settings = get_settings()
 
+
+class AdminAuthRedirect(Exception):
+    """Raised when an HTML admin page fails auth - triggers a redirect to login."""
+    pass
+
+
 async def verify_admin_key(x_admin_key: Optional[str] = Header(None)):
     """
     Dependency to verify admin API key from header.
@@ -35,6 +41,23 @@ async def verify_admin_key(x_admin_key: Optional[str] = Header(None)):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin API key"
         )
+
+    return True
+
+
+async def verify_admin_key_html(x_admin_key: Optional[str] = Header(None)):
+    """
+    Dependency to verify admin API key for HTML dashboard routes.
+
+    Like verify_admin_key, but raises AdminAuthRedirect (which triggers a
+    redirect to the login page) instead of returning a JSON 401 error.
+    The exception handler is registered in main.py.
+
+    Raises:
+        AdminAuthRedirect: if key is missing or invalid
+    """
+    if not x_admin_key or not secrets.compare_digest(x_admin_key, settings.admin_api_key):
+        raise AdminAuthRedirect()
 
     return True
 

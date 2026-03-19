@@ -16,6 +16,7 @@ from ....utils.serializers import serialize_work_assignment
 from ....utils.query_helpers import get_recent_work_assignments, get_expired_work_assignments
 from ....utils.transactions import transaction_scope
 from ....utils.errors import get_or_404
+from ....constants import ACTIVE_WORK_STATUSES
 
 router = APIRouter()
 
@@ -144,7 +145,7 @@ async def reserve_composite(
     # Check if already reserved
     existing_assignment = db.query(WorkAssignment).filter(
         WorkAssignment.composite_id == composite.id,
-        WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+        WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
     ).first()
 
     if existing_assignment:

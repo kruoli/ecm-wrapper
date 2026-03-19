@@ -11,7 +11,7 @@ from ..models.work_assignments import WorkAssignment
 from ..models.clients import Client
 from ..schemas.work import WorkRequest, WorkResponse
 from .t_level_calculator import TLevelCalculator
-from ..constants import ECM_BOUNDS
+from ..constants import ECM_BOUNDS, ACTIVE_WORK_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +179,7 @@ class WorkAssignmentService:
         active_work_count = db.query(WorkAssignment).filter(
             and_(
                 WorkAssignment.client_id == work_request.client_id,
-                WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+                WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
             )
         ).count()
 
@@ -257,12 +257,11 @@ class WorkAssignmentService:
         if work_request.max_digits:
             query = query.filter(Composite.digit_length <= work_request.max_digits)
 
-        # Exclude composites with active work assignments
-        active_work_composites = db.query(WorkAssignment.composite_id).filter(
-            WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
-        ).subquery()
-
-        query = query.filter(~Composite.id.in_(active_work_composites))  # type: ignore[arg-type]
+        # Exclude composites with active work assignments (NOT EXISTS is faster than NOT IN)
+        query = query.filter(~db.query(WorkAssignment.id).filter(
+            WorkAssignment.composite_id == Composite.id,
+            WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
+        ).correlate(Composite).exists())
 
         # Order by priority: smaller numbers first, then by creation time
         composite = query.order_by(
@@ -422,7 +421,7 @@ class WorkAssignmentService:
             and_(
                 WorkAssignment.id == work_id,
                 WorkAssignment.client_id == client_id,
-                WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+                WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
             )
         ).first()
 
@@ -442,7 +441,7 @@ class WorkAssignmentService:
             and_(
                 WorkAssignment.id == work_id,
                 WorkAssignment.client_id == client_id,
-                WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+                WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
             )
         ).first()
 

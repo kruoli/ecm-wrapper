@@ -13,8 +13,8 @@ import logging
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Any, List, Union, cast
 
-from sqlalchemy.orm import Session, defer
-from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import Session, defer, joinedload
+from sqlalchemy import and_, func, or_, case
 
 from ..models.composites import Composite
 from ..models.attempts import ECMAttempt
@@ -25,6 +25,7 @@ from ..models.residues import ECMResidue
 from ..utils.number_utils import calculate_digit_length, validate_integer
 from .t_level_calculator import TLevelCalculator
 from .composite_loader import CompositeLoader
+from ..constants import ACTIVE_WORK_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -301,7 +302,7 @@ class CompositeService:
         active_work = db.query(WorkAssignment).filter(
             and_(
                 WorkAssignment.composite_id == composite_id,
-                WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+                WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
             )
         ).all()
 
@@ -416,7 +417,7 @@ class CompositeService:
         active_work = db.query(WorkAssignment).filter(
             and_(
                 WorkAssignment.composite_id == composite_id,
-                WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+                WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
             )
         ).all()
 
@@ -498,14 +499,11 @@ class CompositeService:
 
     def update_after_factor_division(self, db: Session, composite_id: int, factor: str) -> bool:
         """
-        Update composite after dividing out a factor.
+        Update composite after dividing out a single factor.
 
-        This method:
-        1. Divides the factor out to get the cofactor
-        2. Updates current_composite and digit_length
-        3. Tests if cofactor is prime
-        4. If prime, marks as fully factored
-        5. If composite, recalculates target t-level for new size
+        Divides the factor from the current composite value and delegates
+        to update_composite_to_cofactor() for the primality check and
+        t-level recalculation.
 
         Args:
             db: Database session
@@ -518,64 +516,88 @@ class CompositeService:
         Raises:
             ValueError: If factor doesn't divide composite or update fails
         """
-        from ..utils.number_utils import divide_factor, is_probably_prime, calculate_digit_length
-        from ..utils.calculations import ECMCalculations
+        from ..utils.number_utils import divide_factor
 
         try:
             composite = self.get_composite_by_id(db, composite_id)
             if not composite:
                 return False
 
-            # Get the current composite value (use current_composite if set, otherwise original number)
             current_value = composite.current_composite or composite.number
-
-            # Divide out the factor
             cofactor = divide_factor(current_value, factor)
 
-            # Update composite with cofactor
-            composite.current_composite = cofactor
-            composite.digit_length = calculate_digit_length(cofactor)
-
             logger.info(
-                "Divided factor %s out of composite %d: %s -> %s (%d digits)",
+                "Divided factor %s out of composite %d: %s -> %s",
                 factor[:20] + "..." if len(factor) > 20 else factor,
                 composite_id,
                 current_value[:20] + "..." if len(current_value) > 20 else current_value,
                 cofactor[:20] + "..." if len(cofactor) > 20 else cofactor,
-                composite.digit_length
             )
 
-            # Test if cofactor is prime
-            if is_probably_prime(cofactor):
-                logger.info("Cofactor %s is prime - marking composite %d as fully factored",
-                           cofactor[:20] + "..." if len(cofactor) > 20 else cofactor, composite_id)
-                # Cofactor stays in current_composite (it's the final prime)
-                # OPN can read it from there when syncing
-                composite.is_complete = True
-                composite.is_fully_factored = True
-            else:
-                # Cofactor is still composite - recalculate target t-level for new size
-                new_target_t_level = ECMCalculations.recommend_target_t_level(composite.digit_length)
-
-                logger.info(
-                    "Cofactor %s is composite (%d digits) - updating target t-level from %.1f to %.1f",
-                    cofactor[:20] + "..." if len(cofactor) > 20 else cofactor,
-                    composite.digit_length,
-                    composite.target_t_level or 0.0,
-                    new_target_t_level
-                )
-
-                composite.target_t_level = new_target_t_level
-
-                # Also update current t-level based on existing work
-                self.update_t_level(db, composite_id)
-
-            db.flush()  # Make changes visible within transaction
-            return True
+            return self.update_composite_to_cofactor(db, composite_id, cofactor)
 
         except Exception as e:
             logger.error("Failed to update composite %d after factor division: %s", composite_id, str(e))
             raise ValueError(f"Failed to update composite {composite_id} after factor division: {str(e)}")
+
+    def update_composite_to_cofactor(self, db: Session, composite_id: int, cofactor: str) -> bool:
+        """
+        Update a composite's current value to a pre-computed cofactor.
+
+        This is the shared logic for updating a composite after factor(s) have been
+        divided out. It handles:
+        1. Updating current_composite and digit_length
+        2. Testing if cofactor is prime → marks fully factored
+        3. If still composite → recalculates target t-level for new size
+
+        Used by both update_after_factor_division() (single factor) and
+        submit_result() (batch factors with running cofactor).
+
+        Args:
+            db: Database session
+            composite_id: ID of composite to update
+            cofactor: The new composite value after dividing out factor(s)
+
+        Returns:
+            True if successful, False if composite not found
+
+        Raises:
+            ValueError: If update fails
+        """
+        from ..utils.number_utils import is_probably_prime, calculate_digit_length
+        from ..utils.calculations import ECMCalculations
+
+        composite = self.get_composite_by_id(db, composite_id)
+        if not composite:
+            return False
+
+        composite.current_composite = cofactor
+        composite.digit_length = calculate_digit_length(cofactor)
+
+        logger.info(
+            "Updated composite %d to cofactor (%d digits)",
+            composite_id, composite.digit_length
+        )
+
+        if is_probably_prime(cofactor):
+            logger.info(
+                "Cofactor %s is prime - marking composite %d as fully factored",
+                cofactor[:20] + "..." if len(cofactor) > 20 else cofactor,
+                composite_id
+            )
+            composite.is_complete = True
+            composite.is_fully_factored = True
+        else:
+            new_target_t_level = ECMCalculations.recommend_target_t_level(composite.digit_length)
+            logger.info(
+                "Cofactor is composite (%d digits) - updating target t-level to %.1f",
+                composite.digit_length, new_target_t_level
+            )
+            composite.target_t_level = new_target_t_level
+            self.update_t_level(db, composite_id)
+
+        db.flush()
+        return True
 
     # ==================== Bulk Operations ====================
 
@@ -742,7 +764,7 @@ class CompositeService:
         active_work = db.query(WorkAssignment).filter(
             and_(
                 WorkAssignment.composite_id == composite_id,
-                WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+                WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
             )
         ).all()
 
@@ -751,7 +773,10 @@ class CompositeService:
         pm1_attempts = len([a for a in attempts if a.method == 'pm1'])
 
         # Get factors with full details from Factor table (not from attempts)
-        factors_with_details = db.query(Factor).filter(
+        # Use joinedload to avoid N+1 queries when accessing f.attempt.method below
+        factors_with_details = db.query(Factor).options(
+            joinedload(Factor.attempt)
+        ).filter(
             Factor.composite_id == composite_id
         ).all()
 
@@ -860,7 +885,7 @@ class CompositeService:
 
         # Work assignment statistics
         active_work = db.query(WorkAssignment).filter(
-            WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+            WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
         ).count()
 
         completed_work = db.query(WorkAssignment).filter(
@@ -1012,7 +1037,8 @@ class CompositeService:
         """
         Group composites by t-level milestones (t30, t35, t40, etc.).
 
-        Uses a single SQL aggregation query instead of loading all composites.
+        Uses a single SQL query with conditional aggregation per milestone,
+        avoiding loading rows into Python.
 
         Args:
             db: Database session
@@ -1023,38 +1049,39 @@ class CompositeService:
         """
         milestones = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80]
 
-        # Fetch only the columns we need (id, target_t_level, current_t_level)
-        # to avoid loading massive number/current_composite text columns
-        rows = db.query(
-            Composite.target_t_level,
-            Composite.current_t_level,
-        ).filter(
+        # Build conditional SUM columns for each milestone in one query
+        columns = []
+        for m in milestones:
+            ct = func.coalesce(Composite.current_t_level, 0)
+            columns.append(func.sum(case(
+                (and_(Composite.target_t_level >= m, ct >= m), 1),
+                else_=0
+            )).label(f"complete_{m}"))
+            columns.append(func.sum(case(
+                (and_(Composite.target_t_level >= m, ct > 0, ct < m), 1),
+                else_=0
+            )).label(f"in_progress_{m}"))
+            columns.append(func.sum(case(
+                (and_(Composite.target_t_level >= m, ct <= 0), 1),
+                else_=0
+            )).label(f"not_started_{m}"))
+
+        row = db.query(*columns).filter(
             or_(Composite.is_complete.is_(None), Composite.is_complete == False),
             Composite.is_fully_factored == False,
             Composite.target_t_level.isnot(None),
-        ).all()
+        ).one()
 
         groups = {}
-        for milestone in milestones:
-            complete = 0
-            in_progress = 0
-            not_started = 0
-
-            for target_t, current_t in rows:
-                if target_t >= milestone:
-                    ct = current_t if current_t is not None else 0
-                    if ct >= milestone:
-                        complete += 1
-                    elif ct > 0:
-                        in_progress += 1
-                    else:
-                        not_started += 1
-
-            groups[milestone] = {
-                'complete': complete,
-                'in_progress': in_progress,
-                'not_started': not_started,
-                'total': complete + in_progress + not_started,
+        for i, m in enumerate(milestones):
+            c = row[i * 3] or 0
+            ip = row[i * 3 + 1] or 0
+            ns = row[i * 3 + 2] or 0
+            groups[m] = {
+                'complete': c,
+                'in_progress': ip,
+                'not_started': ns,
+                'total': c + ip + ns,
             }
 
         return groups

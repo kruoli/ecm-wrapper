@@ -7,6 +7,11 @@ to avoid duplication and ensure consistency.
 
 from typing import List, Tuple
 
+# Work assignment statuses that indicate active/in-progress work.
+# Used across query helpers, services, and route handlers to filter
+# for assignments that should block new work or count as "active".
+ACTIVE_WORK_STATUSES = ['assigned', 'claimed', 'running']
+
 # ECM parameter table based on Paul Zimmerman's GMP-ECM 7 recommendations
 # Source: https://www.rieselprime.de/ziki/Elliptic_curve_method
 # Format: (max_digits, b1, b2, typical_curves)

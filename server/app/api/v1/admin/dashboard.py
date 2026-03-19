@@ -1,19 +1,17 @@
 """
 Admin dashboard and authentication routes.
 """
-import secrets
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import and_, distinct
 from sqlalchemy.orm import Session
 
-from ....config import get_settings
+from ....constants import ACTIVE_WORK_STATUSES
 from ....database import get_db
-from ....dependencies import verify_admin_key
+from ....dependencies import verify_admin_key, verify_admin_key_html
 from ....templates import templates
-from ....utils.html_helpers import get_unauthorized_redirect_html
 from ....utils.query_helpers import (
     get_composites_by_completion,
     get_recent_clients,
@@ -52,7 +50,7 @@ async def get_admin_summary(
         Composite.is_fully_factored
     ).count()
     active_work = db.query(WorkAssignment).filter(
-        WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+        WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
     ).count()
 
     # Recent activity
@@ -64,7 +62,7 @@ async def get_admin_summary(
     # Active clients
     active_clients = db.query(distinct(WorkAssignment.client_id)).filter(
         and_(
-            WorkAssignment.status.in_(['assigned', 'claimed', 'running']),
+            WorkAssignment.status.in_(ACTIVE_WORK_STATUSES),
             WorkAssignment.created_at >= last_week
         )
     ).count()
@@ -118,16 +116,12 @@ async def admin_login_page(request: Request):
 async def admin_dashboard(
     request: Request,
     db: Session = Depends(get_db),
-    x_admin_key: str = Header(None)
+    _admin: bool = Depends(verify_admin_key_html)
 ):
     """
     Admin dashboard showing system status, work assignments, and management tools.
     This endpoint allows initial page load without auth, but JavaScript checks the key.
     """
-    # Verify auth via header (constant-time comparison to prevent timing attacks)
-    settings = get_settings()
-    if not x_admin_key or not secrets.compare_digest(x_admin_key, settings.admin_api_key):
-        return get_unauthorized_redirect_html()
 
     # Get summary statistics
     summary_stats = await get_admin_summary(db)

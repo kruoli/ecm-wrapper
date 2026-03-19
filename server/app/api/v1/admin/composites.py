@@ -2,7 +2,6 @@
 Composite management routes for admin.
 """
 import logging
-import secrets
 from typing import List, Optional
 
 from fastapi import (
@@ -10,23 +9,19 @@ from fastapi import (
     Depends,
     File,
     Form,
-    Header,
     HTTPException,
     Request,
     UploadFile,
     status
 )
 from fastapi.responses import HTMLResponse
-from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
-from ....config import get_settings
 from ....database import get_db
-from ....dependencies import verify_admin_key, get_composite_service
+from ....dependencies import verify_admin_key, verify_admin_key_html, get_composite_service
 from ....schemas.composites import BulkCompositeRequest
 from ....services.composites import CompositeService
 from ....templates import templates
-from ....utils.html_helpers import get_unauthorized_redirect_html
 from ....utils.errors import get_or_404, not_found_error
 from ....utils.transactions import transaction_scope
 
@@ -241,13 +236,9 @@ async def get_composite_details_page(
     request: Request,
     db: Session = Depends(get_db),
     composite_service: CompositeService = Depends(get_composite_service),
-    x_admin_key: str = Header(None)
+    _admin: bool = Depends(verify_admin_key_html)
 ):
     """Web page showing detailed information about a specific composite."""
-    settings = get_settings()
-    # Security: Constant-time comparison to prevent timing attacks
-    if not x_admin_key or not secrets.compare_digest(x_admin_key, settings.admin_api_key):
-        return get_unauthorized_redirect_html()
 
     details = get_or_404(
         composite_service.get_composite_details(db, composite_id),

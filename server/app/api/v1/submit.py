@@ -25,7 +25,7 @@ limiter = Limiter(key_func=get_remote_address)
 
 @router.post("/submit_result", response_model=SubmitResultResponse)
 @limiter.limit("30/minute")
-async def submit_result(
+def submit_result(
     result_request: SubmitResultRequest,
     request: Request,
     db: Session = Depends(get_db),
@@ -255,36 +255,9 @@ async def submit_result(
                 # Now update composite with the cofactor we calculated in the first pass
                 if new_factors_count > 0 or known_factors_count > 0:
                     try:
-                        # Use the running_cofactor we already calculated
-                        from ...utils.number_utils import is_probably_prime, calculate_digit_length
-                        from ...utils.calculations import ECMCalculations
-
-                        composite.current_composite = running_cofactor
-                        composite.digit_length = calculate_digit_length(running_cofactor)
-
-                        logger.info(
-                            f"Updated composite to cofactor with {len(running_cofactor)} digits"
+                        composite_service.update_composite_to_cofactor(
+                            db, composite.id, running_cofactor
                         )
-
-                        # Test if cofactor is prime
-                        if is_probably_prime(running_cofactor):
-                            logger.info(f"Cofactor is prime - marking composite {composite.id} as fully factored")
-                            composite.is_complete = True
-                            composite.is_fully_factored = True
-                        else:
-                            # Cofactor is still composite - recalculate target t-level for new size
-                            new_target_t_level = ECMCalculations.recommend_target_t_level(composite.digit_length)
-                            logger.info(
-                                f"Cofactor is composite ({composite.digit_length} digits) - "
-                                f"updating target t-level to {new_target_t_level}"
-                            )
-                            composite.target_t_level = new_target_t_level
-
-                            # Also update current t-level based on existing work
-                            composite_service.update_t_level(db, composite.id)
-
-                        db.flush()  # Make changes visible
-
                     except ValueError as e:
                         # Log but don't fail - the factors were still recorded
                         logger.warning(

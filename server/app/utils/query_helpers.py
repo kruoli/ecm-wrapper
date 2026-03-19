@@ -9,6 +9,8 @@ from typing import Optional, Any, List, Dict
 from sqlalchemy import and_, desc, func, distinct
 from sqlalchemy.orm import Session, defer
 
+from ..constants import ACTIVE_WORK_STATUSES
+
 
 @dataclass
 class PaginationMetadata:
@@ -130,7 +132,7 @@ def get_active_work_assignments(db: Session, limit: int = 100):
     from ..models.work_assignments import WorkAssignment
 
     return db.query(WorkAssignment).filter(
-        WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+        WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
     ).order_by(desc(WorkAssignment.created_at)).limit(limit).all()
 
 
@@ -419,7 +421,7 @@ def get_expired_work_assignments(db: Session):
     return db.query(WorkAssignment).filter(
         and_(
             WorkAssignment.expires_at < datetime.utcnow(),
-            WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+            WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
         )
     ).all()
 
@@ -457,7 +459,7 @@ def get_composite_with_details(db: Session, composite_id: int):
     active_work = db.query(WorkAssignment).filter(
         and_(
             WorkAssignment.composite_id == composite_id,
-            WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+            WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
         )
     ).all()
 
@@ -481,7 +483,7 @@ def count_active_clients(db: Session, days: int = 7) -> int:
 
     return db.query(distinct(WorkAssignment.client_id)).filter(
         and_(
-            WorkAssignment.status.in_(['assigned', 'claimed', 'running']),
+            WorkAssignment.status.in_(ACTIVE_WORK_STATUSES),
             WorkAssignment.created_at >= since
         )
     ).count()
@@ -510,7 +512,7 @@ def get_summary_statistics(db: Session) -> dict:
             Composite.is_fully_factored
         ).count(),
         "active_work": db.query(WorkAssignment).filter(
-            WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+            WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
         ).count(),
         "recent_attempts_24h": db.query(ECMAttempt).filter(
             ECMAttempt.created_at >= last_24h
@@ -577,7 +579,7 @@ def get_outstanding_work_assignments(
     from ..models.work_assignments import WorkAssignment
 
     query = db.query(WorkAssignment).filter(
-        WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
+        WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
     )
 
     # Apply optional filters

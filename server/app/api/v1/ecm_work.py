@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, case
+from sqlalchemy.orm import Session, defer
+from sqlalchemy import and_, or_, case, func
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 import uuid
@@ -17,15 +17,21 @@ from ...models.residues import ECMResidue
 from ...services.t_level_calculator import TLevelCalculator
 from ...utils.transactions import transaction_scope
 from ...config import get_settings
-from ...constants import ECM_BOUNDS, OPTIMAL_B1_TABLE, get_b1_above_tlevel
+from ...constants import ECM_BOUNDS, OPTIMAL_B1_TABLE, get_b1_above_tlevel, ACTIVE_WORK_STATUSES
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+def _json_response(data: Dict[str, Any]) -> Response:
+    """Return a JSON response with consistent formatting."""
+    content = json.dumps(data, default=str) + "\n"
+    return Response(content=content, media_type="application/json")
+
+
 @router.get("/ecm-work")
-async def get_ecm_work(
+def get_ecm_work(
     client_id: str,
     priority: Optional[int] = None,
     min_target_tlevel: Optional[float] = None,
@@ -72,7 +78,7 @@ async def get_ecm_work(
         active_work_count = db.query(WorkAssignment).filter(
             and_(
                 WorkAssignment.client_id == client_id,
-                WorkAssignment.status.in_(['assigned', 'claimed', 'running']),
+                WorkAssignment.status.in_(ACTIVE_WORK_STATUSES),
                 WorkAssignment.expires_at > datetime.utcnow()
             )
         ).count()
@@ -88,13 +94,13 @@ async def get_ecm_work(
                 "expires_at": None,
                 "message": f"Client has {active_work_count} active work assignments (max: {settings.max_work_items_per_client})"
             }
-            content = json.dumps(response_data, default=str) + "\n"
-            return Response(content=content, media_type="application/json")
+            return _json_response(response_data)
 
         # Build query for suitable composites
         # current_t_level now includes prior_t_level (calculated using -w flag)
         # Use ecm_progress < 1.0 which leverages the indexed generated column
-        query = db.query(Composite).filter(
+        # Defer the large `number` column - only `current_composite` is needed for the response
+        query = db.query(Composite).options(defer(Composite.number)).filter(
             and_(
                 Composite.is_active == True,  # Only assign active composites
                 Composite.is_fully_factored == False,
@@ -120,20 +126,18 @@ async def get_ecm_work(
         if max_digits is not None:
             query = query.filter(Composite.digit_length <= max_digits)
 
-        # Exclude composites with active work assignments
-        active_work_composites = db.query(WorkAssignment.composite_id).filter(
-            WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
-        ).subquery()
-
-        query = query.filter(~Composite.id.in_(active_work_composites))  # type: ignore[arg-type]
+        # Exclude composites with active work assignments (NOT EXISTS is faster than NOT IN)
+        query = query.filter(~db.query(WorkAssignment.id).filter(
+            WorkAssignment.composite_id == Composite.id,
+            WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
+        ).correlate(Composite).exists())
 
         # Exclude composites with pending residues (stage 1 done, stage 2 not yet completed)
         # This prevents duplicate stage 1 work when residues are waiting to be processed
-        pending_residue_composites = db.query(ECMResidue.composite_id).filter(
+        query = query.filter(~db.query(ECMResidue.id).filter(
+            ECMResidue.composite_id == Composite.id,
             ECMResidue.status.in_(['available', 'claimed'])
-        ).subquery()
-
-        query = query.filter(~Composite.id.in_(pending_residue_composites))  # type: ignore[arg-type]
+        ).correlate(Composite).exists())
 
         # Apply sorting strategy based on work_type
         if work_type == "progressive":
@@ -162,13 +166,7 @@ async def get_ecm_work(
                 "expires_at": None,
                 "message": "No suitable work available matching criteria"
             }
-            content = json.dumps(response_data, default=str) + "\n"
-            return Response(content=content, media_type="application/json")
-
-        # Get previous ECM attempts for parameter calculation
-        previous_attempts = db.query(ECMAttempt).filter(
-            ECMAttempt.composite_id == composite.id
-        ).all()
+            return _json_response(response_data)
 
         # Calculate suggested ECM parameters using t-level targeting
         # Note: target_t_level is guaranteed non-None by the filter above
@@ -181,8 +179,12 @@ async def get_ecm_work(
             )
 
             if suggestion['status'] == 'target_reached':
-                # Use escalated parameters
-                b1, b2, curves = _get_escalated_parameters(composite.digit_length, previous_attempts)
+                # Only need max B1 for escalation — use aggregate instead of loading all attempts
+                max_b1 = db.query(func.max(ECMAttempt.b1)).filter(
+                    ECMAttempt.composite_id == composite.id,
+                    ECMAttempt.method == 'ecm'
+                ).scalar() or 0
+                b1, b2, curves = _get_escalated_parameters(composite.digit_length, max_b1)
             else:
                 b1, b2, curves = suggestion['b1'], suggestion['b2'], suggestion['curves']
 
@@ -240,13 +242,11 @@ async def get_ecm_work(
             "expires_at": expires_at.isoformat() if expires_at else None,
             "message": message
         }
-        content = json.dumps(response_data, default=str) + "\n"
-        return Response(content=content, media_type="application/json")
+        return _json_response(response_data)
 
 
-def _get_escalated_parameters(digit_length: int, previous_attempts: list) -> tuple:
+def _get_escalated_parameters(digit_length: int, max_b1_attempted: int) -> tuple:
     """Get escalated ECM parameters when target t-level is reached."""
-    max_b1_attempted = max((attempt.b1 for attempt in previous_attempts if attempt.method == 'ecm'), default=0)
     escalated_b1 = max_b1_attempted * 3
 
     # Find next level beyond what's been tried
@@ -301,7 +301,7 @@ def _pm1pp1_exists_subquery(db: Session, method_name: str, required_b1_expr):
 
 
 @router.get("/p1-work")
-async def get_p1_work(
+def get_p1_work(
     client_id: str,
     method: str = "p1",
     priority: Optional[int] = None,
@@ -357,7 +357,7 @@ async def get_p1_work(
         active_work_count = db.query(WorkAssignment).filter(
             and_(
                 WorkAssignment.client_id == client_id,
-                WorkAssignment.status.in_(['assigned', 'claimed', 'running']),
+                WorkAssignment.status.in_(ACTIVE_WORK_STATUSES),
                 WorkAssignment.expires_at > datetime.utcnow()
             )
         ).count()
@@ -375,8 +375,7 @@ async def get_p1_work(
                 "expires_at": None,
                 "message": f"Client has {active_work_count} active work assignments (max: {settings.max_work_items_per_client})"
             }
-            content = json.dumps(response_data, default=str) + "\n"
-            return Response(content=content, media_type="application/json")
+            return _json_response(response_data)
 
         # Build candidate query - no ecm_progress filter (PM1/PP1 valuable regardless)
         query = db.query(Composite).filter(
@@ -399,11 +398,11 @@ async def get_p1_work(
         if max_digits is not None:
             query = query.filter(Composite.digit_length <= max_digits)
 
-        # Exclude composites with active work assignments
-        active_work_composites = db.query(WorkAssignment.composite_id).filter(
-            WorkAssignment.status.in_(['assigned', 'claimed', 'running'])
-        ).scalar_subquery()
-        query = query.filter(~Composite.id.in_(active_work_composites))
+        # Exclude composites with active work assignments (NOT EXISTS is faster than NOT IN)
+        query = query.filter(~db.query(WorkAssignment.id).filter(
+            WorkAssignment.composite_id == Composite.id,
+            WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
+        ).correlate(Composite).exists())
 
         # Build SQL CASE expression: map target_t_level -> required B1
         # (one step above target in the optimal B1 table)
@@ -451,8 +450,7 @@ async def get_p1_work(
                 "expires_at": None,
                 "message": "No composites need P-1/P+1 work matching criteria"
             }
-            content = json.dumps(response_data, default=str) + "\n"
-            return Response(content=content, media_type="application/json")
+            return _json_response(response_data)
 
         # Compute B1 for the assigned composite
         computed_b1 = get_b1_above_tlevel(assigned_composite.target_t_level or 35.0)
@@ -495,5 +493,4 @@ async def get_p1_work(
             "expires_at": expires_at.isoformat() if expires_at else None,
             "message": f"Assigned {assigned_composite.digit_length}-digit composite for {method.upper()} sweep (B1={computed_b1})"
         }
-        content = json.dumps(response_data, default=str) + "\n"
-        return Response(content=content, media_type="application/json")
+        return _json_response(response_data)

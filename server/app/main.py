@@ -15,8 +15,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import get_settings
 from .database import engine
+from .dependencies import AdminAuthRedirect
 from .models.base import Base
 from .api.v1.router import v1_router
+from .utils.html_helpers import get_unauthorized_redirect_html
 
 
 class TimeoutMiddleware(BaseHTTPMiddleware):
@@ -81,6 +83,11 @@ app = FastAPI(
 # Add rate limiter to app state
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Admin HTML auth redirect: when a dashboard page fails auth, redirect to login
+@app.exception_handler(AdminAuthRedirect)
+async def admin_auth_redirect_handler(request: Request, exc: AdminAuthRedirect):
+    return get_unauthorized_redirect_html()
 
 # Add CORS middleware for web client access
 # Note: allow_credentials=False because we accept requests from any origin

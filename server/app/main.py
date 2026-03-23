@@ -8,7 +8,7 @@ sys.set_int_max_str_digits(100000)
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, JSONResponse
+from fastapi.responses import HTMLResponse, Response, JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -87,7 +87,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Admin HTML auth redirect: when a dashboard page fails auth, redirect to login
 @app.exception_handler(AdminAuthRedirect)
 async def admin_auth_redirect_handler(request: Request, exc: AdminAuthRedirect):
-    return get_unauthorized_redirect_html()
+    return HTMLResponse(content=get_unauthorized_redirect_html())
 
 # Add CORS middleware for web client access
 # Note: allow_credentials=False because we accept requests from any origin

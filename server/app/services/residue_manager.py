@@ -23,6 +23,7 @@ from sqlalchemy import and_, func
 from ..models.residues import ECMResidue
 from ..models.composites import Composite
 from ..models.attempts import ECMAttempt
+from ..models.projects import Project, ProjectComposite
 from ..config import get_settings
 from .t_level_calculator import TLevelCalculator
 
@@ -293,7 +294,8 @@ class ResidueManager:
         max_target_tlevel: Optional[float] = None,
         min_priority: Optional[int] = None,
         min_b1: Optional[int] = None,
-        max_b1: Optional[int] = None
+        max_b1: Optional[int] = None,
+        project: Optional[str] = None
     ) -> Optional[ECMResidue]:
         """
         Find an available residue for stage 2 processing.
@@ -306,6 +308,7 @@ class ResidueManager:
             min_priority: Minimum composite priority
             min_b1: Minimum B1 bound of residue
             max_b1: Maximum B1 bound of residue
+            project: Optional project name filter (if not set, all projects)
 
         Returns:
             ECMResidue if found, None otherwise
@@ -330,6 +333,14 @@ class ResidueManager:
             query = query.filter(ECMResidue.b1 >= min_b1)
         if max_b1 is not None:
             query = query.filter(ECMResidue.b1 <= max_b1)
+
+        # Apply project filter (join through project_composites)
+        if project is not None:
+            query = query.join(
+                ProjectComposite, ProjectComposite.composite_id == Composite.id
+            ).join(
+                Project, Project.id == ProjectComposite.project_id
+            ).filter(Project.name == project)
 
         # Prioritize by composite priority (descending), then by creation time (oldest first)
         query = query.order_by(

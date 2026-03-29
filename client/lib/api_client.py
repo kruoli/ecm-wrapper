@@ -315,7 +315,8 @@ class APIClient:
         min_digits: Optional[int] = None,
         max_digits: Optional[int] = None,
         timeout_days: int = 1,
-        work_type: str = "standard"
+        work_type: str = "standard",
+        project: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Request ECM work assignment from server.
@@ -353,6 +354,8 @@ class APIClient:
             params['min_digits'] = min_digits
         if max_digits is not None:
             params['max_digits'] = max_digits
+        if project is not None:
+            params['project'] = project
 
         try:
             response = requests.get(url, params=params, timeout=self.timeout)
@@ -446,7 +449,8 @@ class APIClient:
         min_digits: Optional[int] = None,
         max_digits: Optional[int] = None,
         timeout_days: int = 1,
-        work_type: str = "standard"
+        work_type: str = "standard",
+        project: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Request P-1/P+1 work assignment from server.
@@ -489,6 +493,8 @@ class APIClient:
             params['min_digits'] = min_digits
         if max_digits is not None:
             params['max_digits'] = max_digits
+        if project is not None:
+            params['project'] = project
 
         try:
             response = requests.get(url, params=params, timeout=self.timeout)
@@ -642,7 +648,8 @@ class APIClient:
         min_priority: Optional[int] = None,
         min_b1: Optional[int] = None,
         max_b1: Optional[int] = None,
-        claim_timeout_hours: int = 24
+        claim_timeout_hours: int = 24,
+        project: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Request stage 2 work (available residue file).
@@ -674,6 +681,8 @@ class APIClient:
             params['min_b1'] = min_b1
         if max_b1 is not None:
             params['max_b1'] = max_b1
+        if project is not None:
+            params['project'] = project
 
         try:
             response = requests.get(

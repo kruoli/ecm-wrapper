@@ -14,6 +14,7 @@ from ...models.composites import Composite
 from ...models.attempts import ECMAttempt
 from ...models.work_assignments import WorkAssignment
 from ...models.residues import ECMResidue
+from ...models.projects import Project, ProjectComposite
 from ...services.t_level_calculator import TLevelCalculator
 from ...utils.transactions import transaction_scope
 from ...config import get_settings
@@ -40,6 +41,7 @@ def get_ecm_work(
     max_digits: Optional[int] = None,
     timeout_days: int = 1,
     work_type: str = "standard",
+    project: Optional[str] = None,
     db: Session = Depends(get_db),
     t_level_calc: TLevelCalculator = Depends(get_t_level_calculator)
 ):
@@ -61,6 +63,7 @@ def get_ecm_work(
         max_target_tlevel: Maximum target t-level (filters for target_t_level <= this value)
         timeout_days: Work assignment expiration in days (default: 1)
         work_type: Work assignment strategy - "standard" (easiest/lowest target t-level first) or "progressive" (least ECM done first)
+        project: Optional project name to filter composites by (if not set, all projects)
         db: Database session
 
     Returns:
@@ -125,6 +128,14 @@ def get_ecm_work(
             query = query.filter(Composite.digit_length >= min_digits)
         if max_digits is not None:
             query = query.filter(Composite.digit_length <= max_digits)
+
+        # Apply project filter (join through project_composites)
+        if project is not None:
+            query = query.join(
+                ProjectComposite, ProjectComposite.composite_id == Composite.id
+            ).join(
+                Project, Project.id == ProjectComposite.project_id
+            ).filter(Project.name == project)
 
         # Exclude composites with active work assignments (NOT EXISTS is faster than NOT IN)
         query = query.filter(~db.query(WorkAssignment.id).filter(
@@ -311,6 +322,7 @@ def get_p1_work(
     max_digits: Optional[int] = None,
     timeout_days: int = 1,
     work_type: str = "standard",
+    project: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """
@@ -333,6 +345,7 @@ def get_p1_work(
         max_target_tlevel: Maximum target t-level filter
         timeout_days: Work assignment expiration in days (default: 1)
         work_type: "standard" (easiest first) or "progressive" (least work first)
+        project: Optional project name to filter composites by (if not set, all projects)
 
     Returns:
         JSON response with work assignment details including pm1_b1/pp1_b1
@@ -397,6 +410,14 @@ def get_p1_work(
             query = query.filter(Composite.digit_length >= min_digits)
         if max_digits is not None:
             query = query.filter(Composite.digit_length <= max_digits)
+
+        # Apply project filter (join through project_composites)
+        if project is not None:
+            query = query.join(
+                ProjectComposite, ProjectComposite.composite_id == Composite.id
+            ).join(
+                Project, Project.id == ProjectComposite.project_id
+            ).filter(Project.name == project)
 
         # Exclude composites with active work assignments (NOT EXISTS is faster than NOT IN)
         query = query.filter(~db.query(WorkAssignment.id).filter(

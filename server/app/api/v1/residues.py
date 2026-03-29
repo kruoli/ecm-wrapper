@@ -18,6 +18,7 @@ from ...database import get_db, SessionLocal
 from ...dependencies import get_residue_manager
 from ...models.residues import ECMResidue
 from ...models.composites import Composite
+from ...models.projects import Project, ProjectComposite
 from ...services.residue_manager import ResidueManager
 from ...schemas.residues import (
     ResidueUploadResponse,
@@ -137,6 +138,7 @@ async def get_residue_work(
     min_priority: Optional[int] = Query(None, description="Minimum composite priority"),
     min_b1: Optional[int] = Query(None, ge=1, description="Minimum B1 bound of residue"),
     max_b1: Optional[int] = Query(None, ge=1, description="Maximum B1 bound of residue"),
+    project: Optional[str] = Query(None, description="Project name filter (if not set, all projects)"),
     claim_timeout_hours: int = Query(72, ge=1, le=336, description="Hours until claim expires (default 72h/3 days)"),
     db: Session = Depends(get_db),
     residue_manager: ResidueManager = Depends(get_residue_manager)
@@ -169,7 +171,8 @@ async def get_residue_work(
             max_target_tlevel=max_target_tlevel,
             min_priority=min_priority,
             min_b1=min_b1,
-            max_b1=max_b1
+            max_b1=max_b1,
+            project=project
         )
 
         if not residue:

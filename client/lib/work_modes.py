@@ -867,7 +867,8 @@ class Stage2ConsumerMode(WorkMode):
             min_priority=getattr(self.args, 'priority', None),
             min_b1=getattr(self.args, 'min_b1', None),
             max_b1=max_b1,
-            claim_timeout_hours=24
+            claim_timeout_hours=24,
+            project=getattr(self.args, 'project', None)
         )
 
         if not residue_work:
@@ -1662,7 +1663,8 @@ class AdaptiveCPUMode(WorkMode):
             client_id=self.ctx.client_id,
             min_b1=getattr(self.args, 'min_b1', None),
             max_b1=max_b1,
-            claim_timeout_hours=24
+            claim_timeout_hours=24,
+            project=getattr(self.args, 'project', None)
         )
 
         if residue_work:
@@ -1678,7 +1680,8 @@ class AdaptiveCPUMode(WorkMode):
             priority=getattr(self.args, 'priority', None),
             min_digits=getattr(self.args, 'min_digits', None),
             max_digits=getattr(self.args, 'max_digits', None),
-            work_type='progressive'
+            work_type='progressive',
+            project=getattr(self.args, 'project', None)
         )
 
         if work:

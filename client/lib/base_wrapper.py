@@ -306,7 +306,7 @@ class BaseWrapper:
                 self.logger.info(f"Submitting to {endpoint_name} ({api_client_info['url']})")
                 response = api_client.submit_result(
                     payload=payload,
-                    save_on_failure=save_on_failure,
+                    save_on_failure=False,  # Don't save per-endpoint; queue handles retry (line 331)
                     results_context=results_context
                 )
 

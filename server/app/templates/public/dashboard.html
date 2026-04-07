@@ -51,25 +51,79 @@
 </div>
 
 <div style="margin-bottom: 20px; padding: 15px; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-    <div style="margin-bottom: 10px; font-weight: 600; color: #333;">
-        🔍 Filter by Priority:
+    <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start;">
+        {% if all_projects %}
+        <div>
+            <div style="margin-bottom: 8px; font-weight: 600; color: #333;">
+                Project:
+            </div>
+            <select id="project-filter" onchange="applyFilters()" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95em; min-width: 180px;">
+                <option value="">All Projects</option>
+                {% for p in all_projects %}
+                <option value="{{ p.id }}" {% if project == p.id %}selected{% endif %}>{{ p.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
+        <div style="flex: 1;">
+            <div style="margin-bottom: 8px; font-weight: 600; color: #333;">
+                Priority:
+            </div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                <a href="javascript:void(0)" onclick="setPriority(null)" class="btn {% if priority is none %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 6px 12px; font-size: 0.9em;">
+                    All
+                </a>
+                {% for p in range(1, 11) %}
+                <a href="javascript:void(0)" onclick="setPriority({{ p }})" class="btn {% if priority == p %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 6px 12px; font-size: 0.9em;">
+                    {{ p }}
+                </a>
+                {% endfor %}
+            </div>
+        </div>
     </div>
-    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-        <a href="/api/v1/dashboard/" class="btn {% if priority is none %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 8px 16px;">
-            All Priorities
-        </a>
-        {% for p in range(1, 11) %}
-        <a href="/api/v1/dashboard/?priority={{ p }}" class="btn {% if priority == p %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 8px 16px;">
-            Priority {{ p }}
-        </a>
-        {% endfor %}
-    </div>
-    {% if priority is not none %}
+    {% if priority is not none or project is not none %}
     <div style="margin-top: 10px; color: #666; font-size: 0.9em;">
-        Currently showing: <strong>Priority {{ priority }}</strong> composites only
+        Currently showing:
+        {% if project is not none %}
+            <strong>{{ all_projects|selectattr('id', 'equalto', project)|map(attribute='name')|first }}</strong> project
+            {% if priority is not none %}, {% endif %}
+        {% endif %}
+        {% if priority is not none %}
+            <strong>Priority {{ priority }}</strong> composites
+        {% endif %}
     </div>
     {% endif %}
 </div>
+
+<script>
+    function buildFilterUrl(overrides) {
+        var params = {};
+        var projectEl = document.getElementById('project-filter');
+        var projectVal = projectEl ? projectEl.value : '';
+        if (projectVal) params.project = projectVal;
+        {% if priority is not none %}
+        params.priority = '{{ priority }}';
+        {% endif %}
+        // Apply overrides
+        for (var key in overrides) {
+            if (overrides[key] === null || overrides[key] === '') {
+                delete params[key];
+            } else {
+                params[key] = overrides[key];
+            }
+        }
+        var qs = Object.keys(params).map(function(k) { return k + '=' + params[k]; }).join('&');
+        return '/api/v1/dashboard/' + (qs ? '?' + qs : '');
+    }
+
+    function applyFilters() {
+        window.location.href = buildFilterUrl({});
+    }
+
+    function setPriority(p) {
+        window.location.href = buildFilterUrl({ priority: p });
+    }
+</script>
 
 <div class="stats-grid" style="margin-bottom: 30px;">
     <div class="stat-card">

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from ...database import get_db
 from ...dependencies import get_composite_service
 from ...models import Composite, ECMAttempt, Factor
+from ...models.projects import Project, ProjectComposite
 from ...services.composites import CompositeService
 from ...templates import templates
 from ...utils.query_helpers import get_aggregated_attempts, prefetch_factor_counts_for_attempts, get_residues_filtered, calculate_pagination
@@ -22,35 +23,52 @@ limiter = Limiter(key_func=get_real_client_ip)
 async def dashboard(
     request: Request,
     db: Session = Depends(get_db),
-    priority: Optional[int] = Query(None, ge=1, description="Filter by priority level")
+    priority: Optional[int] = Query(None, ge=1, description="Filter by priority level"),
+    project: Optional[int] = Query(None, ge=1, description="Filter by project ID")
 ):
     """
     Simple dashboard showing all factorization results.
-    Optionally filter by priority level.
+    Optionally filter by priority level and/or project.
     """
+    # Fetch all projects for dropdown
+    all_projects = db.query(Project).order_by(Project.name).all()
 
-    # Build query for composites with optional priority filter
+    # If filtering by project, get the set of composite IDs in that project
+    project_composite_ids = None
+    if project is not None:
+        project_composite_ids = set(
+            row[0] for row in db.query(ProjectComposite.composite_id).filter(
+                ProjectComposite.project_id == project
+            ).all()
+        )
+
+    # Build query for composites with optional priority/project filter
     composites_query = db.query(Composite)
     if priority is not None:
         composites_query = composites_query.filter(Composite.priority == priority)
+    if project_composite_ids is not None:
+        composites_query = composites_query.filter(Composite.id.in_(project_composite_ids))
     composites = composites_query.order_by(desc(Composite.created_at)).limit(50).all()
 
-    # Get recent attempts (aggregated by composite), filtered by priority
-    attempts, _ = get_aggregated_attempts(db, limit=50, priority=priority)
+    # Get recent attempts (aggregated by composite), filtered by priority/project
+    attempts, _ = get_aggregated_attempts(db, limit=50, priority=priority, project_id=project)
 
     # Pre-fetch factor counts for attempt detail rows (eliminates N+1 queries in template)
     factor_counts_by_attempt = prefetch_factor_counts_for_attempts(db, attempts)
 
-    # Get recent factors (limited for main page)
-    factors = db.query(Factor).order_by(desc(Factor.created_at)).limit(25).all()
+    # Get recent factors (limited for main page), filtered by project
+    factors_query = db.query(Factor)
+    if project_composite_ids is not None:
+        factors_query = factors_query.filter(Factor.composite_id.in_(project_composite_ids))
+    factors = factors_query.order_by(desc(Factor.created_at)).limit(25).all()
 
     # Pre-fetch composites and attempts for factor rows (eliminates N+1 template queries)
-    factor_composite_ids = list({f.composite_id for f in factors if f.composite_id})
+    factor_composite_ids_set = list({f.composite_id for f in factors if f.composite_id})
     factor_attempt_ids = list({f.found_by_attempt_id for f in factors if f.found_by_attempt_id})
 
     factor_composites_by_id = {}
-    if factor_composite_ids:
-        factor_composites = db.query(Composite).filter(Composite.id.in_(factor_composite_ids)).all()
+    if factor_composite_ids_set:
+        factor_composites = db.query(Composite).filter(Composite.id.in_(factor_composite_ids_set)).all()
         factor_composites_by_id = {c.id: c for c in factor_composites}
 
     factor_attempts_by_id = {}
@@ -58,22 +76,31 @@ async def dashboard(
         factor_attempts = db.query(ECMAttempt).filter(ECMAttempt.id.in_(factor_attempt_ids)).all()
         factor_attempts_by_id = {a.id: a for a in factor_attempts}
 
-    # Build summary stats (filtered by priority if specified)
+    # Build summary stats (filtered by priority/project if specified)
     stats_query = db.query(Composite)
     if priority is not None:
         stats_query = stats_query.filter(Composite.priority == priority)
+    if project_composite_ids is not None:
+        stats_query = stats_query.filter(Composite.id.in_(project_composite_ids))
 
     total_composites = stats_query.count()
     fully_factored = stats_query.filter(Composite.is_fully_factored == True).count()
 
-    # Total attempts - need to join through composites if filtering by priority
+    # Total attempts - need to join through composites if filtering by priority/project
     attempts_query = db.query(ECMAttempt).filter(ECMAttempt.superseded_by.is_(None))
-    if priority is not None:
-        attempts_query = attempts_query.join(Composite).filter(Composite.priority == priority)
+    if priority is not None or project_composite_ids is not None:
+        attempts_query = attempts_query.join(Composite)
+        if priority is not None:
+            attempts_query = attempts_query.filter(Composite.priority == priority)
+        if project_composite_ids is not None:
+            attempts_query = attempts_query.filter(Composite.id.in_(project_composite_ids))
     total_attempts = attempts_query.count()
 
-    # Total factors count (all priorities)
-    total_factors = db.query(Factor).count()
+    # Total factors count (filtered by project if specified)
+    factors_count_query = db.query(Factor)
+    if project_composite_ids is not None:
+        factors_count_query = factors_count_query.filter(Factor.composite_id.in_(project_composite_ids))
+    total_factors = factors_count_query.count()
 
     return templates.TemplateResponse("public/dashboard.html", {
         "request": request,
@@ -88,6 +115,8 @@ async def dashboard(
         "total_factors": total_factors,
         "fully_factored": fully_factored,
         "priority": priority,
+        "project": project,
+        "all_projects": all_projects,
     })
 
 

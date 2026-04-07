@@ -237,7 +237,8 @@ def get_recent_attempts(db: Session, limit: int = 100, method: Optional[str] = N
 def get_aggregated_attempts(
     db: Session, limit: int = 50, offset: int = 0,
     method: Optional[str] = None, priority: Optional[int] = None,
-    client_id: Optional[str] = None, attempts_per_composite: int = 25
+    client_id: Optional[str] = None, attempts_per_composite: int = 25,
+    project_id: Optional[int] = None
 ):
     """
     Get recent ECM attempts aggregated by composite.
@@ -256,6 +257,7 @@ def get_aggregated_attempts(
         priority: Filter by composite priority level
         client_id: Filter to composites where this client has attempts
         attempts_per_composite: Max detail attempts to load per composite
+        project_id: Filter to composites belonging to this project
 
     Returns:
         Tuple of (list of dicts with aggregated attempt data, total composite count)
@@ -263,6 +265,7 @@ def get_aggregated_attempts(
     from ..models.attempts import ECMAttempt
     from ..models.composites import Composite
     from ..models.factors import Factor
+    from ..models.projects import ProjectComposite
 
     # Query 1: Get composite IDs with recent attempts, ordered by most recent activity
     query = db.query(
@@ -270,9 +273,17 @@ def get_aggregated_attempts(
         func.max(ECMAttempt.created_at).label('latest_attempt')
     )
 
-    # Join with Composite table if filtering by priority
-    if priority is not None:
-        query = query.join(Composite).filter(Composite.priority == priority)
+    # Join with Composite table if filtering by priority or project
+    if priority is not None or project_id is not None:
+        query = query.join(Composite)
+        if priority is not None:
+            query = query.filter(Composite.priority == priority)
+        if project_id is not None:
+            query = query.join(
+                ProjectComposite,
+                and_(ProjectComposite.composite_id == Composite.id,
+                     ProjectComposite.project_id == project_id)
+            )
 
     if client_id:
         query = query.filter(ECMAttempt.client_id == client_id)

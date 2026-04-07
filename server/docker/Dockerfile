@@ -6,6 +6,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     pari-gp \
+    pari-seadata \
+    pari-elldata \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies

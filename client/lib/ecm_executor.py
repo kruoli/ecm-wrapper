@@ -12,7 +12,7 @@ from lib.ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevel
 from lib.execution_engine import CompositeExecutionEngine, TLevelBatchProducer
 from lib.ecm_command import build_ecm_command
 from lib.ecm_math import (
-    trial_division, is_probably_prime, get_b1_for_digit_length
+    trial_division, is_probably_prime, OPTIMAL_B1_TABLE
 )
 
 class ECMWrapper(BaseWrapper):
@@ -1004,12 +1004,17 @@ class ECMWrapper(BaseWrapper):
             # Select B1 based on cofactor size - target factors up to half the digits
             cofactor_digits = len(str(current_cofactor))
             target_digits = (cofactor_digits + 1) // 2
-            b1 = get_b1_for_digit_length(target_digits)
+            # Use OPTIMAL_B1_TABLE for proper B1 and curve count
+            b1, expected_curves = OPTIMAL_B1_TABLE[0][1], OPTIMAL_B1_TABLE[0][2]
+            for digits, table_b1, table_curves in OPTIMAL_B1_TABLE:
+                if target_digits <= digits:
+                    b1, expected_curves = table_b1, table_curves
+                    break
+            # Spread expected curves across attempts, minimum 50 per attempt
+            curves = max(50, expected_curves // max_ecm_attempts)
 
-            # Use more curves for smaller numbers (they're faster)
-            curves = max(10, 50 - (target_digits // 2))
-
-            self.logger.info(f"ECM attempt {attempt+1}/{max_ecm_attempts} on C{cofactor_digits} with B1={b1}, {curves} curves")
+            self.logger.info(f"ECM attempt {attempt+1}/{max_ecm_attempts} on C{cofactor_digits} "
+                             f"with B1={b1}, {curves} curves (target P{target_digits})")
 
             try:
                 # Use v2 API for ECM execution
@@ -1077,7 +1082,7 @@ class ECMWrapper(BaseWrapper):
         Returns:
             List of prime factors (as strings)
         """
-        from lib.ecm_math import trial_division, is_probably_prime, get_b1_for_digit_length
+        # trial_division, is_probably_prime, OPTIMAL_B1_TABLE imported at module level
 
         factor_int = int(factor)
 
@@ -1106,10 +1111,17 @@ class ECMWrapper(BaseWrapper):
             cofactor_digits = len(str(current_cofactor))
             # Target factors up to half the digit length (smallest factor can't be larger)
             target_digits = (cofactor_digits + 1) // 2
-            b1 = get_b1_for_digit_length(target_digits)
-            curves = max(10, 50 - (target_digits // 2))
+            # Use OPTIMAL_B1_TABLE for proper B1 and curve count
+            b1, expected_curves = OPTIMAL_B1_TABLE[0][1], OPTIMAL_B1_TABLE[0][2]
+            for digits, table_b1, table_curves in OPTIMAL_B1_TABLE:
+                if target_digits <= digits:
+                    b1, expected_curves = table_b1, table_curves
+                    break
+            # Spread expected curves across attempts, minimum 50 per attempt
+            curves = max(50, expected_curves // max_ecm_attempts)
 
-            self.logger.info(f"ECM attempt {attempt+1}/{max_ecm_attempts} on C{cofactor_digits} with B1={b1}")
+            self.logger.info(f"ECM attempt {attempt+1}/{max_ecm_attempts} on C{cofactor_digits} "
+                             f"with B1={b1}, {curves} curves (target P{target_digits})")
 
             try:
                 # Call primitive directly - no recursive factoring

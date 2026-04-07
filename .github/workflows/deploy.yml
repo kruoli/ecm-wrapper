@@ -131,7 +131,7 @@ jobs:
           # Clean up old Docker resources to prevent disk filling up
           # Run AFTER new containers are up to avoid removing needed images
           echo "🧹 Cleaning up unused Docker resources..."
-          docker builder prune -af
+          docker builder prune --filter "until=168h" -f
           docker image prune -af
           docker volume prune -f
           echo "✅ Cleanup complete"

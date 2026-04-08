@@ -18,7 +18,7 @@ from typing import Optional, Tuple, Dict, Any
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func
+from sqlalchemy import and_, or_, func
 
 from ..models.residues import ECMResidue
 from ..models.composites import Composite
@@ -680,9 +680,9 @@ class ResidueManager:
 
     def cleanup_factored_composites(self, db: Session) -> int:
         """
-        Clean up residues for composites that have been fully factored.
+        Clean up residues for composites that have been fully factored or completed.
 
-        Residues are no longer useful once their composite is factored.
+        Residues are no longer useful once their composite is factored or marked complete.
 
         Args:
             db: Database session
@@ -690,11 +690,14 @@ class ResidueManager:
         Returns:
             Number of residues cleaned up
         """
-        # Find residues for fully factored composites
+        # Find residues for fully factored or completed composites
         residues_to_cleanup = db.query(ECMResidue).join(
             Composite, ECMResidue.composite_id == Composite.id
         ).filter(
-            Composite.is_fully_factored == True,  # noqa: E712
+            or_(
+                Composite.is_fully_factored == True,  # noqa: E712
+                Composite.is_complete == True,  # noqa: E712
+            ),
             ECMResidue.status.in_(['available', 'claimed'])
         ).all()
 
@@ -712,7 +715,7 @@ class ResidueManager:
                 logger.error(f"Error cleaning up residue {residue.id}: {e}")
 
         if count > 0:
-            logger.info(f"Cleaned up {count} residues for factored composites")
+            logger.info(f"Cleaned up {count} residues for factored/completed composites")
 
         return count
 

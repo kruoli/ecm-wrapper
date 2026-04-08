@@ -160,10 +160,13 @@ async def cleanup_residues(
     # Release expired claims (claimed residues that timed out)
     claims_released = residue_manager.cleanup_expired_claims(db)
 
-    # Delete residues for fully factored composites
+    # Delete residues for fully factored or completed composites
     factored_cleaned = residue_manager.cleanup_factored_composites(db)
 
     total_cleaned = claims_released + factored_cleaned
+
+    # Commit all changes
+    db.commit()
 
     return {
         "success": True,

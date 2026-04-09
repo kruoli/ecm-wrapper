@@ -6,14 +6,15 @@ from .config import get_settings
 
 settings = get_settings()
 
-# Create SQLAlchemy engine with conservative pool settings for low-memory environments
-# Default pool_size=5, max_overflow=10 is too aggressive for 1GB RAM droplet
+# Create SQLAlchemy engine with tuned pool settings for low-memory environments
+# Need enough connections to handle frontend page-load bursts (which can fire
+# 10-30+ concurrent API requests from RSC prefetching) plus background workers.
 engine = create_engine(
     settings.database_url,
     poolclass=QueuePool,
-    pool_size=2,          # Keep only 2 persistent connections
-    max_overflow=3,       # Allow up to 3 temporary connections under load
-    pool_timeout=30,      # Wait up to 30s for a connection
+    pool_size=5,          # 5 persistent connections (handles steady-state load)
+    max_overflow=10,      # Up to 10 extra under burst (15 total max)
+    pool_timeout=10,      # Fail fast (10s) instead of queueing for 30s — prevents cascading pileup
     pool_recycle=1800,    # Recycle connections every 30 min to prevent stale connections
     pool_pre_ping=True,   # Verify connections are alive before using
 )

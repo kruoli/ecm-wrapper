@@ -17,7 +17,8 @@ def submit_stage1_complete_workflow(
     project: Optional[str],
     client_id: str,
     factor_found: Optional[str],
-    cleanup_residue: bool = True
+    cleanup_residue: bool = True,
+    upload_residue: bool = True
 ) -> Optional[str]:
     """
     Complete Stage 1 submission workflow: submit results, upload residue, cleanup.
@@ -38,6 +39,9 @@ def submit_stage1_complete_workflow(
         client_id: Client identifier
         factor_found: Factor string if found, None otherwise
         cleanup_residue: Whether to delete local residue file after processing
+        upload_residue: Whether to upload residue to server. Set False when the
+            caller has determined the residue will not be used (e.g., stage 1
+            alone already met the composite's target t-level).
 
     Returns:
         Stage1 attempt_id from API response, or None if submission failed
@@ -73,13 +77,16 @@ def submit_stage1_complete_workflow(
     if stage1_attempt_id:
         print(f"Stage 1 attempt ID: {stage1_attempt_id}")
 
-    # Upload residue file if needed (skips if factor found)
-    wrapper._upload_residue_if_needed(
-        residue_file=residue_file,
-        stage1_attempt_id=stage1_attempt_id,
-        factor_found=factor_found,
-        client_id=client_id
-    )
+    # Upload residue file if needed (skips if factor found or caller opted out)
+    if upload_residue:
+        wrapper._upload_residue_if_needed(
+            residue_file=residue_file,
+            stage1_attempt_id=stage1_attempt_id,
+            factor_found=factor_found,
+            client_id=client_id
+        )
+    else:
+        print("Skipping residue upload: stage 1 already met target t-level")
 
     # Clean up local residue file
     if cleanup_residue and residue_file.exists():

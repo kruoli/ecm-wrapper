@@ -27,7 +27,7 @@ import time
 from .ecm_config import (
     ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
 )
-from .ecm_math import get_optimal_b1_for_tlevel, get_max_tlevel_for_workers
+from .ecm_math import calculate_tlevel, get_optimal_b1_for_tlevel, get_max_tlevel_for_workers
 from .work_helpers import print_work_header, print_work_status, request_ecm_work, request_p1_work
 from .stage1_helpers import submit_stage1_complete_workflow
 from .error_helpers import check_work_limit_reached
@@ -777,6 +777,26 @@ class Stage1ProducerMode(WorkMode):
 
         results = builder.build()
 
+        # Predict whether stage 1 alone already meets the composite's target
+        # t-level. If so, the server would never hand the residue out to a
+        # stage 2 consumer, so there's no point uploading it.
+        upload_residue = True
+        target_t_level = work.get('target_t_level')
+        if target_t_level is not None and self._last_factor is None:
+            current_t_level = work.get('current_t_level') or 0.0
+            try:
+                curve_str = f"{self._last_curves}@{self._stage1_b1},p={self._last_param}"
+                predicted_t = calculate_tlevel([curve_str], base_tlevel=current_t_level)
+                if predicted_t >= target_t_level:
+                    self.logger.info(
+                        f"Stage 1 reached target t{target_t_level:.1f} "
+                        f"(predicted t{predicted_t:.2f}), skipping residue upload"
+                    )
+                    upload_residue = False
+            except Exception as e:
+                # Fall back to uploading: better an unused residue than a dropped one
+                self.logger.warning(f"T-level prediction failed, uploading residue anyway: {e}")
+
         # Submit stage 1 results and handle workflow
         assert self.residue_file is not None  # Set in execute_work
         stage1_attempt_id = submit_stage1_complete_workflow(
@@ -787,7 +807,8 @@ class Stage1ProducerMode(WorkMode):
             project=self.args.project,
             client_id=self.ctx.client_id,
             factor_found=self._last_factor,
-            cleanup_residue=True
+            cleanup_residue=True,
+            upload_residue=upload_residue
         )
 
         return stage1_attempt_id is not None

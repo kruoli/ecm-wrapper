@@ -275,6 +275,11 @@ class ECMWrapper(BaseWrapper):
             ... )
             >>> result = wrapper.run_tlevel_v2(config)
         """
+        # If starting t-level already meets target, nothing to do
+        if config.start_t_level >= config.target_t_level:
+            self.logger.info(f"Target already met: t{config.start_t_level:.2f} >= t{config.target_t_level:.1f}")
+            return FactorResult(success=True, curves_run=0)
+
         # Use pipelined mode for two-stage (GPU+CPU concurrent)
         if config.use_two_stage:
             return self._run_tlevel_pipelined(config)

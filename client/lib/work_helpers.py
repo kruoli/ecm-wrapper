@@ -120,10 +120,14 @@ def request_ecm_work(api_client, client_id: str, args: argparse.Namespace,
     Returns:
         Work assignment dictionary or None if no work available after retry
     """
+    # If client specifies --tlevel, filter out composites already past that level
+    client_tlevel = getattr(args, 'tlevel', None)
+
     work = api_client.get_ecm_work(
         client_id=client_id,
         min_target_tlevel=args.min_target_tlevel if hasattr(args, 'min_target_tlevel') else None,
         max_target_tlevel=args.max_target_tlevel if hasattr(args, 'max_target_tlevel') else None,
+        max_current_tlevel=client_tlevel,
         priority=args.priority if hasattr(args, 'priority') else None,
         min_digits=args.min_digits if hasattr(args, 'min_digits') else None,
         max_digits=args.max_digits if hasattr(args, 'max_digits') else None,

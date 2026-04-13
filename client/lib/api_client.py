@@ -311,6 +311,7 @@ class APIClient:
         client_id: str,
         min_target_tlevel: Optional[float] = None,
         max_target_tlevel: Optional[float] = None,
+        max_current_tlevel: Optional[float] = None,
         priority: Optional[int] = None,
         min_digits: Optional[int] = None,
         max_digits: Optional[int] = None,
@@ -348,6 +349,8 @@ class APIClient:
             params['min_target_tlevel'] = min_target_tlevel
         if max_target_tlevel is not None:
             params['max_target_tlevel'] = max_target_tlevel
+        if max_current_tlevel is not None:
+            params['max_current_tlevel'] = max_current_tlevel
         if priority is not None:
             params['priority'] = priority
         if min_digits is not None:

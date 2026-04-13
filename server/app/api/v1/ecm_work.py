@@ -37,6 +37,7 @@ def get_ecm_work(
     priority: Optional[int] = None,
     min_target_tlevel: Optional[float] = None,
     max_target_tlevel: Optional[float] = None,
+    max_current_tlevel: Optional[float] = None,
     min_digits: Optional[int] = None,
     max_digits: Optional[int] = None,
     timeout_days: int = 1,
@@ -122,6 +123,10 @@ def get_ecm_work(
             query = query.filter(Composite.target_t_level >= min_target_tlevel)
         if max_target_tlevel is not None:
             query = query.filter(Composite.target_t_level <= max_target_tlevel)
+
+        # Filter by current t-level (e.g. client with --tlevel 35 shouldn't get composites already at t39)
+        if max_current_tlevel is not None:
+            query = query.filter(Composite.current_t_level < max_current_tlevel)
 
         # Apply digit length filters
         if min_digits is not None:

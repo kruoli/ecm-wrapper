@@ -1342,7 +1342,15 @@ class StandardAutoWorkMode(WorkMode):
     def _execute_tlevel_mode(self, work: Dict[str, Any], composite: str,
                              has_client_tlevel: bool) -> FactorResult:
         """Execute using progressive t-level targeting."""
-        target_tlevel = self.args.tlevel if has_client_tlevel else work.get('target_t_level', 35.0)
+        server_target = work.get('target_t_level')
+        if has_client_tlevel:
+            if server_target is not None and self.args.tlevel > server_target:
+                print(f"Capping --tlevel {self.args.tlevel:.1f} at server target t{server_target:.1f}")
+                target_tlevel = server_target
+            else:
+                target_tlevel = self.args.tlevel
+        else:
+            target_tlevel = server_target if server_target is not None else 35.0
 
         if hasattr(self.args, 'start_tlevel') and self.args.start_tlevel is not None:
             start_tlevel = self.args.start_tlevel

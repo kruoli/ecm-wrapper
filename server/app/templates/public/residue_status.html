@@ -92,6 +92,7 @@
                     <option value="">All Statuses</option>
                     <option value="available" {{ 'selected' if filter_status == 'available' else '' }}>Available</option>
                     <option value="claimed" {{ 'selected' if filter_status == 'claimed' else '' }}>Claimed</option>
+                    <option value="available+claimed" {{ 'selected' if filter_status == 'available+claimed' else '' }}>Available + Claimed</option>
                     <option value="completed" {{ 'selected' if filter_status == 'completed' else '' }}>Completed</option>
                     <option value="expired" {{ 'selected' if filter_status == 'expired' else '' }}>Expired</option>
                 </select>

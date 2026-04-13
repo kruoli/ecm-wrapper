@@ -346,9 +346,25 @@ class ECMWrapper(BaseWrapper):
                     curves = calculate_curves_to_target_direct(current_t_level, step_target, b1, config.parametrization)
 
                 if curves is None or curves <= 0:
-                    self.logger.warning(f"Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, skipping to next level")
-                    # Skip this target and continue to next one
-                    continue
+                    # For sub-t20 targets, just run the full t0→t20 entry
+                    if step_target <= 20 and current_t_level < 20:
+                        full_key = (0, 20, config.parametrization)
+                        if full_key in TLEVEL_TRANSITION_CACHE:
+                            b1, curves = TLEVEL_TRANSITION_CACHE[full_key]
+                            self.logger.info(f"Using t0→t20 curves for sub-t20 target: {curves} curves at B1={b1}")
+                    # Tiny gap: the target B1 is too large for the gap so the binary
+                    # suggests 0 curves. Fall back to 1 curve at the current bracket's
+                    # B1, which is the minimum work that will close the gap.
+                    if curves is None or curves <= 0:
+                        current_b1, _ = get_optimal_b1_for_tlevel(current_t_level)
+                        if current_b1 < b1:
+                            self.logger.info(f"Tiny t-level gap (t{current_t_level:.3f} → t{step_target:.1f}), running 1 curve at B1={current_b1}")
+                            b1 = current_b1
+                            curves = 1
+                    if curves is None or curves <= 0:
+                        self.logger.warning(f"Could not calculate curves for t{current_t_level:.3f} → t{step_target:.1f}, skipping to next level")
+                        # Skip this target and continue to next one
+                        continue
 
                 self.logger.info(f"Running {curves} curves at B1={b1} (targeting t{step_target:.1f}, currently at t{current_t_level:.2f})")
 

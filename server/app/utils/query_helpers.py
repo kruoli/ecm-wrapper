@@ -721,7 +721,9 @@ def get_residues_filtered(
 
     # Apply filters
     filters = []
-    if status_filter:
+    if status_filter == 'available+claimed':
+        filters.append(ECMResidue.status.in_(['available', 'claimed']))
+    elif status_filter:
         filters.append(ECMResidue.status == status_filter)
     if client_id:
         filters.append(ECMResidue.client_id == client_id)

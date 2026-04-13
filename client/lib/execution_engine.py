@@ -1076,12 +1076,38 @@ class TLevelBatchProducer:
                 )
 
             if curves is None or curves <= 0:
-                if self.logger:
-                    self.logger.warning(
-                        f"[GPU Thread] Could not calculate curves for "
-                        f"t{current_projected:.3f} -> t{step_target:.1f}, skipping"
-                    )
-                continue
+                # For sub-t20 targets, just run the full t0→t20 entry
+                if step_target <= 20 and current_projected < 20:
+                    from .ecm_math import TLEVEL_TRANSITION_CACHE
+                    full_key = (0, 20, 3)  # GPU parametrization
+                    if full_key in TLEVEL_TRANSITION_CACHE:
+                        b1, curves = TLEVEL_TRANSITION_CACHE[full_key]
+                        b2 = int(b1 * self.b2_multiplier)
+                        self._current_b1 = b1
+                        self._current_b2 = b2
+                        if self.logger:
+                            self.logger.info(f"[GPU Thread] Using t0→t20 curves for sub-t20 target: {curves} curves at B1={b1}")
+                # Tiny gap: target B1 too large for the gap, binary says 0 curves.
+                # Fall back to 1 curve at the current bracket's B1.
+                if curves is None or curves <= 0:
+                    current_b1, _ = self._get_optimal_b1(current_projected)
+                    if current_b1 < b1:
+                        if self.logger:
+                            self.logger.info(
+                                f"[GPU Thread] Tiny t-level gap "
+                                f"(t{current_projected:.3f} -> t{step_target:.1f}), "
+                                f"running 1 curve at B1={current_b1}"
+                            )
+                        b1 = current_b1
+                        b2 = int(b1 * self.b2_multiplier)
+                        curves = 1
+                if curves is None or curves <= 0:
+                    if self.logger:
+                        self.logger.warning(
+                            f"[GPU Thread] Could not calculate curves for "
+                            f"t{current_projected:.3f} -> t{step_target:.1f}, skipping"
+                        )
+                    continue
 
             self._current_b1 = b1
             self._current_b2 = b2

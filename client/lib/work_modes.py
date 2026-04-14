@@ -785,7 +785,11 @@ class Stage1ProducerMode(WorkMode):
         if target_t_level is not None and self._last_factor is None:
             current_t_level = work.get('current_t_level') or 0.0
             try:
-                curve_str = f"{self._last_curves}@{self._stage1_b1},p={self._last_param}"
+                # Include B2=0 so the t-level binary credits stage 1 only.
+                # Without it, the binary uses default B2 and predicts a full
+                # stage 1+2 t-level, which inflates the prediction and causes
+                # residues to be skipped when they're actually still needed.
+                curve_str = f"{self._last_curves}@{self._stage1_b1},0,p={self._last_param}"
                 predicted_t = calculate_tlevel([curve_str], base_tlevel=current_t_level)
                 if predicted_t >= target_t_level:
                     self.logger.info(

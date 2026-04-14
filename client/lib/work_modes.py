@@ -1360,24 +1360,12 @@ class StandardAutoWorkMode(WorkMode):
         mode_desc = "client t-level" if has_client_tlevel else "server t-level"
         print(f"Mode: {mode_desc} (start: {start_tlevel:.1f}, target: {target_tlevel:.1f})")
 
-        # Handle cases where start is at or very close to target
-        if start_tlevel >= target_tlevel:
-            # Already past target (e.g. --tlevel 35 but composite at t39.7).
-            # Abandon so the server can assign it to a client with a higher cap.
-            print(f"Already past target: t{start_tlevel:.2f} >= t{target_tlevel:.1f}, abandoning work")
-            if self.current_work_id:
-                self.wrapper.abandon_work(self.current_work_id, reason="client_tlevel_exceeded")
-                self.current_work_id = None
-            self._is_tlevel_mode = True
-            self._target_already_met = True
-            result = FactorResult(success=True, curves_run=0)
-            self._results_dict = result.to_dict(composite, self.args.method)
-            return result
-        elif target_tlevel - start_tlevel < 0.1:
-            # Tiny gap: t-level binary can't calculate curves for very small gaps.
-            # Bump target slightly so progressive ECM has room to work,
-            # pushing the composite past its real target.
-            bumped = start_tlevel + 0.1
+        # Tiny gap: t-level binary can't calculate curves for very small gaps.
+        # Bump target slightly so progressive ECM has room to work,
+        # pushing the composite past its real target.
+        MIN_TLEVEL_GAP = 0.1
+        if target_tlevel - start_tlevel < MIN_TLEVEL_GAP:
+            bumped = start_tlevel + MIN_TLEVEL_GAP
             print(f"Small t-level gap ({target_tlevel - start_tlevel:.2f}), "
                   f"bumping target from t{target_tlevel:.1f} to t{bumped:.1f}")
             target_tlevel = bumped
@@ -1512,8 +1500,6 @@ class StandardAutoWorkMode(WorkMode):
         # T-level mode submits internally after each batch
         if self._is_tlevel_mode:
             if result.curves_run == 0:
-                if getattr(self, '_target_already_met', False):
-                    return True
                 self.logger.error("T-level mode ran zero curves, execution may have failed")
                 return False
             return True

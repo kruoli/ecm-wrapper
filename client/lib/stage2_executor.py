@@ -31,7 +31,8 @@ class Stage2Executor:
     """Manages Stage 2 execution with configurable worker pools."""
 
     def __init__(self, wrapper: 'ECMWrapper', residue_file: Path, b1: int, b2: Optional[int],
-                 k: Optional[int], workers: int, verbose: bool = False) -> None:
+                 k: Optional[int], workers: int, verbose: bool = False,
+                 pin_threads: bool = False) -> None:
         """
         Initialize Stage 2 executor.
 
@@ -42,6 +43,7 @@ class Stage2Executor:
             b2: B2 parameter for Stage 2
             workers: Number of parallel workers
             verbose: Enable verbose output
+            pin_threads: If True, pin each worker's ECM subprocess to its own CPU core
         """
         self.wrapper = wrapper
         self.residue_file = residue_file
@@ -50,6 +52,8 @@ class Stage2Executor:
         self.k = k
         self.workers = workers
         self.verbose = verbose
+        self.pin_threads = pin_threads
+        self.pin_cpus: Optional[List[int]] = None  # Set in execute() when pin_threads is True
         self.logger = wrapper.logger
         self.ecm_path = wrapper.config['programs']['gmp_ecm']['path']
 
@@ -107,13 +111,20 @@ class Stage2Executor:
             execution_time = time.time() - start_time
             return (None, [], 0, execution_time, None)
 
+        # Resolve CPU pin assignments if requested (one per chunk/worker actually used)
+        if self.pin_threads:
+            from .thread_pinning import resolve_pin_assignments
+            self.pin_cpus = resolve_pin_assignments(len(residue_chunks))
+            self.logger.info(f"Pinning stage 2 workers to CPUs: {self.pin_cpus}")
+
         # Run workers in parallel
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
             futures = []
             for i, chunk_file in enumerate(residue_chunks):
+                pin_cpu = self.pin_cpus[i] if self.pin_cpus else None
                 future = executor.submit(
                     self._worker_stage2, chunk_file, i + 1, b1_to_use,
-                    early_termination, progress_interval
+                    early_termination, progress_interval, pin_cpu
                 )
                 futures.append(future)
 
@@ -183,7 +194,8 @@ class Stage2Executor:
         return [Path(p) for p in chunk_paths]
 
     def _worker_stage2(self, chunk_file: Path, worker_id: int, b1: int,
-                       early_termination: bool, progress_interval: int) -> Optional[Tuple[str, str]]:
+                       early_termination: bool, progress_interval: int,
+                       pin_cpu: Optional[int] = None) -> Optional[Tuple[str, str]]:
         """Worker function for Stage 2 processing."""
         cmd = build_ecm_command(
             self.ecm_path, b1, b2=self.b2, k=self.k,
@@ -203,15 +215,28 @@ class Stage2Executor:
         # Initialize process to None in case exception occurs before Popen
         process = None
 
+        # Build preexec_fn to pin the ECM subprocess to its CPU before exec.
+        # Using preexec_fn (not setting affinity post-fork in Python) ensures the
+        # affinity is set before the ECM binary starts running — no migration window.
+        preexec_fn = None
+        if pin_cpu is not None:
+            import os
+            cpu = pin_cpu  # bind for closure
+            def _pin() -> None:
+                os.sched_setaffinity(0, {cpu})
+            preexec_fn = _pin
+
         try:
             self.logger.info(f"Worker {worker_id} starting Stage 2" +
-                           (f" ({total_lines} curves)" if self.verbose and total_lines > 0 else ""))
+                           (f" ({total_lines} curves)" if self.verbose and total_lines > 0 else "") +
+                           (f" pinned to CPU {pin_cpu}" if pin_cpu is not None else ""))
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                start_new_session=True  # Isolate from terminal SIGINT so Ctrl+C doesn't kill workers
+                start_new_session=True,  # Isolate from terminal SIGINT so Ctrl+C doesn't kill workers
+                preexec_fn=preexec_fn,
             )
 
             # Register process for potential termination

@@ -33,7 +33,7 @@ from .stage1_helpers import submit_stage1_complete_workflow
 from .error_helpers import check_work_limit_reached
 from .cleanup_helpers import handle_shutdown
 from .results_builder import results_for_stage1
-from .arg_parser import resolve_gpu_settings, resolve_worker_count, get_workers_default, get_max_batch_default
+from .arg_parser import resolve_gpu_settings, resolve_worker_count, get_workers_default, get_max_batch_default, resolve_pin_threads
 from .ecm_arg_helpers import parse_sigma_arg, resolve_param
 from .api_client import ResourceNotFoundError
 
@@ -985,7 +985,8 @@ class Stage2ConsumerMode(WorkMode):
             self._b2,
             self._k,
             workers,
-            self.args.verbose
+            self.args.verbose,
+            pin_threads=resolve_pin_threads(self.args)
         )
 
         factor, all_factors, curves, exec_time, sigma = executor.execute(
@@ -1410,6 +1411,7 @@ class StandardAutoWorkMode(WorkMode):
             use_two_stage=getattr(self.args, 'two_stage', False),
             b2_multiplier=getattr(self.args, 'b2_multiplier', None) or 500.0,
             b2_dictionary=getattr(self, '_b2_dictionary', None),
+            pin_threads=resolve_pin_threads(self.args),
             project=self.args.project,
             no_submit=False,
             work_id=self.current_work_id,
@@ -1461,6 +1463,7 @@ class StandardAutoWorkMode(WorkMode):
                 threads=workers,
                 verbose=self.args.verbose,
                 progress_interval=getattr(self.args, 'progress_interval', 0),
+                pin_threads=resolve_pin_threads(self.args),
                 gpu_device=gpu_device,
                 gpu_curves=gpu_curves
             )
@@ -1479,7 +1482,8 @@ class StandardAutoWorkMode(WorkMode):
                 parametrization=param if param else 3,
                 method=self.args.method,
                 verbose=self.args.verbose,
-                progress_interval=getattr(self.args, 'progress_interval', 0)
+                progress_interval=getattr(self.args, 'progress_interval', 0),
+                pin_threads=resolve_pin_threads(self.args)
             )
             result = self.wrapper.run_multiprocess_v2(mp_config)
 
@@ -1644,6 +1648,9 @@ class AdaptiveCPUMode(WorkMode):
 
         # Resolve worker count once
         self._workers = resolve_worker_count(self.args, self.wrapper.config)
+
+        # Resolve pin-threads once (validates platform support up-front)
+        self._pin_threads = resolve_pin_threads(self.args)
 
         # Calculate t-level cap based on worker count (only applies to ECM fallback)
         # User can override with --max-target-tlevel
@@ -1851,7 +1858,8 @@ class AdaptiveCPUMode(WorkMode):
             self._s2_b2,
             self._s2_k,
             self._workers,
-            self.args.verbose
+            self.args.verbose,
+            pin_threads=self._pin_threads
         )
 
         factor, all_factors, curves, exec_time, sigma = executor.execute(
@@ -1893,7 +1901,8 @@ class AdaptiveCPUMode(WorkMode):
             parametrization=1,  # CPU Montgomery
             method='ecm',
             verbose=self.args.verbose,
-            progress_interval=self._progress_interval
+            progress_interval=self._progress_interval,
+            pin_threads=self._pin_threads
         )
         result = self.wrapper.run_multiprocess_v2(mp_config)
 

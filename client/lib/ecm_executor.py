@@ -205,7 +205,9 @@ class ECMWrapper(BaseWrapper):
             progress_interval=config.progress_interval,
         )
 
-        batch_result = self._engine.run_cpu_workers(batch, num_processes)
+        batch_result = self._engine.run_cpu_workers(
+            batch, num_processes, pin_threads=config.pin_threads
+        )
         return batch_result.to_factor_result()
 
     def _run_tlevel_pipelined(self, config: TLevelConfig) -> FactorResult:

@@ -113,6 +113,9 @@ def _add_execution_options(parser: argparse.ArgumentParser) -> None:
                        help='Use two-stage mode: GPU stage 1 + multi-threaded CPU stage 2')
     parser.add_argument('--workers', type=int,
                        help='Number of parallel workers (processes for multiprocess, threads for stage2)')
+    parser.add_argument('--pin-threads', action='store_true',
+                       help='Pin each worker to its own CPU core (Linux only). Respects existing '
+                            'affinity restrictions; errors if workers exceed available CPU slots.')
 
 
 def _add_work_filter_options(parser: argparse.ArgumentParser) -> None:
@@ -528,6 +531,19 @@ def resolve_gpu_settings(args: argparse.Namespace, config: Dict[str, Any]) -> tu
                   else config['programs']['gmp_ecm'].get('gpu_curves'))
 
     return use_gpu, gpu_device, gpu_curves
+
+
+def resolve_pin_threads(args: argparse.Namespace) -> bool:
+    """Return True if --pin-threads was requested. Validates platform support."""
+    if not getattr(args, 'pin_threads', False):
+        return False
+    from .thread_pinning import is_supported
+    if not is_supported():
+        import sys as _sys
+        print(f"Error: --pin-threads is not supported on this platform ({_sys.platform}). "
+              f"Thread pinning requires Linux (os.sched_setaffinity).")
+        _sys.exit(1)
+    return True
 
 
 def resolve_worker_count(args: argparse.Namespace, config: Optional[Dict[str, Any]] = None) -> int:

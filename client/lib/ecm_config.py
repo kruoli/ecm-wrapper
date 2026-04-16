@@ -109,6 +109,7 @@ class TwoStageConfig(ECMConfigValidation):
     # Execution control
     continue_after_factor: bool = False
     progress_interval: int = 0  # Show progress every N curves (0 = disabled)
+    pin_threads: bool = False  # Pin each stage 2 worker to its own CPU core (Linux only)
 
     # API submission
     project: Optional[str] = None
@@ -141,6 +142,7 @@ class MultiprocessConfig(ECMConfigValidation):
     # Execution control
     continue_after_factor: bool = False
     progress_interval: int = 0  # Show progress every N curves (0 = disabled)
+    pin_threads: bool = False  # Pin each worker process to its own CPU core (Linux only)
 
     def __post_init__(self):
         """Validate and auto-configure."""
@@ -181,6 +183,9 @@ class TLevelConfig(ECMConfigValidation):
     # GPU support
     gpu_device: Optional[int] = None
     gpu_curves: Optional[int] = None
+
+    # Thread pinning
+    pin_threads: bool = False  # Pin each CPU worker to its own core (Linux only)
 
     # API submission
     project: Optional[str] = None

@@ -176,7 +176,7 @@ class ECMWorkerProcess:
 def run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optional[int],
                            curves: int, verbose: bool, method: str, ecm_path: str,
                            result_queue, stop_event, progress_interval: int = 0,
-                           progress_queue=None) -> None:
+                           progress_queue=None, pin_cpu: Optional[int] = None) -> None:
     """
     Global wrapper function for multiprocessing compatibility.
 
@@ -185,6 +185,9 @@ def run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optional
 
     Workers ignore SIGINT - they only respond to stop_event from the parent process.
     This prevents ugly tracebacks when the user presses Ctrl+C.
+
+    If pin_cpu is set, the worker pins itself to that CPU so the ECM binary it
+    spawns inherits the affinity.
     """
     # Ignore SIGINT in worker processes - parent handles it via stop_event
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -194,6 +197,11 @@ def run_worker_ecm_process(worker_id: int, composite: str, b1: int, b2: Optional
     # start_new_session=False, so os.killpg() from the parent kills the entire group.
     if sys.platform != 'win32':
         os.setpgrp()
+
+    # Pin to a single CPU before spawning ECM so the child inherits the affinity
+    if pin_cpu is not None:
+        from .thread_pinning import pin_current_process
+        pin_current_process(pin_cpu)
 
     try:
         worker = ECMWorkerProcess(worker_id, composite, b1, b2, curves, verbose, method, ecm_path,

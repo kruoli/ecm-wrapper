@@ -50,7 +50,8 @@ class CompositeExecutionEngine:
 
     # ==================== Phase 1: Multiprocess CPU Workers ====================
 
-    def run_cpu_workers(self, batch: ExecutionBatch, num_workers: int) -> BatchResult:
+    def run_cpu_workers(self, batch: ExecutionBatch, num_workers: int,
+                        pin_threads: bool = False) -> BatchResult:
         """
         Execute ECM across multiple CPU workers using multiprocessing.
 
@@ -61,6 +62,7 @@ class CompositeExecutionEngine:
         Args:
             batch: Execution parameters (composite, b1, b2, curves, etc.)
             num_workers: Number of parallel worker processes
+            pin_threads: If True, pin each worker to a distinct CPU core (Linux only).
 
         Returns:
             BatchResult with discovered factors (recursively factored to primes)
@@ -78,6 +80,13 @@ class CompositeExecutionEngine:
             if worker_curves > 0:
                 worker_assignments.append((worker_id + 1, worker_curves))
 
+        # Resolve CPU pin assignments if requested (one CPU per active worker)
+        pin_cpus: Optional[List[int]] = None
+        if pin_threads:
+            from .thread_pinning import resolve_pin_assignments
+            pin_cpus = resolve_pin_assignments(len(worker_assignments))
+            self.logger.info(f"Pinning workers to CPUs: {pin_cpus}")
+
         # Create shared variables for worker coordination
         manager = mp.Manager()
         result_queue = manager.Queue()
@@ -86,12 +95,14 @@ class CompositeExecutionEngine:
 
         # Start worker processes
         processes: List[mp.Process] = []
-        for worker_id, worker_curves in worker_assignments:
+        for idx, (worker_id, worker_curves) in enumerate(worker_assignments):
+            pin_cpu = pin_cpus[idx] if pin_cpus else None
             p = mp.Process(
                 target=run_worker_ecm_process,
                 args=(worker_id, batch.composite, batch.b1, batch.b2, worker_curves,
                       batch.verbose, batch.method, self.ecm_path,
-                      result_queue, stop_event, batch.progress_interval, progress_queue)
+                      result_queue, stop_event, batch.progress_interval, progress_queue,
+                      pin_cpu)
             )
             p.start()
             processes.append(p)

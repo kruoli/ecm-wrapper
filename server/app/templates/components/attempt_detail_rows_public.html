@@ -1,0 +1,31 @@
+{# Lazy-loaded attempt detail rows for public dashboard expand #}
+{% for attempt in attempts %}
+<tr id="detail-{{ composite_id }}-{{ attempt.id }}" class="detail-row" style="background: #fff;">
+    <td></td>
+    <td colspan="2" class="small-text" style="padding-left: 30px;">
+        {{ attempt.method.upper() }} - B1={{ "{:,}".format(attempt.b1) }}{% if attempt.b2 %}, B2={{ "{:,}".format(attempt.b2) }}{% endif %}
+    </td>
+    <td></td>
+    <td class="small-text">1 batch</td>
+    <td class="small-text">{{ attempt.curves_completed }} curves</td>
+    <td>
+        {% if attempt.factor_found %}
+        {% set fc = factor_counts.get(attempt.id, 1) %}
+        {% if fc > 1 %}
+        <span class="factor small-text">{{ attempt.factor_found[:15] }}... <strong style="color: #2ecc71;">[+{{ fc - 1 }}]</strong></span>
+        {% else %}
+        <span class="factor small-text">{{ attempt.factor_found[:20] }}{{ '...' if attempt.factor_found|length > 20 else '' }}</span>
+        {% endif %}
+        {% else %}
+        <span class="small-text">None</span>
+        {% endif %}
+    </td>
+    <td class="small-text">{{ attempt.created_at.strftime('%Y-%m-%d %H:%M') }}<br/>{{ attempt.client_id if attempt.client_id else 'Unknown' }}</td>
+    <td class="small-text">{{ (attempt.execution_time_seconds|round(1)) if attempt.execution_time_seconds else 'N/A' }}s</td>
+</tr>
+{% else %}
+<tr id="detail-{{ composite_id }}-empty" class="detail-row" style="background: #fff;">
+    <td></td>
+    <td colspan="8" class="small-text" style="padding-left: 30px; color: #999;">No individual attempts recorded</td>
+</tr>
+{% endfor %}

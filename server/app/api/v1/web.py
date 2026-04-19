@@ -51,10 +51,8 @@ async def dashboard(
     composites = composites_query.order_by(desc(Composite.created_at)).limit(50).all()
 
     # Get recent attempts (aggregated by composite), filtered by priority/project
-    attempts, _ = get_aggregated_attempts(db, limit=50, priority=priority, project_id=project)
-
-    # Pre-fetch factor counts for attempt detail rows (eliminates N+1 queries in template)
-    factor_counts_by_attempt = prefetch_factor_counts_for_attempts(db, attempts)
+    # attempts_per_composite=0 skips loading individual rows — those are lazy-loaded on expand
+    attempts, _ = get_aggregated_attempts(db, limit=50, priority=priority, project_id=project, attempts_per_composite=0)
 
     # Get recent factors (limited for main page), filtered by project
     factors_query = db.query(Factor)
@@ -107,7 +105,6 @@ async def dashboard(
         "composites": composites,
         "attempts": attempts,
         "factors": factors,
-        "factor_counts_by_attempt": factor_counts_by_attempt,
         "factor_composites": factor_composites_by_id,
         "factor_attempts": factor_attempts_by_id,
         "total_composites": total_composites,
@@ -511,6 +508,47 @@ async def residue_status_public(
         "stats": stats,
         "now": datetime.utcnow(),
     })
+
+
+@router.get("/composites/{composite_id}/attempts-fragment", response_class=HTMLResponse)
+@limiter.limit("60/minute")
+async def get_attempts_fragment_public(
+    composite_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(25, ge=1, le=100)
+):
+    """
+    Return HTML fragment of attempt detail rows for a composite.
+    Used by the public dashboard for lazy-loading on row expand.
+    """
+    composite = db.query(Composite).filter(Composite.id == composite_id).first()
+    if not composite:
+        raise HTTPException(status_code=404, detail="Composite not found")
+
+    attempts = db.query(ECMAttempt).options(
+        defer(ECMAttempt.raw_output)
+    ).filter(
+        ECMAttempt.composite_id == composite_id
+    ).order_by(desc(ECMAttempt.created_at)).limit(limit).all()
+
+    attempt_ids = [a.id for a in attempts if a.factor_found]
+    factor_counts: dict = {}
+    if attempt_ids:
+        rows = db.query(
+            Factor.found_by_attempt_id,
+            func.count(Factor.id).label('factor_count')
+        ).filter(
+            Factor.found_by_attempt_id.in_(attempt_ids)
+        ).group_by(Factor.found_by_attempt_id).all()
+        factor_counts = {row.found_by_attempt_id: row.factor_count for row in rows}
+
+    html = templates.env.get_template("components/attempt_detail_rows_public.html").render(
+        composite_id=composite_id,
+        attempts=attempts,
+        factor_counts=factor_counts
+    )
+    return HTMLResponse(content=html)
 
 
 @router.get("/composites/find")

@@ -2,16 +2,61 @@
 Admin routes for managing ECM attempts (curves).
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from fastapi.responses import HTMLResponse
+from sqlalchemy import desc, func
+from sqlalchemy.orm import Session, defer
 
 from ....database import get_db
 from ....dependencies import verify_admin_key, get_t_level_calculator
 from ....models.attempts import ECMAttempt
 from ....models.composites import Composite
+from ....models.factors import Factor
 from ....models.residues import ECMResidue
 from ....services.t_level_calculator import TLevelCalculator
+from ....templates import templates
 
 router = APIRouter()
+
+
+@router.get("/composites/{composite_id}/attempts-fragment", response_class=HTMLResponse)
+async def get_attempts_fragment(
+    composite_id: int,
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key),
+    limit: int = Query(25, ge=1, le=100)
+):
+    """
+    Return HTML fragment of attempt detail rows for a composite.
+    Used by the admin dashboard for lazy-loading on row expand.
+    """
+    composite = db.query(Composite).filter(Composite.id == composite_id).first()
+    if not composite:
+        raise HTTPException(status_code=404, detail="Composite not found")
+
+    attempts = db.query(ECMAttempt).options(
+        defer(ECMAttempt.raw_output)
+    ).filter(
+        ECMAttempt.composite_id == composite_id
+    ).order_by(desc(ECMAttempt.created_at)).limit(limit).all()
+
+    # Batch fetch factor counts for attempts that found factors
+    attempt_ids = [a.id for a in attempts if a.factor_found]
+    factor_counts: dict = {}
+    if attempt_ids:
+        rows = db.query(
+            Factor.found_by_attempt_id,
+            func.count(Factor.id).label('factor_count')
+        ).filter(
+            Factor.found_by_attempt_id.in_(attempt_ids)
+        ).group_by(Factor.found_by_attempt_id).all()
+        factor_counts = {row.found_by_attempt_id: row.factor_count for row in rows}
+
+    html = templates.env.get_template("components/attempt_detail_rows.html").render(
+        composite_id=composite_id,
+        attempts=attempts,
+        factor_counts=factor_counts
+    )
+    return HTMLResponse(content=html)
 
 
 @router.delete("/attempts/{attempt_id}")

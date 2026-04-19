@@ -4,21 +4,34 @@
 
 {% block extra_head %}
 <script>
-    function toggleExpand(compositeId) {
-        // Get the icon
+    async function toggleExpand(compositeId) {
         const icon = document.getElementById(`expand-icon-${compositeId}`);
+        const aggRow = document.getElementById(`agg-row-${compositeId}`);
 
-        // Get all detail rows for this composite
+        // First click: fetch and insert detail rows
+        if (!aggRow.dataset.loaded) {
+            icon.textContent = '⟳';
+            try {
+                const response = await fetch(`/api/v1/dashboard/composites/${compositeId}/attempts-fragment`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const html = await response.text();
+                aggRow.insertAdjacentHTML('afterend', html);
+                aggRow.dataset.loaded = 'true';
+            } catch (e) {
+                icon.textContent = '▶';
+                console.error('Failed to load attempts:', e);
+                return;
+            }
+            icon.textContent = '▼';
+            return;
+        }
+
+        // Subsequent clicks: toggle visibility
         const detailRows = document.querySelectorAll(`tr[id^="detail-${compositeId}-"]`);
-
-        // Toggle visibility
         const isExpanded = detailRows[0] && detailRows[0].style.display !== 'none';
-
         detailRows.forEach(row => {
             row.style.display = isExpanded ? 'none' : 'table-row';
         });
-
-        // Toggle icon
         icon.textContent = isExpanded ? '▶' : '▼';
     }
 </script>
@@ -175,7 +188,7 @@
                     {% set t_data = calc_t_progress(comp.current_t_level, comp.target_t_level, comp.ecm_progress) %}
                     {% set comp_digits = comp.current_composite|length if comp.current_composite else 0 %}
                     <!-- Main aggregated row -->
-                    <tr class="composite-row" onclick="toggleExpand({{ comp.id }})" style="cursor: pointer; background: #f8f9fa;">
+                    <tr id="agg-row-{{ comp.id }}" class="composite-row" onclick="toggleExpand({{ comp.id }})" style="cursor: pointer; background: #f8f9fa;">
                         <td style="width: 30px; text-align: center;">
                             <span id="expand-icon-{{ comp.id }}" style="font-size: 1.2em;">▶</span>
                         </td>
@@ -214,32 +227,6 @@
                         </td>
                         <td>{{ (agg.total_time|round(1)) }}s</td>
                     </tr>
-                    <!-- Expandable rows for individual attempts -->
-                    {% for attempt in agg.attempts %}
-                    <tr id="detail-{{ comp.id }}-{{ attempt.id }}" class="detail-row" style="display: none; background: #fff;">
-                        <td></td>
-                        <td colspan="2" class="small-text" style="padding-left: 30px;">
-                            {{ attempt.method.upper() }} - B1={{ "{:,}".format(attempt.b1) }}{% if attempt.b2 %}, B2={{ "{:,}".format(attempt.b2) }}{% endif %}
-                        </td>
-                        <td></td>
-                        <td class="small-text">1 batch</td>
-                        <td class="small-text">{{ attempt.curves_completed }} curves</td>
-                        <td>
-                            {% if attempt.factor_found %}
-                            {% set fc = factor_counts_by_attempt.get(attempt.id, 1) %}
-                            {% if fc > 1 %}
-                            <span class="factor small-text">{{ attempt.factor_found[:15] }}... <strong style="color: #2ecc71;">[+{{ fc - 1 }}]</strong></span>
-                            {% else %}
-                            <span class="factor small-text">{{ attempt.factor_found[:20] }}{{ '...' if attempt.factor_found|length > 20 else '' }}</span>
-                            {% endif %}
-                            {% else %}
-                            <span class="small-text">None</span>
-                            {% endif %}
-                        </td>
-                        <td class="small-text">{{ attempt.created_at.strftime('%Y-%m-%d %H:%M') }}<br/>{{ attempt.client_id if attempt.client_id else 'Unknown' }}</td>
-                        <td class="small-text">{{ (attempt.execution_time_seconds|round(1)) if attempt.execution_time_seconds else 'N/A' }}s</td>
-                    </tr>
-                    {% endfor %}
                     {% endfor %}
                 </tbody>
             </table>

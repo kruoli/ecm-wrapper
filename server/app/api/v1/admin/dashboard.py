@@ -17,7 +17,6 @@ from ....utils.query_helpers import (
     get_recent_clients,
     get_recent_factors,
     get_recent_work_assignments,
-    prefetch_factor_counts_for_attempts,
     get_aggregated_attempts
 )
 
@@ -131,10 +130,7 @@ async def admin_dashboard(
     composites = get_composites_by_completion(db, limit=50, include_factored=False)
     recent_clients = get_recent_clients(db, limit=10, days=7)
     recent_factors = get_recent_factors(db, limit=10)
-    recent_attempts, _ = get_aggregated_attempts(db, limit=50)
-
-    # Pre-fetch factor counts for attempt detail rows (eliminates N+1 queries in template)
-    factor_counts_by_attempt = prefetch_factor_counts_for_attempts(db, recent_attempts)
+    recent_attempts, _ = get_aggregated_attempts(db, limit=50, attempts_per_composite=0)
 
     # Return template response
     return templates.TemplateResponse("admin/dashboard.html", {
@@ -145,6 +141,5 @@ async def admin_dashboard(
         "recent_clients": recent_clients,
         "recent_factors": recent_factors,
         "recent_attempts": recent_attempts,
-        "factor_counts_by_attempt": factor_counts_by_attempt,
         "now": datetime.utcnow(),
     })

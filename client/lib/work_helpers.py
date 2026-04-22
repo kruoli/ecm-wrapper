@@ -6,6 +6,7 @@ These utilities eliminate duplicated work handling code in auto-work mode.
 """
 from typing import Optional, Dict, Any
 import argparse
+import sys
 import time
 
 from .user_output import UserOutput
@@ -84,10 +85,14 @@ def print_work_status(stage_name: str, completed_count: int,
 _no_work_count = 0
 
 
-def _handle_no_work(logger, label: str) -> None:
+def _handle_no_work(logger, label: str, exit_on_no_work: bool = False) -> None:
     """Handle repeated 'no work available' with escalating warnings."""
     global _no_work_count
     _no_work_count += 1
+
+    if exit_on_no_work:
+        logger.info(f"No {label} work available. Exiting (--exit-on-no-work).")
+        sys.exit(0)
 
     if _no_work_count >= 5 and _no_work_count % 5 == 0:
         logger.warning(
@@ -136,7 +141,7 @@ def request_ecm_work(api_client, client_id: str, args: argparse.Namespace,
     )
 
     if not work:
-        _handle_no_work(logger, "ECM")
+        _handle_no_work(logger, "ECM", exit_on_no_work=getattr(args, 'exit_on_no_work', False))
     else:
         _reset_no_work_count()
 
@@ -181,7 +186,7 @@ def request_p1_work(api_client, client_id: str, args: argparse.Namespace,
     )
 
     if not work:
-        _handle_no_work(logger, "P1")
+        _handle_no_work(logger, "P1", exit_on_no_work=getattr(args, 'exit_on_no_work', False))
     else:
         _reset_no_work_count()
 

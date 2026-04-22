@@ -897,6 +897,9 @@ class Stage2ConsumerMode(WorkMode):
         )
 
         if not residue_work:
+            if getattr(self.args, 'exit_on_no_work', False):
+                self.logger.info("No residue work available. Exiting (--exit-on-no-work).")
+                import sys; sys.exit(0)
             self.logger.info("No residue work available, waiting 30 seconds before retry...")
             time.sleep(30)
             return None
@@ -1753,6 +1756,9 @@ class AdaptiveCPUMode(WorkMode):
             return work
 
         # Nothing available at all
+        if getattr(self.args, 'exit_on_no_work', False):
+            self.logger.info("No work available. Exiting (--exit-on-no-work).")
+            import sys; sys.exit(0)
         self.logger.info("No work available (stage 2 or ECM), waiting 30 seconds...")
         time.sleep(30)
         return None

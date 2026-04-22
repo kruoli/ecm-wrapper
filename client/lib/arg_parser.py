@@ -122,6 +122,8 @@ def _add_work_filter_options(parser: argparse.ArgumentParser) -> None:
     """Add server work filtering: work-count, min/max-digits, priority, work-type."""
     parser.add_argument('--work-count', type=int,
                        help='Number of work assignments to complete before exiting (default: unlimited)')
+    parser.add_argument('--exit-on-no-work', action='store_true',
+                       help='Exit immediately when no work is available instead of waiting 30 seconds')
     parser.add_argument('--min-digits', type=int, help='Minimum composite digit length')
     parser.add_argument('--max-digits', type=int, help='Maximum composite digit length')
     parser.add_argument('--priority', type=int, help='Minimum priority level')

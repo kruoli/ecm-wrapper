@@ -482,6 +482,7 @@
             <button class="btn" onclick="location.href='/api/v1/dashboard/'">User Dashboard</button>
             <button class="btn" onclick="cleanupExpired()">Cleanup Expired Work</button>
             <button class="btn" onclick="cleanupOrphanedResidues()">🧹 Cleanup Orphaned Residues</button>
+            <button class="btn" onclick="cleanupOldAttemptLogs()">🗑️ Cleanup Old ECM Logs</button>
             <button class="btn" onclick="calculateTLevels()">Calculate T-Levels</button>
             <button class="btn" onclick="recalculateAllTLevels()" style="background: #dc3545;">Fix Random T-Levels</button>
             <button class="btn" onclick="refreshPage()">Refresh</button>
@@ -621,6 +622,37 @@
                     btn.disabled = false;
                 });
         }
+    }
+
+    function cleanupOldAttemptLogs() {
+        const daysStr = prompt('Clear raw_output for ECM attempts older than how many days?', '30');
+        if (daysStr === null) return;
+        const days = parseInt(daysStr, 10);
+        if (!Number.isInteger(days) || days < 1) {
+            alert('Please enter a positive integer.');
+            return;
+        }
+        if (!confirm(`Null out raw_output on all ECM attempts older than ${days} days?\n\nAttempt rows are preserved (only the log column is cleared). On-disk space is reclaimed by autovacuum over time; run VACUUM FULL manually for immediate reclaim.`)) {
+            return;
+        }
+
+        const btn = event.target;
+        const originalText = btn.textContent;
+        btn.textContent = '⏳ Clearing...';
+        btn.disabled = true;
+
+        fetchWithAuth(`/api/v1/admin/ecm-attempts/cleanup-logs?days=${days}`, {method: 'POST'})
+            .then(response => response.json())
+            .then(data => {
+                alert(data.message || `Cleared ${data.rows_cleared} rows.`);
+            })
+            .catch(error => {
+                alert('Error clearing old logs: ' + error);
+            })
+            .finally(() => {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            });
     }
 
     function calculateTLevels() {

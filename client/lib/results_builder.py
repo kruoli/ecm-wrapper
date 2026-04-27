@@ -140,12 +140,15 @@ class ResultsBuilder:
         return self
 
     # Build methods
-    def build(self, truncate_output: int = 10000) -> Dict[str, Any]:
+    def build(self, truncate_output: int = 0) -> Dict[str, Any]:
         """
         Build final results dictionary.
 
         Args:
-            truncate_output: Max chars for raw_output (0 = no truncation)
+            truncate_output: Max chars for raw_output (0 = no truncation, the default).
+                Server runs a periodic cleanup job that nulls raw_output on old
+                attempts, so unbounded growth is bounded by retention rather than
+                per-row truncation.
 
         Returns:
             Complete results dictionary ready for API submission

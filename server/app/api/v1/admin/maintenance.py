@@ -3,11 +3,12 @@ Maintenance and system administration routes.
 """
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from sqlalchemy import update
 from sqlalchemy.orm import Session, defer
 
 from ....database import get_db
@@ -361,6 +362,51 @@ async def recalculate_single_composite_t_level(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(e)
             ) from e
+
+
+@router.post("/ecm-attempts/cleanup-logs")
+async def cleanup_old_attempt_logs(
+    days: int = Query(30, ge=1, description="Clear raw_output for attempts older than this many days"),
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(verify_admin_key)
+):
+    """
+    Null out raw_output on ECM attempts older than `days` days.
+
+    The raw_output column stores full GMP-ECM/YAFU stdout for debugging. It
+    grows unbounded and reaches multi-GB sizes; old logs are rarely useful, so
+    we clear them but keep the attempt rows (they're referenced by foreign
+    keys and drive t-level calculations).
+
+    Note: PostgreSQL stores large TEXT in TOAST. Clearing the column won't
+    immediately shrink on-disk size; autovacuum reclaims the space over time.
+    Run VACUUM FULL or pg_repack manually if you need immediate reclaim.
+    """
+    from ....models.attempts import ECMAttempt
+
+    cutoff = datetime.utcnow() - timedelta(days=days)
+
+    with transaction_scope(db, "cleanup_old_attempt_logs"):
+        result = db.execute(
+            update(ECMAttempt)
+            .where(ECMAttempt.created_at < cutoff)
+            .where(ECMAttempt.raw_output.isnot(None))
+            .values(raw_output=None)
+        )
+        rows_cleared = result.rowcount
+
+    logger.info(
+        "Cleared raw_output on %s ECM attempts older than %s days (cutoff: %s)",
+        rows_cleared, days, cutoff.isoformat()
+    )
+
+    return {
+        "status": "success",
+        "rows_cleared": rows_cleared,
+        "days": days,
+        "cutoff": cutoff.isoformat(),
+        "message": f"Cleared raw_output on {rows_cleared} ECM attempts older than {days} days"
+    }
 
 
 @router.post("/residues/cleanup-orphaned")

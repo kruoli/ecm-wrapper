@@ -205,7 +205,7 @@
             </div>
             <div style="display: flex; gap: 10px;">
                 {% if has_prev %}
-                <a href="?offset={{ offset - limit }}&limit={{ limit }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_composite_id %}&composite_id={{ filter_composite_id }}{% endif %}"
+                <a href="?offset={{ offset - limit }}&limit={{ limit }}{% if filter_status %}&status={{ filter_status|urlencode }}{% endif %}{% if filter_composite_id %}&composite_id={{ filter_composite_id|urlencode }}{% endif %}"
                    style="padding: 8px 16px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; font-weight: 500;">
                     ← Previous
                 </a>
@@ -216,7 +216,7 @@
                 {% endif %}
 
                 {% if has_next %}
-                <a href="?offset={{ offset + limit }}&limit={{ limit }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_composite_id %}&composite_id={{ filter_composite_id }}{% endif %}"
+                <a href="?offset={{ offset + limit }}&limit={{ limit }}{% if filter_status %}&status={{ filter_status|urlencode }}{% endif %}{% if filter_composite_id %}&composite_id={{ filter_composite_id|urlencode }}{% endif %}"
                    style="padding: 8px 16px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; font-weight: 500;">
                     Next →
                 </a>

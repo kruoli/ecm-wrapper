@@ -450,6 +450,31 @@ class TestECMConfigIntegration:
         assert config.threads == 1
         assert config.use_two_stage is False
         assert config.b2_multiplier == 500.0
+        # Default parametrization is 1 (CPU/Montgomery) when not in two-stage mode
+        assert config.parametrization == 1
+
+    def test_tlevel_config_two_stage_auto_sets_parametrization(self):
+        """Two-stage mode auto-sets parametrization=3 (GPU/twisted Edwards)."""
+        from lib.ecm_config import TLevelConfig
+
+        config = TLevelConfig(
+            composite='123456789',
+            target_t_level=35.0,
+            use_two_stage=True,
+        )
+        assert config.parametrization == 3
+
+    def test_tlevel_config_two_stage_preserves_explicit_parametrization(self):
+        """Explicit non-default parametrization wins over the two-stage auto-bump."""
+        from lib.ecm_config import TLevelConfig
+
+        config = TLevelConfig(
+            composite='123456789',
+            target_t_level=35.0,
+            use_two_stage=True,
+            parametrization=2,  # Brent-Suyama, atypical but should be preserved
+        )
+        assert config.parametrization == 2
 
 
 class TestFactorResultIntegration:

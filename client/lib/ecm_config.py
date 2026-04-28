@@ -208,15 +208,17 @@ class TLevelConfig(ECMConfigValidation):
         elif self.threads != 1:
             self.workers = self.threads
 
+        # Two-stage mode runs stage 1 on GPU (twisted Edwards), so the
+        # effective parametrization is 3. If the caller didn't explicitly
+        # override the default (1 = Montgomery/CPU), bump it.
+        if self.use_two_stage and self.parametrization == 1:
+            self.parametrization = 3
+
     def get_b2_for_b1(self, b1: int) -> int:
         """Resolve B2 for a given B1: dictionary lookup, then multiplier fallback."""
         if self.b2_dictionary and b1 in self.b2_dictionary:
             return self.b2_dictionary[b1]
         return int(b1 * self.b2_multiplier)
-
-        # Auto-set parametrization for two-stage mode if not explicitly set
-        if self.use_two_stage and self.parametrization == 1:
-            self.parametrization = 3  # GPU uses twisted Edwards curves
 
 
 @dataclass

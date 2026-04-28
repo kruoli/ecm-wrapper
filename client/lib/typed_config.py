@@ -111,7 +111,7 @@ class CADOConfig:
 
 
 @dataclass
-class TLevelConfig:
+class TLevelBinaryConfig:
     """T-level calculator configuration."""
     path: str = "bin/t-level.exe" if sys.platform == 'win32' else "bin/t-level"
 
@@ -122,7 +122,7 @@ class ProgramsConfig:
     gmp_ecm: GMPECMConfig = field(default_factory=GMPECMConfig)
     yafu: YAFUConfig = field(default_factory=YAFUConfig)
     cado_nfs: CADOConfig = field(default_factory=CADOConfig)
-    t_level: TLevelConfig = field(default_factory=TLevelConfig)
+    t_level: TLevelBinaryConfig = field(default_factory=TLevelBinaryConfig)
 
 
 @dataclass
@@ -191,6 +191,7 @@ class AppConfig:
                     'gpu_device': self.programs.gmp_ecm.gpu_device,
                     'gpu_curves': self.programs.gmp_ecm.gpu_curves,
                     'workers': self.programs.gmp_ecm.workers,
+                    'stage2_max_b1': self.programs.gmp_ecm.stage2_max_b1,
                     'pm1_b1': self.programs.gmp_ecm.pm1_b1,
                     'pm1_b2': self.programs.gmp_ecm.pm1_b2,
                     'pp1_b1': self.programs.gmp_ecm.pp1_b1,
@@ -351,8 +352,8 @@ class TypedConfigLoader:
             working_dir=raw.get('working_dir', '~/cado-nfs'),
         )
 
-    def _parse_tlevel(self, raw: Dict[str, Any]) -> TLevelConfig:
+    def _parse_tlevel(self, raw: Dict[str, Any]) -> TLevelBinaryConfig:
         """Parse t-level configuration."""
-        return TLevelConfig(
+        return TLevelBinaryConfig(
             path=raw.get('path', 'bin/t-level'),
         )

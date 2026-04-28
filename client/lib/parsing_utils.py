@@ -304,91 +304,66 @@ def parse_ecm_output(output: str, debug: bool = False) -> Tuple[Optional[str], O
     return None, None
 
 
-def parse_yafu_ecm_output(output: str) -> List[Tuple[str, Optional[str]]]:
+def _parse_yafu_factor_section(output: str, source_label: str) -> List[Tuple[str, Optional[str]]]:
     """
-    Parse YAFU ECM output for factors.
-    Returns list of (factor, sigma) tuples.
+    Parse the `***factors found***` block from YAFU output.
 
-    Note: YAFU lists factors multiple times to indicate multiplicity (exponents).
-    We preserve duplicates as they represent the complete prime factorization.
+    Shared implementation for the two public YAFU parsers. Lines before the
+    section header are ignored — YAFU reports factors twice (during execution
+    and in the final summary), and we only want the summary to avoid duplicates.
 
-    Important: YAFU reports factors in TWO places:
-    1. During execution: "ecm: found prp15 factor = X"
-    2. Final summary: "***factors found***" section
-    We only parse the final summary to avoid duplicates.
+    YAFU lists factors multiple times to indicate multiplicity; we preserve
+    duplicates so the caller sees the full prime factorization.
+
+    Args:
+        output: Raw YAFU stdout/stderr.
+        source_label: Tag used in the summary log line (e.g., "ECM", "auto").
+
+    Returns:
+        List of `(factor, sigma)` tuples. YAFU never reports sigma, so the
+        sigma slot is always None.
     """
-    lines = output.split('\n')
     factors: List[Tuple[str, Optional[str]]] = []
     in_factor_section = False
 
-    for line in lines:
-        # Check for factor section start (same as auto mode)
+    for line in output.split('\n'):
         if YAFUPatterns.FACTOR_SECTION_START.search(line):
             logger.debug("Entered YAFU factor section")
             in_factor_section = True
             continue
 
-        if in_factor_section:
-            # Parse factor lines - keep ALL occurrences (multiplicity)
-            match = YAFUPatterns.AUTO_FACTOR.search(line)
-            if match:
-                factor = match.group(1)
-                logger.debug(f"Found factor via AUTO_FACTOR pattern: {factor}")
-                factors.append((factor, None))  # YAFU doesn't report sigma
-                continue
+        if not in_factor_section:
+            continue
 
-            # Handle simple number lines - keep ALL occurrences (multiplicity)
-            match = YAFUPatterns.SIMPLE_NUMBER.search(line)
-            if match:
-                factor = match.group(1)
-                logger.debug(f"Found factor via SIMPLE_NUMBER pattern: {factor}")
-                factors.append((factor, None))
+        # P-prefixed factor lines: "P15 = 856395168938929"
+        match = YAFUPatterns.AUTO_FACTOR.search(line)
+        if match:
+            factor = match.group(1)
+            logger.debug(f"Found factor via AUTO_FACTOR pattern: {factor}")
+            factors.append((factor, None))
+            continue
+
+        # Bare number fallback
+        match = YAFUPatterns.SIMPLE_NUMBER.search(line)
+        if match:
+            factor = match.group(1)
+            logger.debug(f"Found factor via SIMPLE_NUMBER pattern: {factor}")
+            factors.append((factor, None))
 
     if factors:
-        logger.info(f"Parsed {len(factors)} factors from YAFU ECM output")
+        logger.info(f"Parsed {len(factors)} factors from YAFU {source_label} output")
 
     return factors
+
+
+def parse_yafu_ecm_output(output: str) -> List[Tuple[str, Optional[str]]]:
+    """Parse factors from YAFU ECM-mode output."""
+    return _parse_yafu_factor_section(output, "ECM")
 
 
 def parse_yafu_auto_factors(output: str) -> List[Tuple[str, Optional[str]]]:
-    """
-    Parse factors from YAFU automatic factorization.
-    Returns list of (factor, sigma) tuples.
-
-    Note: YAFU lists factors multiple times to indicate multiplicity (exponents).
-    We preserve duplicates as they represent the complete prime factorization.
-    """
-    lines = output.split('\n')
-    in_factor_section = False
-    factors: List[Tuple[str, Optional[str]]] = []
-
-    for line in lines:
-        # Check for factor section start
-        if YAFUPatterns.FACTOR_SECTION_START.search(line):
-            logger.debug("Entered YAFU factor section")
-            in_factor_section = True
-            continue
-
-        if in_factor_section:
-            # Parse factor lines - keep ALL occurrences (multiplicity)
-            match = YAFUPatterns.AUTO_FACTOR.search(line)
-            if match:
-                factor = match.group(1)
-                logger.debug(f"Found factor via AUTO_FACTOR pattern: {factor}")
-                factors.append((factor, None))
-                continue
-
-            # Handle simple number lines - keep ALL occurrences (multiplicity)
-            match = YAFUPatterns.SIMPLE_NUMBER.search(line)
-            if match:
-                factor = match.group(1)
-                logger.debug(f"Found factor via SIMPLE_NUMBER pattern: {factor}")
-                factors.append((factor, None))
-
-    if factors:
-        logger.info(f"Parsed {len(factors)} factors from YAFU auto output")
-
-    return factors
+    """Parse factors from YAFU automatic factorization output."""
+    return _parse_yafu_factor_section(output, "auto")
 
 
 def parse_yafu_output_with_composites(output: str) -> Dict[str, List[str]]:

@@ -70,10 +70,10 @@ def main():
     # Get max_batch default from config (for two-stage GPU batching)
     max_batch = getattr(args, 'max_batch', None) or get_max_batch_default(wrapper.config)
 
-    # Load B2 dictionary if specified
+    # Load B2 dictionary if specified (k column unused in manual mode)
     b2_dictionary = None
     if getattr(args, 'b2_dictionary', None):
-        b2_dictionary = load_b2_dictionary(args.b2_dictionary)
+        b2_dictionary, _ = load_b2_dictionary(args.b2_dictionary)
 
     # Resolve B1 from args or config based on method
     def get_b1_from_config(key: str, default: int) -> int:

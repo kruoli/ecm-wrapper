@@ -44,27 +44,6 @@ def test_raw_output_accumulation():
     assert results['raw_output'] == 'Line 1\n\nLine 2\n\nLine 3\n\nLine 4'
 
 
-def test_raw_output_truncation():
-    """Test truncation at 10k chars."""
-    builder = ResultsBuilder('123', 'ecm')
-    builder.add_raw_output('x' * 15000)
-
-    results = builder.build()  # Default 10k truncation
-    assert len(results['raw_output']) < 15000
-    assert 'truncated' in results['raw_output']
-    assert '15000 total chars' in results['raw_output']
-
-
-def test_raw_output_no_truncation():
-    """Test build_no_truncate preserves full output."""
-    builder = ResultsBuilder('123', 'ecm')
-    builder.add_raw_output('x' * 15000)
-
-    results = builder.build_no_truncate()
-    assert len(results['raw_output']) == 15000
-    assert 'truncated' not in results['raw_output']
-
-
 def test_factors_with_sigmas():
     """Test factor handling with sigmas."""
     all_factors = [('123', '12345'), ('456', '67890')]

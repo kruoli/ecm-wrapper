@@ -39,17 +39,23 @@ def parse_int_with_scientific(value: str) -> int:
         raise argparse.ArgumentTypeError(f"Invalid integer or scientific notation: {value}") from e
 
 
-def load_b2_dictionary(filepath: str) -> Dict[int, int]:
+def load_b2_dictionary(filepath: str) -> tuple[Dict[int, int], Dict[int, int]]:
     """
-    Load a B1 → B2 mapping from a dictionary file.
+    Load a B1 → B2 mapping (and optional B1 → k mapping) from a dictionary file.
 
-    File format: one entry per line, "B1 B2" separated by space.
-    Lines starting with #, ', or -- are comments. Supports scientific notation.
+    File format: one entry per line, whitespace-separated columns:
+        B1  B2  [k]  [# comment]
+    Lines starting with #, ', or -- are comments. Supports scientific notation
+    in B1 and B2. The k column is optional; when present and positive, it is
+    returned in the second dict. Comment markers in the k column slot are
+    treated as "no k value".
 
     Returns:
-        Dict mapping B1 values to B2 values.
+        Tuple of (b2_dict, k_dict). b2_dict maps every parsed B1 to its B2;
+        k_dict maps only those B1 values that had a positive k.
     """
     b2_dict: Dict[int, int] = {}
+    k_dict: Dict[int, int] = {}
     try:
         with open(filepath, 'r') as f:
             for line in f:
@@ -63,12 +69,25 @@ def load_b2_dictionary(filepath: str) -> Dict[int, int]:
                 try:
                     key = int(float(entries[0]))
                     value = int(float(entries[1]))
-                    b2_dict[key] = value
                 except ValueError:
                     print(f"Warning: Skipping invalid B2 dictionary entry: {line}")
+                    continue
+
+                b2_dict[key] = value
+
+                # Optional 3rd column: k value (skip if it's a comment marker)
+                if len(entries) >= 3:
+                    k_entry = entries[2]
+                    if not (k_entry.startswith('#') or k_entry.startswith("'") or k_entry.startswith('--')):
+                        try:
+                            k = int(k_entry)
+                            if k > 0:
+                                k_dict[key] = k
+                        except ValueError:
+                            pass  # Silent skip — k is optional
     except OSError as e:
         print(f"Warning: Could not load B2 dictionary '{filepath}': {e}")
-    return b2_dict
+    return b2_dict, k_dict
 
 
 def _add_core_ecm_params(parser: argparse.ArgumentParser) -> None:

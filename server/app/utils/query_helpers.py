@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Any, List, Dict
 
 from sqlalchemy import and_, desc, func, distinct
-from sqlalchemy.orm import Session, defer
+from sqlalchemy.orm import Session, defer, joinedload
 
 from ..constants import ACTIVE_WORK_STATUSES
 
@@ -104,7 +104,8 @@ def get_recent_work_assignments(
     """
     from ..models.work_assignments import WorkAssignment
 
-    query = db.query(WorkAssignment)
+    # Eager-load composite — admin dashboard template accesses work.composite.* per row.
+    query = db.query(WorkAssignment).options(joinedload(WorkAssignment.composite))
 
     filters = []
     if status_filter:
@@ -209,7 +210,14 @@ def get_recent_factors(db: Session, limit: int = 10):
     """
     from ..models.factors import Factor
 
-    return db.query(Factor).order_by(desc(Factor.created_at)).limit(limit).all()
+    # Eager-load composite — admin dashboard template accesses factor.composite.* per row.
+    return (
+        db.query(Factor)
+        .options(joinedload(Factor.composite))
+        .order_by(desc(Factor.created_at))
+        .limit(limit)
+        .all()
+    )
 
 
 def get_recent_attempts(db: Session, limit: int = 100, method: Optional[str] = None):
@@ -589,7 +597,8 @@ def get_outstanding_work_assignments(
     """
     from ..models.work_assignments import WorkAssignment
 
-    query = db.query(WorkAssignment).filter(
+    # Eager-load composite — outstanding-work template accesses work.composite.* per row.
+    query = db.query(WorkAssignment).options(joinedload(WorkAssignment.composite)).filter(
         WorkAssignment.status.in_(ACTIVE_WORK_STATUSES)
     )
 
@@ -717,7 +726,9 @@ def get_residues_filtered(
     """
     from ..models.residues import ECMResidue
 
-    query = db.query(ECMResidue)
+    # Eager-load composite — templates access residue.composite for every row,
+    # which would otherwise fire one query per residue.
+    query = db.query(ECMResidue).options(joinedload(ECMResidue.composite))
 
     # Apply filters
     filters = []

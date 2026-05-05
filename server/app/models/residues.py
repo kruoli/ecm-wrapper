@@ -71,4 +71,5 @@ class ECMResidue(Base, TimestampMixin):
         Index('ix_ecm_residues_status', 'status'),
         Index('ix_ecm_residues_composite_status', 'composite_id', 'status'),
         Index('ix_ecm_residues_expires_at', 'expires_at'),
+        Index('ix_ecm_residues_created_at', 'created_at'),
     )

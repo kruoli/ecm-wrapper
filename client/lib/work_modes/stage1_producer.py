@@ -108,7 +108,7 @@ class Stage1ProducerMode(WorkMode):
                 self.logger.warning(f"B1={b1} below minimum {self.MIN_STAGE1_B1} for stage1-only, using minimum")
                 b1 = self.MIN_STAGE1_B1
             curves = self.args.curves if self.args.curves is not None else \
-                     self.wrapper.config['programs']['gmp_ecm']['default_curves']
+                     self.wrapper.typed_config.programs.gmp_ecm.default_curves
             return b1, curves
 
         # Get current t-level to determine appropriate B1
@@ -132,8 +132,7 @@ class Stage1ProducerMode(WorkMode):
         if self.args.curves is not None:
             curves = self.args.curves
         else:
-            gpu_config = self.wrapper.config.get('programs', {}).get('gmp_ecm', {}).get('gpu', {})
-            curves = gpu_config.get('curves_per_batch', 1000)
+            curves = self.wrapper.typed_config.programs.gmp_ecm.gpu.curves_per_batch
 
         self.logger.info(f"Stage 1: t{current_t:.1f} using B1={b1}, curves={curves} (one batch)")
         return b1, curves
@@ -165,10 +164,10 @@ class Stage1ProducerMode(WorkMode):
         curves = self._stage1_curves
 
         # Resolve GPU settings
-        use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(self.args, self.wrapper.config)
+        use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(self.args, self.wrapper.typed_config)
 
         # Generate residue file path
-        residue_dir = Path(self.wrapper.config['execution'].get('residue_dir', 'data/residues'))
+        residue_dir = Path(self.wrapper.typed_config.execution.residue_dir)
         residue_dir.mkdir(parents=True, exist_ok=True)
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         self.residue_file = residue_dir / f"stage1_{timestamp}_{composite[:20]}.txt"

@@ -63,23 +63,23 @@ class Stage2ConsumerMode(WorkMode):
 
     def request_work(self) -> Optional[Dict[str, Any]]:
         # CLI --max-b1 takes priority, then config stage2_max_b1
-        max_b1 = getattr(self.args, 'max_b1', None)
+        max_b1 = self.args.max_b1
         if max_b1 is None:
-            max_b1 = self.wrapper.config.get('programs', {}).get('gmp_ecm', {}).get('stage2_max_b1')
+            max_b1 = self.wrapper.typed_config.programs.gmp_ecm.stage2_max_b1
 
         residue_work = self.api_client.get_residue_work(
             client_id=self.ctx.client_id,
-            min_target_tlevel=getattr(self.args, 'min_target_tlevel', None),
-            max_target_tlevel=getattr(self.args, 'max_target_tlevel', None),
-            min_priority=getattr(self.args, 'priority', None),
-            min_b1=getattr(self.args, 'min_b1', None),
+            min_target_tlevel=self.args.min_target_tlevel,
+            max_target_tlevel=self.args.max_target_tlevel,
+            min_priority=self.args.priority,
+            min_b1=self.args.min_b1,
             max_b1=max_b1,
             claim_timeout_hours=24,
-            project=getattr(self.args, 'project', None)
+            project=self.args.project
         )
 
         if not residue_work:
-            if getattr(self.args, 'exit_on_no_work', False):
+            if self.args.exit_on_no_work:
                 self.logger.info("No residue work available. Exiting (--exit-on-no-work).")
                 import sys; sys.exit(0)
             self.logger.info("No residue work available, waiting 30 seconds before retry...")
@@ -108,7 +108,7 @@ class Stage2ConsumerMode(WorkMode):
                 k = work['k_from_dict']
         elif self.args.b2 is not None:
             b2 = self.args.b2
-        elif hasattr(self.args, 'b2_multiplier') and self.args.b2_multiplier is not None:
+        elif self.args.b2_multiplier is not None:
             b2 = int(b1 * self.args.b2_multiplier)
             print(f"Using dynamic B2 = B1 * {self.args.b2_multiplier} = {b2}")
         else:
@@ -132,7 +132,7 @@ class Stage2ConsumerMode(WorkMode):
 
     def execute_work(self, work: Dict[str, Any]) -> FactorResult:
         # Download residue file
-        residue_dir = Path(self.wrapper.config['execution'].get('residue_dir', 'data/residues'))
+        residue_dir = Path(self.wrapper.typed_config.execution.residue_dir)
         residue_dir.mkdir(parents=True, exist_ok=True)
         self.local_residue_file = residue_dir / f"s2_residue_{self.current_residue_id}.txt"
 
@@ -158,8 +158,7 @@ class Stage2ConsumerMode(WorkMode):
         self.logger.debug(f"Residue checksum: {self._residue_checksum}")
 
         # Get workers count
-        workers = getattr(self.args, 'workers', None) or \
-                  get_workers_default(self.wrapper.config)
+        workers = self.args.workers or get_workers_default(self.wrapper.typed_config)
 
         # Run stage 2
         print(f"Running stage 2 with {workers} workers...")
@@ -175,8 +174,8 @@ class Stage2ConsumerMode(WorkMode):
         )
 
         factor, all_factors, curves, exec_time, sigma = executor.execute(
-            early_termination=not getattr(self.args, 'continue_after_factor', False),
-            progress_interval=getattr(self.args, 'progress_interval', 0)
+            early_termination=not self.args.continue_after_factor,
+            progress_interval=self.args.progress_interval
         )
 
         # Build FactorResult

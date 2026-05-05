@@ -55,7 +55,7 @@ class Stage2Executor:
         self.pin_threads = pin_threads
         self.pin_cpus: Optional[List[int]] = None  # Set in execute() when pin_threads is True
         self.logger = wrapper.logger
-        self.ecm_path = wrapper.config['programs']['gmp_ecm']['path']
+        self.ecm_path = wrapper.typed_config.programs.gmp_ecm.path
 
         # Shared state for worker coordination
         self.factor_found: Optional[Tuple[str, str]] = None

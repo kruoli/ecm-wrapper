@@ -369,28 +369,19 @@ class TestWorkModeIntegration:
     def test_work_mode_factory_integration(self):
         """Test work mode factory creates correct mode from args."""
         from lib.work_modes import WorkLoopContext, get_work_mode, StandardAutoWorkMode
-        import argparse
+        from lib.work_args import WorkArgs
 
-        # Create minimal mock wrapper
+        # Create minimal mock wrapper. typed_config is Mock-auto and not
+        # exercised by the get_work_mode factory itself (modes only read it
+        # during their per-iteration methods, not in __init__).
         wrapper = Mock()
-        wrapper.config = {'programs': {'gmp_ecm': {'default_curves': 100}}}
         wrapper.logger = Mock()
         wrapper.interrupted = False
         wrapper.graceful_shutdown_requested = False
         wrapper._ensure_api_clients = Mock()
         wrapper._get_api_client = Mock(return_value=Mock())
 
-        args = argparse.Namespace(
-            composite=None,
-            stage1_only=False,
-            stage2_only=False,
-            b1=None,
-            b2=None,
-            verbose=False,
-            multiprocess=False,
-            method='ecm',
-            project=None
-        )
+        args = WorkArgs()
 
         ctx = WorkLoopContext(
             wrapper=wrapper,

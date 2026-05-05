@@ -5,7 +5,16 @@ Shared argument parsing logic for ECM and YAFU wrappers.
 import argparse
 import sys
 import multiprocessing
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .typed_config import AppConfig
+    from .work_args import WorkArgs
+
+# Helpers below accept either an argparse.Namespace (manual mode, ecm_wrapper.py)
+# or a typed WorkArgs (auto-work mode). Both expose the same attribute names
+# for the fields these helpers read.
+ArgsLike = Union[argparse.Namespace, "WorkArgs"]
 
 
 def parse_int_with_scientific(value: str) -> int:
@@ -322,13 +331,13 @@ def create_yafu_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+def validate_ecm_args(args: argparse.Namespace, config: Optional['AppConfig'] = None) -> Dict[str, str]:
     """
     Validate ECM arguments and return any validation errors.
 
     Args:
         args: Parsed command line arguments
-        config: Configuration dictionary (optional, for B2 validation)
+        config: Typed AppConfig (optional, for B2 validation)
 
     Returns:
         Dictionary mapping argument names to error messages
@@ -467,96 +476,73 @@ def validate_ecm_args(args: argparse.Namespace, config: Optional[Dict[str, Any]]
     return errors
 
 
-def get_workers_default(config: Dict[str, Any]) -> int:
+def get_workers_default(config: 'AppConfig') -> int:
     """
-    Get default workers value from config.
+    Get default workers value from typed config.
 
     Used for both multiprocess workers and stage2 threads.
-
-    Args:
-        config: Configuration dictionary
-
-    Returns:
-        Default number of workers
     """
-    if config and 'programs' in config and 'gmp_ecm' in config['programs']:
-        return config['programs']['gmp_ecm'].get('workers', 4)
-    return 4
+    return config.programs.gmp_ecm.workers or 4
 
 
-def get_max_batch_default(config: Dict[str, Any]) -> Optional[int]:
-    """
-    Get default max_batch value from config.
-
-    Used for chunking large GPU batches in two-stage mode.
-
-    Args:
-        config: Configuration dictionary
-
-    Returns:
-        Default max_batch value or None if not set
-    """
-    if config and 'programs' in config and 'gmp_ecm' in config['programs']:
-        return config['programs']['gmp_ecm'].get('max_batch')
-    return None
+def get_max_batch_default(config: 'AppConfig') -> Optional[int]:
+    """Get default max_batch value from typed config."""
+    return config.programs.gmp_ecm.max_batch
 
 
-# Backward compatibility alias
-get_stage2_workers_default = get_workers_default
-
-
-def get_method_defaults(config: Dict[str, Any], method: str) -> tuple[int, Optional[int]]:
+def get_method_defaults(config: 'AppConfig', method: str) -> tuple[int, Optional[int]]:
     """
     Get default B1 and B2 values for the specified method.
 
     Args:
-        config: Configuration dictionary
+        config: Typed AppConfig
         method: Method name ('ecm', 'pm1', 'pp1')
 
     Returns:
         Tuple of (b1_default, b2_default)
     """
-    gmp_config = config['programs']['gmp_ecm']
+    gmp = config.programs.gmp_ecm
 
     if method == 'pm1':
-        b1_default = gmp_config.get('pm1_b1', gmp_config['default_b1'])
-        b2_default = gmp_config.get('pm1_b2', gmp_config.get('default_b2'))
+        # pm1_b1 is non-Optional in dataclass with a default; treat 0 as "fall back to default_b1"
+        b1_default = gmp.pm1_b1 or gmp.default_b1
+        b2_default = gmp.pm1_b2 if gmp.pm1_b2 else gmp.default_b2
     elif method == 'pp1':
-        b1_default = gmp_config.get('pp1_b1', gmp_config['default_b1'])
-        b2_default = gmp_config.get('pp1_b2', gmp_config.get('default_b2'))
+        b1_default = gmp.pp1_b1 or gmp.default_b1
+        b2_default = gmp.pp1_b2 if gmp.pp1_b2 else gmp.default_b2
     else:  # ecm
-        b1_default = gmp_config['default_b1']
-        b2_default = gmp_config.get('default_b2')
+        b1_default = gmp.default_b1
+        b2_default = gmp.default_b2
 
     return b1_default, b2_default
 
 
-def resolve_gpu_settings(args: argparse.Namespace, config: Dict[str, Any]) -> tuple[bool, Optional[int], Optional[int]]:
+def resolve_gpu_settings(args: ArgsLike, config: 'AppConfig') -> tuple[bool, Optional[int], Optional[int]]:
     """
-    Resolve GPU settings from arguments and configuration.
+    Resolve GPU settings from arguments and typed config.
 
     Returns:
         Tuple of (use_gpu, gpu_device, gpu_curves)
     """
+    gmp = config.programs.gmp_ecm
+
     # GPU settings: command line overrides config defaults
     if args.no_gpu:
         use_gpu = False
     elif args.gpu:
         use_gpu = True
     else:
-        use_gpu = config['programs']['gmp_ecm'].get('gpu_enabled', False)
+        use_gpu = gmp.gpu_enabled
 
-    gpu_device = (args.gpu_device if args.gpu_device is not None
-                  else config['programs']['gmp_ecm'].get('gpu_device'))
-    gpu_curves = (args.gpu_curves if args.gpu_curves is not None
-                  else config['programs']['gmp_ecm'].get('gpu_curves'))
+    gpu_device = args.gpu_device if args.gpu_device is not None else gmp.gpu_device
+    gpu_curves = args.gpu_curves if args.gpu_curves is not None else gmp.gpu_curves
 
     return use_gpu, gpu_device, gpu_curves
 
 
-def resolve_pin_threads(args: argparse.Namespace) -> bool:
+def resolve_pin_threads(args: ArgsLike) -> bool:
     """Return True if --pin-threads was requested. Validates platform support."""
-    if not getattr(args, 'pin_threads', False):
+    if not args.pin_threads:
         return False
     from .thread_pinning import is_supported
     if not is_supported():
@@ -567,15 +553,15 @@ def resolve_pin_threads(args: argparse.Namespace) -> bool:
     return True
 
 
-def resolve_worker_count(args: argparse.Namespace, config: Optional[Dict[str, Any]] = None) -> int:
+def resolve_worker_count(args: ArgsLike, config: Optional['AppConfig'] = None) -> int:
     """Resolve number of workers for multiprocess/two-stage mode.
 
     Priority: command-line --workers > config programs.gmp_ecm.workers > CPU count.
     """
-    workers = getattr(args, 'workers', None) or 0
+    workers = args.workers or 0
     if workers > 0:
         return workers
-    if config:
+    if config is not None:
         config_workers = get_workers_default(config)
         if config_workers > 0:
             return config_workers

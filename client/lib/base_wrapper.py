@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable, TYPE_CHECKING
 
-from .config_manager import ConfigManager
+from .typed_config import TypedConfigLoader
 from .api_client import APIClient
 from .file_utils import save_json, load_json
 from .submission_queue import SubmissionQueue
@@ -59,19 +59,14 @@ class BaseWrapper:
         """Initialize wrapper with configuration."""
         self._validate_working_directory()
 
-        # Store config path for lazy typed config loading
+        # Load typed configuration eagerly. TypedConfigLoader internally uses
+        # ConfigManager (deep-merge of client.yaml + client.local.yaml).
         self._config_path = config_path
-        self._typed_config: Optional['AppConfig'] = None
-
-        # Load configuration using ConfigManager
-        config_manager = ConfigManager()
-        self.config = config_manager.load_config(config_path)
+        self.typed_config: 'AppConfig' = TypedConfigLoader().load(config_path)
 
         self.setup_logging()
         # Construct client_id from username and cpu_name
-        username = self.config['client']['username']
-        cpu_name = self.config['client']['cpu_name']
-        self.client_id = f"{username}-{cpu_name}"
+        self.client_id = f"{self.typed_config.client.username}-{self.typed_config.client.cpu_name}"
 
         # Defer API client initialization until first use (lazy loading)
         self.api_clients = None
@@ -79,7 +74,7 @@ class BaseWrapper:
 
         # Persistent submission queue for automatic retry of failed API operations
         self.submission_queue = SubmissionQueue(
-            queue_dir=self.config.get('execution', {}).get('queue_dir', 'data/queue')
+            queue_dir=self.typed_config.execution.queue_dir
         )
 
         # Track running subprocesses for cleanup on exit
@@ -89,63 +84,41 @@ class BaseWrapper:
         self._subprocess_lock = threading.Lock()
         atexit.register(self._terminate_all_subprocesses)
 
-    @property
-    def typed_config(self) -> 'AppConfig':
-        """
-        Get typed configuration object (lazy-loaded).
-
-        Provides type-safe access to configuration values with IDE
-        autocompletion. Use this instead of self.config for new code.
-
-        Returns:
-            Typed AppConfig instance
-
-        Example:
-            path = self.typed_config.programs.gmp_ecm.path
-            timeout = self.typed_config.api.timeout
-        """
-        if self._typed_config is None:
-            from .typed_config import TypedConfigLoader
-            loader = TypedConfigLoader()
-            self._typed_config = loader.load(self._config_path)
-        assert self._typed_config is not None  # For type checker
-        return self._typed_config
-
     def _ensure_api_clients(self):
         """Initialize API clients on first use (lazy loading)."""
         if self.api_clients is not None:
             return  # Already initialized
 
         self.api_clients = []
-        api_config = self.config['api']
+        api_cfg = self.typed_config.api
 
         # Check if multiple endpoints are configured
-        if 'endpoints' in api_config and api_config['endpoints']:
+        if api_cfg.endpoints:
             # Multiple endpoints mode
-            for endpoint_config in api_config['endpoints']:
+            for ep in api_cfg.endpoints:
                 client = APIClient(
-                    api_endpoint=endpoint_config['url'],
-                    timeout=api_config['timeout'],
-                    retry_attempts=api_config['retry_attempts']
+                    api_endpoint=ep.url,
+                    timeout=api_cfg.timeout,
+                    retry_attempts=api_cfg.retry_attempts,
                 )
                 self.api_clients.append({
                     'client': client,
-                    'name': endpoint_config.get('name', endpoint_config['url']),
-                    'url': endpoint_config['url']
+                    'name': ep.name,
+                    'url': ep.url,
                 })
             self.logger.info(f"Configured {len(self.api_clients)} API endpoints: {', '.join([c['name'] for c in self.api_clients])}")
         else:
             # Single endpoint mode (backward compatibility)
-            self.api_endpoint = api_config['endpoint']
+            self.api_endpoint = api_cfg.endpoint
             client = APIClient(
                 api_endpoint=self.api_endpoint,
-                timeout=api_config['timeout'],
-                retry_attempts=api_config['retry_attempts']
+                timeout=api_cfg.timeout,
+                retry_attempts=api_cfg.retry_attempts,
             )
             self.api_clients.append({
                 'client': client,
                 'name': 'default',
-                'url': self.api_endpoint
+                'url': self.api_endpoint,
             })
 
         # Keep backward compatibility reference to first client
@@ -189,16 +162,12 @@ class BaseWrapper:
 
     def setup_logging(self):
         """Set up logging configuration."""
-        # Get logging config with defaults
-        logging_config = self.config.get('logging', {})
-        log_file_path = logging_config.get('file', 'data/logs/ecm_client.log')
-        log_level = logging_config.get('level', 'INFO')
-
-        log_file = Path(log_file_path)
+        log_cfg = self.typed_config.logging
+        log_file = Path(log_cfg.file)
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
         logging.basicConfig(
-            level=getattr(logging, log_level),
+            level=getattr(logging, log_cfg.level),
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
                 logging.FileHandler(log_file, encoding='utf-8'),
@@ -217,8 +186,7 @@ class BaseWrapper:
             quiet: If True, skip console output (still logs to file)
         """
         # Check if factor logging is enabled in config
-        log_factors = self.config.get('logging', {}).get('log_factors_found', True)
-        if not log_factors:
+        if not self.typed_config.logging.log_factors_found:
             return
 
         factors_file = Path("data/factors_found.txt")
@@ -656,7 +624,7 @@ class BaseWrapper:
 
     def save_raw_output(self, results: Dict[str, Any], program: str = "unknown") -> None:
         """Save raw output to file for debugging."""
-        output_dir = Path(self.config['execution']['output_dir'])
+        output_dir = Path(self.typed_config.execution.output_dir)
         output_dir.mkdir(exist_ok=True, parents=True)
 
         timestamp = time.strftime('%Y%m%d_%H%M%S')

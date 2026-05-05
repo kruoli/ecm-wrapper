@@ -46,7 +46,7 @@ class CompositeExecutionEngine:
     def __init__(self, wrapper: 'ECMWrapper'):
         self.wrapper = wrapper
         self.logger = wrapper.logger
-        self.ecm_path = wrapper.config['programs']['gmp_ecm']['path']
+        self.ecm_path = wrapper.typed_config.programs.gmp_ecm.path
 
     # ==================== Phase 1: Multiprocess CPU Workers ====================
 
@@ -463,7 +463,7 @@ class CompositeExecutionEngine:
 
         import hashlib
 
-        residue_dir = Path(self.wrapper.config['execution']['residue_dir'])
+        residue_dir = Path(self.wrapper.typed_config.execution.residue_dir)
         residue_dir.mkdir(parents=True, exist_ok=True)
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         composite_hash = hashlib.md5(composite.encode()).hexdigest()[:8]

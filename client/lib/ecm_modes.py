@@ -135,7 +135,7 @@ def run_stage1_only_mode(wrapper, args, output: UserOutput, params: ResolvedPara
             residue_path = Path(save_path)
             if residue_path.exists():
                 # Get client_id from config
-                client_id = wrapper.config.get('client', {}).get('username', 'unknown')
+                client_id = wrapper.typed_config.client.username
 
                 # Build factor info for upload
                 factor_found = result.factors[0] if result.factors else None

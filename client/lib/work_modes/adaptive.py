@@ -39,19 +39,18 @@ class AdaptiveCPUMode(WorkMode):
         super().__init__(ctx)
 
         # Resolve worker count once
-        self._workers = resolve_worker_count(self.args, self.wrapper.config)
+        self._workers = resolve_worker_count(self.args, self.wrapper.typed_config)
 
         # Resolve pin-threads once (validates platform support up-front)
         self._pin_threads = resolve_pin_threads(self.args)
 
         # Calculate t-level cap based on worker count (only applies to ECM fallback)
         # User can override with --max-target-tlevel
-        user_max = getattr(self.args, 'max_target_tlevel', None)
+        user_max = self.args.max_target_tlevel
         self._max_tlevel = user_max if user_max is not None else get_max_tlevel_for_workers(self._workers)
 
         # Default progress_interval to 100 to avoid spamming console with thousands of lines
-        user_pi = getattr(self.args, 'progress_interval', 0)
-        self._progress_interval = user_pi if user_pi > 0 else 100
+        self._progress_interval = self.args.progress_interval if self.args.progress_interval > 0 else 100
 
         # Current work type tracking
         self._current_mode: Optional[str] = None  # 'stage2' or 'ecm'
@@ -110,17 +109,17 @@ class AdaptiveCPUMode(WorkMode):
 
     def request_work(self) -> Optional[Dict[str, Any]]:
         # CLI --max-b1 takes priority, then config stage2_max_b1
-        max_b1 = getattr(self.args, 'max_b1', None)
+        max_b1 = self.args.max_b1
         if max_b1 is None:
-            max_b1 = self.wrapper.config.get('programs', {}).get('gmp_ecm', {}).get('stage2_max_b1')
+            max_b1 = self.wrapper.typed_config.programs.gmp_ecm.stage2_max_b1
 
         # Try stage 2 residues first (no wait on failure - fall through to ECM)
         residue_work = self.api_client.get_residue_work(
             client_id=self.ctx.client_id,
-            min_b1=getattr(self.args, 'min_b1', None),
+            min_b1=self.args.min_b1,
             max_b1=max_b1,
             claim_timeout_hours=24,
-            project=getattr(self.args, 'project', None)
+            project=self.args.project
         )
 
         if residue_work:
@@ -131,13 +130,13 @@ class AdaptiveCPUMode(WorkMode):
         # No residues - try ECM work with progressive ordering
         work = self.api_client.get_ecm_work(
             client_id=self.ctx.client_id,
-            min_target_tlevel=getattr(self.args, 'min_target_tlevel', None),
+            min_target_tlevel=self.args.min_target_tlevel,
             max_target_tlevel=self._max_tlevel,
-            priority=getattr(self.args, 'priority', None),
-            min_digits=getattr(self.args, 'min_digits', None),
-            max_digits=getattr(self.args, 'max_digits', None),
+            priority=self.args.priority,
+            min_digits=self.args.min_digits,
+            max_digits=self.args.max_digits,
             work_type='progressive',
-            project=getattr(self.args, 'project', None)
+            project=self.args.project
         )
 
         if work:
@@ -145,7 +144,7 @@ class AdaptiveCPUMode(WorkMode):
             return work
 
         # Nothing available at all
-        if getattr(self.args, 'exit_on_no_work', False):
+        if self.args.exit_on_no_work:
             self.logger.info("No work available. Exiting (--exit-on-no-work).")
             import sys; sys.exit(0)
         self.logger.info("No work available (stage 2 or ECM), waiting 30 seconds...")
@@ -175,7 +174,7 @@ class AdaptiveCPUMode(WorkMode):
         # Determine B2
         if self.args.b2 is not None:
             b2 = self.args.b2
-        elif hasattr(self.args, 'b2_multiplier') and self.args.b2_multiplier is not None:
+        elif self.args.b2_multiplier is not None:
             b2 = int(b1 * self.args.b2_multiplier)
             print(f"Using dynamic B2 = B1 * {self.args.b2_multiplier} = {b2}")
         else:
@@ -222,7 +221,7 @@ class AdaptiveCPUMode(WorkMode):
 
     def _execute_stage2(self, work: Dict[str, Any]) -> FactorResult:
         # Download residue file
-        residue_dir = Path(self.wrapper.config['execution'].get('residue_dir', 'data/residues'))
+        residue_dir = Path(self.wrapper.typed_config.execution.residue_dir)
         residue_dir.mkdir(parents=True, exist_ok=True)
         self._s2_local_residue_file = residue_dir / f"s2_residue_{self.current_residue_id}.txt"
 

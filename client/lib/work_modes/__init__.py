@@ -44,15 +44,15 @@ def get_work_mode(ctx: WorkLoopContext) -> WorkMode:
     """
     args = ctx.args
 
-    if getattr(args, 'composite', None):
+    if args.composite:
         return CompositeTargetMode(ctx)
-    elif getattr(args, 'pm1', False) or getattr(args, 'pp1', False) or getattr(args, 'p1', False):
+    elif args.pm1 or args.pp1 or args.p1:
         return P1WorkMode(ctx)
-    elif getattr(args, 'stage1_only', False):
+    elif args.stage1_only:
         return Stage1ProducerMode(ctx)
-    elif getattr(args, 'stage2_only', False):
+    elif args.stage2_only:
         return Stage2ConsumerMode(ctx)
-    elif getattr(args, 'adaptive', False):
+    elif args.adaptive:
         return AdaptiveCPUMode(ctx)
     else:
         return StandardAutoWorkMode(ctx)

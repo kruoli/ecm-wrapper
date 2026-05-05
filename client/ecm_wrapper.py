@@ -31,7 +31,7 @@ from lib.ecm_modes import (
     run_standard_mode,
     submit_ecm_result,
 )
-from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_workers_default, get_max_batch_default, parse_int_with_scientific, validate_ecm_args, load_b2_dictionary
+from lib.arg_parser import create_ecm_parser, resolve_gpu_settings, get_workers_default, get_max_batch_default, validate_ecm_args, load_b2_dictionary
 from lib.user_output import UserOutput
 
 
@@ -62,35 +62,32 @@ def main():
     wrapper = ECMWrapper(args.config)
 
     # Resolve GPU settings from args + config (uses existing helper)
-    use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(args, wrapper.config)
+    use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(args, wrapper.typed_config)
 
     # Get workers default from config
-    workers = args.workers if args.workers else get_workers_default(wrapper.config)
+    workers = args.workers if args.workers else get_workers_default(wrapper.typed_config)
 
     # Get max_batch default from config (for two-stage GPU batching)
-    max_batch = getattr(args, 'max_batch', None) or get_max_batch_default(wrapper.config)
+    max_batch = getattr(args, 'max_batch', None) or get_max_batch_default(wrapper.typed_config)
 
     # Load B2 dictionary if specified (k column unused in manual mode)
     b2_dictionary = None
     if getattr(args, 'b2_dictionary', None):
         b2_dictionary, _ = load_b2_dictionary(args.b2_dictionary)
 
-    # Resolve B1 from args or config based on method
-    def get_b1_from_config(key: str, default: int) -> int:
-        val = wrapper.config['programs']['gmp_ecm'].get(key, default)
-        if isinstance(val, str):
-            return parse_int_with_scientific(val)
-        return val
-
+    # Resolve B1 from args or typed config based on method.
+    # TypedConfigLoader already coerces scientific notation to int, so no
+    # extra parsing needed here.
+    gmp = wrapper.typed_config.programs.gmp_ecm
     method = args.method or 'ecm'
     if args.b1:
         b1 = args.b1
     elif method == 'pm1':
-        b1 = get_b1_from_config('pm1_b1', 2900000000)
+        b1 = gmp.pm1_b1
     elif method == 'pp1':
-        b1 = get_b1_from_config('pp1_b1', 110000000)
+        b1 = gmp.pp1_b1
     else:
-        b1 = get_b1_from_config('default_b1', 110000000)
+        b1 = gmp.default_b1
 
     params = ResolvedParams(
         b1=b1,

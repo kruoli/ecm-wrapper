@@ -16,10 +16,10 @@ Public surface is re-exported from `lib.work_modes` for backward compat.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Optional, Dict, TYPE_CHECKING
-import argparse
 import signal
 
 from ..ecm_config import FactorResult
+from ..work_args import WorkArgs
 from ..work_helpers import print_work_status
 from ..error_helpers import check_work_limit_reached
 from ..cleanup_helpers import handle_shutdown
@@ -43,7 +43,7 @@ class WorkLoopContext:
     """
     wrapper: 'ECMWrapper'
     client_id: str
-    args: argparse.Namespace
+    args: WorkArgs
     work_count_limit: Optional[int] = None
     finish_after_current: bool = field(default=False, init=False)
 
@@ -405,7 +405,7 @@ class WorkMode(ABC):
             b2_dict: Dict[int, int] = dict()
             k_dict: Dict[int, int] = dict()
             self._b2_dictionary: Optional[Dict[int, int]] = None
-            if getattr(self.args, 'b2_dictionary', None) is not None:
+            if self.args.b2_dictionary is not None:
                 from lib.arg_parser import load_b2_dictionary
                 b2_dict, k_dict = load_b2_dictionary(self.args.b2_dictionary)
                 if b2_dict:

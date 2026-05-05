@@ -326,7 +326,7 @@ class AliquotWrapper(BaseWrapper):
                 max_batch = self.max_batch_curves
                 if max_batch is None:
                     # Fall back to config value
-                    max_batch = self.config['programs']['gmp_ecm'].get('max_batch')
+                    max_batch = self.typed_config.programs.gmp_ecm.max_batch
 
                 config = TLevelConfig(
                     composite=str(current_composite),
@@ -989,10 +989,10 @@ Common test sequences:
 
     # Override factor logging config if requested
     if args.quiet_factors:
-        wrapper.config['logging']['log_factors_found'] = False
-        wrapper.cado.config['logging']['log_factors_found'] = False
-        wrapper.ecm.config['logging']['log_factors_found'] = False
-        wrapper.yafu.config['logging']['log_factors_found'] = False
+        wrapper.typed_config.logging.log_factors_found = False
+        wrapper.cado.typed_config.logging.log_factors_found = False
+        wrapper.ecm.typed_config.logging.log_factors_found = False
+        wrapper.yafu.typed_config.logging.log_factors_found = False
 
     print(f"\nComputing aliquot sequence starting from {args.start}")
     print("="*80)

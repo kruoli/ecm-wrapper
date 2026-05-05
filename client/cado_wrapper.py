@@ -23,12 +23,13 @@ class CADOWrapper(BaseWrapper):
         Returns:
             Command list for execution
         """
-        cado_path = os.path.expanduser(self.config['programs']['cado_nfs']['path'])
+        cado_cfg = self.typed_config.programs.cado_nfs
+        cado_path = os.path.expanduser(cado_cfg.path)
         cmd = ['python3', cado_path, composite]
 
         # Add threading parameter
         if threads is None:
-            threads = self.config['programs']['cado_nfs'].get('threads', 4)
+            threads = cado_cfg.threads
         cmd.extend(['-t', str(threads)])
 
         return cmd
@@ -105,10 +106,11 @@ class CADOWrapper(BaseWrapper):
         process: Optional[subprocess.Popen[str]] = None
 
         try:
-            self.logger.info(f"Running CADO-NFS on {len(composite)}-digit number with {threads or self.config['programs']['cado_nfs'].get('threads', 4)} threads")
+            cado_cfg = self.typed_config.programs.cado_nfs
+            self.logger.info(f"Running CADO-NFS on {len(composite)}-digit number with {threads or cado_cfg.threads} threads")
 
             # Run CADO-NFS
-            working_dir = os.path.expanduser(self.config['programs']['cado_nfs'].get('working_dir', '~'))
+            working_dir = os.path.expanduser(cado_cfg.working_dir)
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -160,7 +162,7 @@ class CADOWrapper(BaseWrapper):
                                     method='nfs', program="CADO-NFS")
 
         # Save raw output if configured
-        if self.config['execution']['save_raw_output']:
+        if self.typed_config.execution.save_raw_output:
             self.save_raw_output(results, 'cado-nfs')
 
         return results
@@ -173,7 +175,7 @@ class CADOWrapper(BaseWrapper):
         """Get CADO-NFS version."""
         from lib.parsing_utils import get_binary_version
         return get_binary_version(
-            self.config['programs']['cado_nfs']['path'],
+            self.typed_config.programs.cado_nfs.path,
             'cado',
             help_flag='--help',
             use_python=True

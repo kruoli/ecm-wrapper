@@ -208,7 +208,7 @@ def cpu_worker(wrapper: ECMWrapper, b1: int, b2: int, stage2_workers: int,
                 # Run stage 2
                 logger.info(f"[CPU Thread] [{idx}/{total}] Starting stage 2 for {number[:30]}...")
                 stage2_start = time.time()
-                early_termination = wrapper.config['programs']['gmp_ecm'].get('early_termination', True) and not continue_after_factor
+                early_termination = wrapper.typed_config.programs.gmp_ecm.early_termination and not continue_after_factor
                 executor = Stage2Executor(wrapper, residue_file, b1_actual, b2, None, stage2_workers, verbose)
                 stage2_result = executor.execute(early_termination, progress_interval)
                 stage2_time = time.time() - stage2_start
@@ -390,7 +390,7 @@ def main():
 
     # Resolve parameters
     b1 = args.b1
-    b2 = args.b2 if args.b2 is not None else wrapper.config['programs']['gmp_ecm'].get('default_b2', 0)
+    b2 = args.b2 if args.b2 is not None else (wrapper.typed_config.programs.gmp_ecm.default_b2 or 0)
     curves = args.curves  # Default is 1 (which is 3072 on GPU)
     use_gpu = not args.no_gpu
 

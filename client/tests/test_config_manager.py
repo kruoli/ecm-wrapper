@@ -268,7 +268,9 @@ logging:
         # This will fail if ConfigManager integration is broken
         wrapper = BaseWrapper(str(config_file))
 
-        assert wrapper.config is not None, "Config should be loaded"
+        assert wrapper.typed_config is not None, "Typed config should be loaded"
+        assert wrapper.typed_config.client.username == "testuser"
+        assert wrapper.typed_config.client.cpu_name == "testcpu"
         assert wrapper.client_id == "testuser-testcpu", "Client ID should be constructed"
 
         # API clients are lazily loaded, so initialize them first

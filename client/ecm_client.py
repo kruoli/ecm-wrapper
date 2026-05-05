@@ -26,6 +26,7 @@ from pathlib import Path
 
 from lib.ecm_executor import ECMWrapper
 from lib.work_modes import WorkLoopContext, get_work_mode
+from lib.work_args import WorkArgs
 from lib.arg_parser import create_client_parser
 
 
@@ -62,24 +63,16 @@ def check_setup_complete() -> bool:
     return True
 
 
-def _has_explicit_mode(args) -> bool:
+def _has_explicit_mode(args: WorkArgs) -> bool:
     """Check if user specified an explicit work mode via flags."""
-    # Direct mode flags
-    mode_flags = [
-        'composite', 'pm1', 'pp1', 'p1',
-        'stage1_only', 'stage2_only', 'standard', 'adaptive',
-    ]
-    for flag in mode_flags:
-        if getattr(args, flag, None):
-            return True
+    if (args.composite or args.pm1 or args.pp1 or args.p1
+            or args.stage1_only or args.stage2_only
+            or args.standard or args.adaptive):
+        return True
     # Implicit standard mode: user specified execution parameters
-    if getattr(args, 'b1', None) is not None:
+    if args.b1 is not None or args.tlevel is not None:
         return True
-    if getattr(args, 'tlevel', None) is not None:
-        return True
-    if getattr(args, 'two_stage', False):
-        return True
-    if getattr(args, 'multiprocess', False):
+    if args.two_stage or args.multiprocess:
         return True
     return False
 
@@ -125,39 +118,41 @@ def _prompt_work_mode(gpu_enabled: bool) -> str:
 def main():
     """Main entry point for ECM client."""
     parser = create_client_parser()
-    args = parser.parse_args()
+    ns = parser.parse_args()
 
     # Check for setup completion (unless --help was requested)
     if not check_setup_complete():
         sys.exit(1)
 
-    # ecm_client.py always operates in auto-work mode (implied)
-    args.auto_work = True
+    # Convert argparse.Namespace -> typed WorkArgs once at the entry point.
+    # auto_work is always True for ecm_client.py (server-coordinated mode).
+    work_args = WorkArgs.from_namespace(ns)
+    work_args.auto_work = True
 
     # Initialize wrapper
     wrapper = ECMWrapper('client.yaml')
 
     # Interactive mode selection if no explicit flags given
-    if not _has_explicit_mode(args):
-        gpu_enabled = wrapper.config.get('programs', {}).get('gmp_ecm', {}).get('gpu_enabled', False)
+    if not _has_explicit_mode(work_args):
+        gpu_enabled = wrapper.typed_config.programs.gmp_ecm.gpu_enabled
         choice = _prompt_work_mode(gpu_enabled)
 
         if choice == 'gpu':
-            args.stage1_only = True
+            work_args.stage1_only = True
         else:
-            args.adaptive = True
+            work_args.adaptive = True
 
     # Get client ID from wrapper (uses same format as abandon_work: username-cpu_name)
     client_id = wrapper.client_id
 
     # Determine work count limit
-    work_count_limit = args.work_count if hasattr(args, 'work_count') and args.work_count else None
+    work_count_limit = work_args.work_count or None
 
     # Create work loop context
     ctx = WorkLoopContext(
         wrapper=wrapper,
         client_id=client_id,
-        args=args,
+        args=work_args,
         work_count_limit=work_count_limit
     )
 

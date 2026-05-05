@@ -54,7 +54,7 @@ class StandardAutoWorkMode(WorkMode):
         composite = work['composite']
 
         has_b1 = self.args.b1 is not None
-        has_client_tlevel = hasattr(self.args, 'tlevel') and self.args.tlevel is not None
+        has_client_tlevel = self.args.tlevel is not None
 
         # Determine execution mode:
         # - Explicit B1 (with or without B2) → B1/B2 mode
@@ -77,7 +77,7 @@ class StandardAutoWorkMode(WorkMode):
         else:
             target_tlevel = server_target if server_target is not None else 35.0
 
-        if hasattr(self.args, 'start_tlevel') and self.args.start_tlevel is not None:
+        if self.args.start_tlevel is not None:
             start_tlevel = self.args.start_tlevel
         else:
             start_tlevel = work.get('current_t_level', 0.0)
@@ -108,17 +108,16 @@ class StandardAutoWorkMode(WorkMode):
             target_tlevel = bumped
 
         # Use workers for multiprocess mode OR two-stage mode (for CPU stage 2)
-        two_stage = getattr(self.args, 'two_stage', False)
-        if self.args.multiprocess or two_stage:
-            workers = resolve_worker_count(self.args, self.wrapper.config)
+        if self.args.multiprocess or self.args.two_stage:
+            workers = resolve_worker_count(self.args, self.wrapper.typed_config)
         else:
             workers = 1
 
         # Resolve max_batch from args or config
-        max_batch = getattr(self.args, 'max_batch', None) or get_max_batch_default(self.wrapper.config)
+        max_batch = self.args.max_batch or get_max_batch_default(self.wrapper.typed_config)
 
         # Resolve GPU settings for two-stage mode
-        _, gpu_device, gpu_curves = resolve_gpu_settings(self.args, self.wrapper.config)
+        _, gpu_device, gpu_curves = resolve_gpu_settings(self.args, self.wrapper.typed_config)
 
         config = TLevelConfig(
             composite=composite,
@@ -126,10 +125,10 @@ class StandardAutoWorkMode(WorkMode):
             start_t_level=start_tlevel,
             threads=workers,
             verbose=self.args.verbose,
-            progress_interval=getattr(self.args, 'progress_interval', 0),
+            progress_interval=self.args.progress_interval,
             max_batch_curves=max_batch,
-            use_two_stage=getattr(self.args, 'two_stage', False),
-            b2_multiplier=getattr(self.args, 'b2_multiplier', None) or 500.0,
+            use_two_stage=self.args.two_stage,
+            b2_multiplier=self.args.b2_multiplier or 500.0,
             b2_dictionary=getattr(self, '_b2_dictionary', None),
             pin_threads=resolve_pin_threads(self.args),
             project=self.args.project,
@@ -159,9 +158,9 @@ class StandardAutoWorkMode(WorkMode):
         else:
             b2 = self.args.b2
         curves = self.args.curves if self.args.curves else \
-                 (1 if self.args.two_stage else self.wrapper.config['programs']['gmp_ecm']['default_curves'])
+                 (1 if self.args.two_stage else self.wrapper.typed_config.programs.gmp_ecm.default_curves)
 
-        use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(self.args, self.wrapper.config)
+        use_gpu, gpu_device, gpu_curves = resolve_gpu_settings(self.args, self.wrapper.typed_config)
         sigma = parse_sigma_arg(self.args)
         param = resolve_param(self.args, use_gpu)
 
@@ -169,7 +168,7 @@ class StandardAutoWorkMode(WorkMode):
         result: FactorResult
 
         if self.args.two_stage and self.args.method == 'ecm':
-            workers = resolve_worker_count(self.args, self.wrapper.config)
+            workers = resolve_worker_count(self.args, self.wrapper.typed_config)
             print(f"Mode: two-stage GPU+CPU (B1={b1}, B2={b2}, curves={curves}, workers={workers})")
 
             two_stage_config = TwoStageConfig(
@@ -182,7 +181,7 @@ class StandardAutoWorkMode(WorkMode):
                 stage1_parametrization=param if param else 3,
                 threads=workers,
                 verbose=self.args.verbose,
-                progress_interval=getattr(self.args, 'progress_interval', 0),
+                progress_interval=self.args.progress_interval,
                 pin_threads=resolve_pin_threads(self.args),
                 gpu_device=gpu_device,
                 gpu_curves=gpu_curves
@@ -190,7 +189,7 @@ class StandardAutoWorkMode(WorkMode):
             result = self.wrapper.run_two_stage_v2(two_stage_config)
 
         elif self.args.multiprocess:
-            workers = resolve_worker_count(self.args, self.wrapper.config)
+            workers = resolve_worker_count(self.args, self.wrapper.typed_config)
             print(f"Mode: multiprocess (B1={b1}, B2={b2}, curves={curves}, workers={workers})")
 
             mp_config = MultiprocessConfig(
@@ -202,7 +201,7 @@ class StandardAutoWorkMode(WorkMode):
                 parametrization=param if param else 3,
                 method=self.args.method,
                 verbose=self.args.verbose,
-                progress_interval=getattr(self.args, 'progress_interval', 0),
+                progress_interval=self.args.progress_interval,
                 pin_threads=resolve_pin_threads(self.args)
             )
             result = self.wrapper.run_multiprocess_v2(mp_config)
@@ -220,8 +219,8 @@ class StandardAutoWorkMode(WorkMode):
                 parametrization=param if param else 3,
                 method=self.args.method,
                 verbose=self.args.verbose,
-                progress_interval=getattr(self.args, 'progress_interval', 0),
-                maxmem=getattr(self.args, 'maxmem', None),
+                progress_interval=self.args.progress_interval,
+                maxmem=self.args.maxmem,
             )
             result = self.wrapper.run_ecm_v2(ecm_config)
 
@@ -231,7 +230,7 @@ class StandardAutoWorkMode(WorkMode):
         self._results_dict['b1'] = self.args.b1
         self._results_dict['b2'] = b2
         self._results_dict['curves_requested'] = self.args.curves
-        use_gpu, _, _ = resolve_gpu_settings(self.args, self.wrapper.config)
+        use_gpu, _, _ = resolve_gpu_settings(self.args, self.wrapper.typed_config)
         self._results_dict['parametrization'] = self.args.param or (3 if use_gpu else 1)
 
         return result

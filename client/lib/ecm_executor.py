@@ -662,7 +662,7 @@ class ECMWrapper(BaseWrapper):
                 'interrupted': bool
             }
         """
-        ecm_path = self.config['programs']['gmp_ecm']['path']
+        ecm_path = self.typed_config.programs.gmp_ecm.path
 
         # Build command using shared builder
         cmd = build_ecm_command(
@@ -842,7 +842,7 @@ class ECMWrapper(BaseWrapper):
         import shutil
 
         try:
-            failed_dir = Path(self.config['execution'].get('failed_uploads_dir', 'data/failed_uploads'))
+            failed_dir = Path(self.typed_config.execution.failed_uploads_dir)
             failed_dir.mkdir(parents=True, exist_ok=True)
 
             # Create filename with timestamp
@@ -984,7 +984,7 @@ class ECMWrapper(BaseWrapper):
         """Get GMP-ECM version."""
         from lib.parsing_utils import get_binary_version
         return get_binary_version(
-            self.config['programs']['gmp_ecm']['path'],
+            self.typed_config.programs.gmp_ecm.path,
             'ecm'
         )
 

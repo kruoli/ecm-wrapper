@@ -59,8 +59,9 @@ class YAFUWrapper(BaseWrapper):
         """
         if threads is not None:
             cmd.extend(['-threads', str(threads)])
-        elif 'threads' in self.config.get('programs', {}).get('yafu', {}):
-            cmd.extend(['-threads', str(self.config['programs']['yafu']['threads'])])
+        else:
+            # YAFUConfig.threads has a default of 8, so always pass it.
+            cmd.extend(['-threads', str(self.typed_config.programs.yafu.threads)])
 
     def _build_yafu_ecm_cmd(self, method: str, b1: Optional[int] = None, b2: Optional[int] = None,
                            curves: int = 100, composite: str = "") -> tuple[List[str], str]:
@@ -71,7 +72,7 @@ class YAFUWrapper(BaseWrapper):
             - command_list: YAFU binary and flags only (no expression)
             - stdin_input: The factor() expression to pass via stdin
         """
-        yafu_path = self.config['programs']['yafu']['path']
+        yafu_path = self.typed_config.programs.yafu.path
 
         # Build command with just binary and flags (no expression)
         cmd = [yafu_path]
@@ -124,7 +125,7 @@ class YAFUWrapper(BaseWrapper):
             - command_list: YAFU binary and flags only (no expression)
             - stdin_input: The factor()/siqs()/nfs() expression to pass via stdin
         """
-        yafu_path = self.config['programs']['yafu']['path']
+        yafu_path = self.typed_config.programs.yafu.path
 
         # Build command with just binary and flags (no expression)
         cmd = [yafu_path]
@@ -172,7 +173,7 @@ class YAFUWrapper(BaseWrapper):
                 self.log_factor_found(composite, factor, b1, b2, curves, method=method, program=f"YAFU ({method.upper()})")
 
         # Save raw output if configured
-        if self.config['execution']['save_raw_output']:
+        if self.typed_config.execution.save_raw_output:
             self.save_raw_output(results, f'yafu-{method}')
 
         # Clean up YAFU temporary files
@@ -216,7 +217,7 @@ class YAFUWrapper(BaseWrapper):
                                     method=method or 'auto', program=f"YAFU ({(method or 'AUTO').upper()})")
 
         # Save raw output if configured
-        if self.config['execution']['save_raw_output']:
+        if self.typed_config.execution.save_raw_output:
             self.save_raw_output(results, f'yafu-{method or "auto"}')
 
         # Clean up YAFU temporary files
@@ -235,7 +236,7 @@ class YAFUWrapper(BaseWrapper):
         """Get YAFU version."""
         from lib.parsing_utils import get_binary_version
         return get_binary_version(
-            self.config['programs']['yafu']['path'],
+            self.typed_config.programs.yafu.path,
             'yafu'
         )
 

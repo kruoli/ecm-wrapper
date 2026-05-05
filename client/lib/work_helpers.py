@@ -5,11 +5,11 @@ Helper functions for ECM work assignment display and management.
 These utilities eliminate duplicated work handling code in auto-work mode.
 """
 from typing import Optional, Dict, Any
-import argparse
 import sys
 import time
 
 from .user_output import UserOutput
+from .work_args import WorkArgs
 
 
 def print_work_header(work_id: Optional[str], composite: str, digit_length: int,
@@ -111,7 +111,7 @@ def _reset_no_work_count() -> None:
     _no_work_count = 0
 
 
-def request_ecm_work(api_client, client_id: str, args: argparse.Namespace,
+def request_ecm_work(api_client, client_id: str, args: WorkArgs,
                     logger) -> Optional[Dict[str, Any]]:
     """
     Request ECM work from server with automatic retry on failure.
@@ -119,36 +119,34 @@ def request_ecm_work(api_client, client_id: str, args: argparse.Namespace,
     Args:
         api_client: API client instance
         client_id: Client identifier
-        args: Command-line arguments containing filter parameters
+        args: Typed WorkArgs containing filter parameters
         logger: Logger instance for info messages
 
     Returns:
         Work assignment dictionary or None if no work available after retry
     """
-    # If client specifies --tlevel, filter out composites already past that level
-    client_tlevel = getattr(args, 'tlevel', None)
-
     work = api_client.get_ecm_work(
         client_id=client_id,
-        min_target_tlevel=args.min_target_tlevel if hasattr(args, 'min_target_tlevel') else None,
-        max_target_tlevel=args.max_target_tlevel if hasattr(args, 'max_target_tlevel') else None,
-        max_current_tlevel=client_tlevel,
-        priority=args.priority if hasattr(args, 'priority') else None,
-        min_digits=args.min_digits if hasattr(args, 'min_digits') else None,
-        max_digits=args.max_digits if hasattr(args, 'max_digits') else None,
-        work_type=args.work_type if hasattr(args, 'work_type') else 'standard',
-        project=args.project if hasattr(args, 'project') else None
+        min_target_tlevel=args.min_target_tlevel,
+        max_target_tlevel=args.max_target_tlevel,
+        # If client specifies --tlevel, filter out composites already past that level
+        max_current_tlevel=args.tlevel,
+        priority=args.priority,
+        min_digits=args.min_digits,
+        max_digits=args.max_digits,
+        work_type=args.work_type,
+        project=args.project
     )
 
     if not work:
-        _handle_no_work(logger, "ECM", exit_on_no_work=getattr(args, 'exit_on_no_work', False))
+        _handle_no_work(logger, "ECM", exit_on_no_work=args.exit_on_no_work)
     else:
         _reset_no_work_count()
 
     return work
 
 
-def request_p1_work(api_client, client_id: str, args: argparse.Namespace,
+def request_p1_work(api_client, client_id: str, args: WorkArgs,
                     logger) -> Optional[Dict[str, Any]]:
     """
     Request P-1/P+1 work from server with automatic retry on failure.
@@ -159,16 +157,15 @@ def request_p1_work(api_client, client_id: str, args: argparse.Namespace,
     Args:
         api_client: API client instance
         client_id: Client identifier
-        args: Command-line arguments containing filter parameters and method flags
+        args: Typed WorkArgs containing filter parameters and method flags
         logger: Logger instance for info messages
 
     Returns:
         Work assignment dictionary or None if no work available after retry
     """
-    # Determine method from args
-    if getattr(args, 'pm1', False):
+    if args.pm1:
         method = 'pm1'
-    elif getattr(args, 'pp1', False):
+    elif args.pp1:
         method = 'pp1'
     else:
         method = 'p1'
@@ -176,17 +173,17 @@ def request_p1_work(api_client, client_id: str, args: argparse.Namespace,
     work = api_client.get_p1_work(
         client_id=client_id,
         method=method,
-        min_target_tlevel=args.min_target_tlevel if hasattr(args, 'min_target_tlevel') else None,
-        max_target_tlevel=args.max_target_tlevel if hasattr(args, 'max_target_tlevel') else None,
-        priority=args.priority if hasattr(args, 'priority') else None,
-        min_digits=args.min_digits if hasattr(args, 'min_digits') else None,
-        max_digits=args.max_digits if hasattr(args, 'max_digits') else None,
-        work_type=args.work_type if hasattr(args, 'work_type') else 'standard',
-        project=args.project if hasattr(args, 'project') else None
+        min_target_tlevel=args.min_target_tlevel,
+        max_target_tlevel=args.max_target_tlevel,
+        priority=args.priority,
+        min_digits=args.min_digits,
+        max_digits=args.max_digits,
+        work_type=args.work_type,
+        project=args.project
     )
 
     if not work:
-        _handle_no_work(logger, "P1", exit_on_no_work=getattr(args, 'exit_on_no_work', False))
+        _handle_no_work(logger, "P1", exit_on_no_work=args.exit_on_no_work)
     else:
         _reset_no_work_count()
 

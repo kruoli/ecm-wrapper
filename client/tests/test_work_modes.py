@@ -13,7 +13,6 @@ Tests:
 import sys
 from pathlib import Path
 from unittest.mock import Mock, MagicMock, patch
-import argparse
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -24,6 +23,7 @@ from lib.work_modes import (
     StandardAutoWorkMode, Stage1ProducerMode, Stage2ConsumerMode,
     CompositeTargetMode, get_work_mode
 )
+from lib.work_args import WorkArgs
 from lib.ecm_config import FactorResult
 
 
@@ -32,10 +32,6 @@ class MockWrapper:
 
     def __init__(self):
         import threading
-        self.config = {
-            'programs': {'gmp_ecm': {'default_curves': 100}},
-            'execution': {'residue_dir': 'data/residues'}
-        }
         self.logger = Mock()
         self.interrupted = False
         self.graceful_shutdown_requested = False
@@ -56,25 +52,8 @@ class MockWrapper:
 
 
 def create_mock_args(**kwargs):
-    """Create argparse Namespace with default values."""
-    defaults = {
-        'composite': None,
-        'stage1_only': False,
-        'stage2_only': False,
-        'b1': None,
-        'b2': None,
-        'curves': None,
-        'tlevel': None,
-        'verbose': False,
-        'multiprocess': False,
-        'two_stage': False,
-        'method': 'ecm',
-        'project': None,
-        'workers': 0,
-        'param': None,
-    }
-    defaults.update(kwargs)
-    return argparse.Namespace(**defaults)
+    """Create a WorkArgs instance with overrides applied."""
+    return WorkArgs(**kwargs)
 
 
 class TestWorkLoopContext:

@@ -34,9 +34,9 @@ class P1WorkMode(WorkMode):
         super().__init__(ctx)
 
         # Determine which methods to run
-        self._run_pm1 = getattr(self.args, 'pm1', False) or getattr(self.args, 'p1', False)
-        self._run_pp1 = getattr(self.args, 'pp1', False) or getattr(self.args, 'p1', False)
-        self._pp1_curves = getattr(self.args, 'pp1_curves', 3)
+        self._run_pm1 = self.args.pm1 or self.args.p1
+        self._run_pp1 = self.args.pp1 or self.args.p1
+        self._pp1_curves = self.args.pp1_curves
 
         # Set human-readable mode name
         if self._run_pm1 and self._run_pp1:
@@ -115,7 +115,7 @@ class P1WorkMode(WorkMode):
                 method='pm1',
                 parametrization=1,
                 verbose=self.args.verbose,
-                progress_interval=getattr(self.args, 'progress_interval', 0),
+                progress_interval=self.args.progress_interval,
             )
             self._pm1_result = self.wrapper.run_ecm_v2(pm1_config)
             combined_result.curves_run += self._pm1_result.curves_run
@@ -138,7 +138,7 @@ class P1WorkMode(WorkMode):
                 method='pp1',
                 parametrization=1,
                 verbose=self.args.verbose,
-                progress_interval=getattr(self.args, 'progress_interval', 0),
+                progress_interval=self.args.progress_interval,
             )
             self._pp1_result = self.wrapper.run_ecm_v2(pp1_config)
             combined_result.curves_run += self._pp1_result.curves_run

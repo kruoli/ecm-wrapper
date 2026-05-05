@@ -56,12 +56,14 @@ class ExecutionConfig:
     failed_uploads_dir: str = "data/failed_uploads"
     preserve_failed_uploads: bool = True
     save_raw_output: bool = True
+    queue_dir: str = "data/queue"  # Persistent submission queue for failed API operations
 
     def ensure_dirs_exist(self) -> None:
         """Create output directories if they don't exist."""
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         Path(self.residue_dir).mkdir(parents=True, exist_ok=True)
         Path(self.failed_uploads_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.queue_dir).mkdir(parents=True, exist_ok=True)
 
 
 @dataclass
@@ -77,6 +79,17 @@ class LoggingConfig:
 
 
 @dataclass
+class GPUConfig:
+    """Nested GPU-specific tuning under programs.gmp_ecm.gpu.
+
+    Distinct from the flat `gpu_enabled` / `gpu_device` / `gpu_curves` fields
+    on GMPECMConfig (which were added before nesting became necessary). New
+    GPU-only knobs go here.
+    """
+    curves_per_batch: int = 1000  # Curves to request per GPU batch in stage1-only mode
+
+
+@dataclass
 class GMPECMConfig:
     """GMP-ECM program configuration."""
     path: str = "ecm"
@@ -89,10 +102,12 @@ class GMPECMConfig:
     gpu_curves: Optional[int] = None
     workers: int = 8  # Parallel workers (multiprocess ECM, stage2 threads)
     stage2_max_b1: Optional[int] = None  # Max B1 for stage 2 residues (RAM limit)
+    max_batch: Optional[int] = None  # Max curves per GPU batch in two-stage t-level mode
     pm1_b1: int = 2900000000
     pm1_b2: int = 1000000000000000
     pp1_b1: int = 110000000
     pp1_b2: int = 500000000000
+    gpu: GPUConfig = field(default_factory=GPUConfig)
 
 
 @dataclass
@@ -174,6 +189,7 @@ class AppConfig:
                 'failed_uploads_dir': self.execution.failed_uploads_dir,
                 'preserve_failed_uploads': self.execution.preserve_failed_uploads,
                 'save_raw_output': self.execution.save_raw_output,
+                'queue_dir': self.execution.queue_dir,
             },
             'logging': {
                 'file': self.logging.file,
@@ -192,10 +208,14 @@ class AppConfig:
                     'gpu_curves': self.programs.gmp_ecm.gpu_curves,
                     'workers': self.programs.gmp_ecm.workers,
                     'stage2_max_b1': self.programs.gmp_ecm.stage2_max_b1,
+                    'max_batch': self.programs.gmp_ecm.max_batch,
                     'pm1_b1': self.programs.gmp_ecm.pm1_b1,
                     'pm1_b2': self.programs.gmp_ecm.pm1_b2,
                     'pp1_b1': self.programs.gmp_ecm.pp1_b1,
                     'pp1_b2': self.programs.gmp_ecm.pp1_b2,
+                    'gpu': {
+                        'curves_per_batch': self.programs.gmp_ecm.gpu.curves_per_batch,
+                    },
                 },
                 'yafu': {
                     'path': self.programs.yafu.path,
@@ -259,9 +279,12 @@ class TypedConfigLoader:
         endpoints = []
         if 'endpoints' in raw:
             for ep in raw['endpoints']:
+                url = ep.get('url', '')
+                # If 'name' is omitted, fall back to URL (matches legacy dict
+                # behavior in BaseWrapper._ensure_api_clients).
                 endpoints.append(APIEndpoint(
-                    url=ep.get('url', ''),
-                    name=ep.get('name', 'default'),
+                    url=url,
+                    name=ep.get('name') or url or 'default',
                 ))
 
         return APIConfig(
@@ -286,6 +309,7 @@ class TypedConfigLoader:
             failed_uploads_dir=raw.get('failed_uploads_dir', 'data/failed_uploads'),
             preserve_failed_uploads=raw.get('preserve_failed_uploads', True),
             save_raw_output=raw.get('save_raw_output', True),
+            queue_dir=raw.get('queue_dir', 'data/queue'),
         )
 
     def _parse_logging(self, raw: Dict[str, Any]) -> LoggingConfig:
@@ -331,10 +355,19 @@ class TypedConfigLoader:
             gpu_device=self._safe_int(raw.get('gpu_device'), 0),
             gpu_curves=self._safe_optional_int(raw.get('gpu_curves')),
             workers=self._safe_int(raw.get('workers', raw.get('stage2_workers')), 8),
+            stage2_max_b1=self._safe_optional_int(raw.get('stage2_max_b1')),
+            max_batch=self._safe_optional_int(raw.get('max_batch')),
             pm1_b1=self._safe_int(raw.get('pm1_b1'), 2900000000),
             pm1_b2=self._safe_int(raw.get('pm1_b2'), 1000000000000000),
             pp1_b1=self._safe_int(raw.get('pp1_b1'), 110000000),
             pp1_b2=self._safe_int(raw.get('pp1_b2'), 500000000000),
+            gpu=self._parse_gpu(raw.get('gpu', {})),
+        )
+
+    def _parse_gpu(self, raw: Dict[str, Any]) -> GPUConfig:
+        """Parse nested GPU configuration."""
+        return GPUConfig(
+            curves_per_batch=self._safe_int(raw.get('curves_per_batch'), 1000),
         )
 
     def _parse_yafu(self, raw: Dict[str, Any]) -> YAFUConfig:

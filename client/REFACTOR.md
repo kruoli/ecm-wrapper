@@ -8,7 +8,7 @@ each phase). Tick items as they land.
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1 — Mechanical | **complete** | All items done 2026-04-27 |
-| Phase 2 — Typed surface | pending | Depends on Phase 1 cleanup |
+| Phase 2 — Typed surface | **complete** | Items 3 + 4 done 2026-04-28/29 |
 | Phase 3 — Architectural | pending | Highest reward, do with test suite running |
 
 ---
@@ -94,20 +94,91 @@ No behavior change. Each can ship independently.
 
 These depend on Phase 1 being landed. Decide between 3a and 3b before starting 4.
 
-- [ ] **3. Decide the `typed_config` migration: finish or delete.** `typed_config.py`
-  defines complete dataclasses; `BaseWrapper.typed_config` is wired up; *but*
-  mainline code still does `wrapper.config['programs']['gmp_ecm'].get(...)`
-  everywhere (~50 sites). Currently dead scaffolding.
-  - **3a. Finish**: replace `wrapper.config[...]` chains with typed access.
-    Type safety + IDE autocomplete. Mostly mechanical.
-  - **3b. Delete**: `typed_config.py` (358 lines) + the property + tests.
-    Choose this if 3a won't realistically happen in the next quarter.
+- [x] **3. Finish the `typed_config` migration.** *(done 2026-04-28)*
+  Decision: option **3a (finish)**. Endpoint state: `BaseWrapper.config` (the
+  dict) gets removed; `BaseWrapper.typed_config` becomes the single source.
+  47 production call sites to migrate.
 
-- [ ] **4. Typed `WorkArgs` dataclass.** 41+ `getattr(self.args, 'flag', default)`
-  calls in `work_modes.py` alone. Defensive coding because parsers expose
-  different flag sets. Replace with a typed dataclass populated once at the
-  entry point; per-mode subclasses if they need narrower contracts. Future
-  parser changes become real `AttributeError`s instead of silent defaults.
+  **Sub-step 3.1 — schema additions** *(done 2026-04-27)*: extended
+  `typed_config.py` to cover keys the audit found missing:
+  - `GMPECMConfig.max_batch: Optional[int] = None`
+  - `GMPECMConfig.gpu: GPUConfig` (new sub-dataclass, `curves_per_batch: int = 1000`)
+  - `ExecutionConfig.queue_dir: str = "data/queue"`
+  - Bonus fix: `_parse_gmp_ecm` now actually reads `stage2_max_b1` from YAML
+    (was previously dropped on the read side — sibling bug to item 12).
+  - 13 new round-trip tests in `tests/test_typed_config.py`.
+
+  **Sub-step 3.2 — consumer migration** *(done 2026-04-28)*: 47 sites across
+  `lib/arg_parser.py`, `lib/base_wrapper.py`, `lib/work_modes/*.py`,
+  `lib/ecm_executor.py`, `lib/execution_engine.py`, `lib/stage2_executor.py`,
+  `lib/ecm_modes.py`, `cado_wrapper.py`, `yafu_wrapper.py`,
+  `aliquot_wrapper.py`, `ecm_wrapper.py`, `ecm_client.py`, and
+  `scripts/run_batch_pipeline.py`. Migrate in dependency order
+  (helpers first, then leaves, then entry points).
+
+  **Sub-step 3.3 — remove `BaseWrapper.config`** *(done 2026-04-28)*:
+  `self.config` (dict) and the lazy `_typed_config` property are gone from
+  `BaseWrapper`. `__init__` now eagerly loads `self.typed_config` via
+  `TypedConfigLoader().load(config_path)` and never materializes the raw
+  dict on the wrapper. All call sites (47) read `self.typed_config.*`.
+  Dead `self.config = {...}` block in `tests/test_work_modes.py::MockWrapper`
+  was removed (it was never read). `ConfigManager` itself is retained —
+  `TypedConfigLoader` still uses `ConfigManager.load_config` internally to
+  perform the YAML+local deep merge before parsing into typed objects;
+  that's an implementation detail, not a public surface. Verification:
+  431 passed, 8 skipped across the full test suite.
+
+  **Watch-outs surfaced by the audit:**
+  - Mutation site at `aliquot_wrapper.py:992` writes
+    `wrapper.config['logging']['log_factors_found'] = False`. After migration
+    this becomes a typed attribute mutation; observable behavior changes
+    slightly because today the dict and typed_config are independent objects
+    that can drift, and after migration there's only one source.
+  - The flat `gpu_enabled`/`gpu_device`/`gpu_curves` fields on `GMPECMConfig`
+    coexist with the new nested `gpu` sub-dataclass. Awkward but matches the
+    YAML/code reality. Consolidating would break user-facing yamls and is
+    deferred.
+
+- [x] **4. Typed `WorkArgs` dataclass.** *(done 2026-04-29)*
+  New `lib/work_args.py` defines a flat `WorkArgs` dataclass covering every
+  flag `create_client_parser()` exposes plus the runtime-set `auto_work`.
+  `WorkArgs.from_namespace(ns)` copies known fields and silently drops
+  unknown ones, so the parser shape and the typed surface stay decoupled.
+
+  `WorkLoopContext.args` is now `WorkArgs` instead of `argparse.Namespace`.
+  `ecm_client.py` converts once at the entry point (after the
+  `auto_work`/interactive-mode mutations). All 41 `getattr(self.args, ...)`
+  sites in `work_modes/*.py` collapse to direct attribute access — future
+  parser changes become real `AttributeError`s.
+
+  **Other surfaces touched:**
+  - `lib/work_helpers.py`: `request_ecm_work` / `request_p1_work` typed as
+    `WorkArgs`; the cluster of `args.X if hasattr(args, 'X') else None`
+    lines is gone.
+  - `lib/arg_parser.py`: `resolve_pin_threads` / `resolve_worker_count` /
+    `resolve_gpu_settings` accept `ArgsLike = Union[Namespace, WorkArgs]`
+    via duck typing; defensive `getattr` defaults removed (both parsers
+    expose the relevant fields).
+  - `lib/ecm_arg_helpers.py`: same treatment for `parse_sigma_arg` /
+    `resolve_param`.
+
+  Decided **not** to do per-mode subclasses — every work mode reads from the
+  same client parser, and the field set is small enough that one flat
+  dataclass is the cleanest contract.
+
+  **Out of scope (deferred):**
+  - `validate_ecm_args` in `arg_parser.py` still has one `getattr` for
+    `b2_multiplier`; it's only called from `ecm_wrapper.py` (manual mode,
+    raw Namespace). Tracked under the "polish" list — per-mode validators
+    would clean it up.
+  - `ecm_wrapper.py` and `lib/ecm_modes.py` keep argparse.Namespace; they
+    don't go through the work-loop and have their own resolution flow
+    (`ResolvedParams`).
+
+  **Verification:** 442 passed, 8 skipped. New `tests/test_work_args.py`
+  (11 tests) covers defaults, `from_namespace` round-trip, unknown-attr
+  drop, and post-construction mutability (the auto_work/stage1_only
+  pattern in `ecm_client.py`).
 
 ---
 

@@ -15,6 +15,7 @@ echo ""
 # ============================================================
 echo "🔍 Detecting GPU architecture..."
 ECM_VERSION="ecm86"  # Default fallback
+CUDA_MAJOR=""
 
 if command -v nvidia-smi &> /dev/null; then
     # Get CUDA compute capability and GPU name
@@ -54,6 +55,32 @@ if command -v nvidia-smi &> /dev/null; then
     fi
 else
     echo "⚠️  nvidia-smi not found, using default (ecm86)"
+fi
+
+if command -v nvcc &> /dev/null; then
+    NVCC_VERSION_OUTPUT=$(nvcc --version 2>/dev/null || true)
+    CUDA_RELEASE=$(echo "$NVCC_VERSION_OUTPUT" | sed -n 's/.*release \([0-9][0-9]*\)\..*/\1/p' | head -1)
+
+    if [ ! -z "$CUDA_RELEASE" ]; then
+        CUDA_MAJOR="$CUDA_RELEASE"
+        echo "   CUDA toolkit: v$CUDA_MAJOR"
+
+        if [ "$CUDA_MAJOR" -eq "13" ]; then
+            case "$ECM_VERSION" in
+                ecm86|ecm90)
+                    ECM_VERSION="${ECM_VERSION}v13"
+                    echo "✓ Using CUDA v13 ECM binary directory: $ECM_VERSION"
+                    ;;
+                *)
+                    echo "ℹ️  No CUDA v13-specific binary directory for $ECM_VERSION"
+                    ;;
+            esac
+        fi
+    else
+        echo "⚠️  Could not parse nvcc version, using $ECM_VERSION"
+    fi
+else
+    echo "ℹ️  nvcc not found, using $ECM_VERSION"
 fi
 
 echo "   Using ECM binary: $ECM_VERSION"

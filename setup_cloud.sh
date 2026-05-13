@@ -33,7 +33,11 @@ if command -v nvidia-smi &> /dev/null; then
         MAJOR=$(echo "$COMPUTE_CAP_RAW" | cut -d'.' -f1)
         MINOR=$(echo "$COMPUTE_CAP_RAW" | cut -d'.' -f2)
 
-        if [ "$MAJOR" -ge "9" ]; then
+        if [ "$MAJOR" -ge "12" ]; then
+            # Blackwell and newer (RTX 50-series, B-series, etc.)
+            ECM_VERSION="ecm120"
+            echo "✓ Using ecm120 (CUDA sm_120+ / Blackwell)"
+        elif [ "$MAJOR" -ge "9" ]; then
             # Hopper and newer (H100, etc.)
             ECM_VERSION="ecm90"
             echo "✓ Using ecm90 (CUDA sm_90+ / Hopper)"
@@ -67,7 +71,7 @@ if command -v nvcc &> /dev/null; then
 
         if [ "$CUDA_MAJOR" -eq "13" ]; then
             case "$ECM_VERSION" in
-                ecm86|ecm90)
+                ecm86|ecm90|ecm120)
                     ECM_VERSION="${ECM_VERSION}v13"
                     echo "✓ Using CUDA v13 ECM binary directory: $ECM_VERSION"
                     ;;

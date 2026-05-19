@@ -404,13 +404,13 @@ class WorkAssignmentService:
         if not work:
             return False
 
-        work.curves_completed = curves_completed
-        work.progress_message = message
-        work.last_progress_at = datetime.utcnow()
-
         # Extend deadline if making good progress
         if curves_completed > work.curves_completed:
             work.extend_deadline()
+
+        work.curves_completed = curves_completed
+        work.progress_message = message
+        work.last_progress_at = datetime.utcnow()
 
         db.flush()  # Make changes visible within transaction
         return True

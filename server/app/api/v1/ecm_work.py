@@ -155,20 +155,22 @@ def get_ecm_work(
             ECMResidue.status.in_(['available', 'claimed'])
         ).correlate(Composite).exists())
 
-        # Apply sorting strategy based on work_type
+        # Apply sorting strategy based on work_type.
+        # FOR UPDATE SKIP LOCKED holds the row until the WorkAssignment INSERT
+        # commits, so two concurrent requests can't both pick the same composite.
         if work_type == "progressive":
             # Progressive: prioritize composites with least ECM work done
             composite = query.order_by(
                 Composite.current_t_level.asc(),
                 Composite.target_t_level.asc(),
                 Composite.digit_length.asc()
-            ).first()
+            ).with_for_update(skip_locked=True, of=Composite).first()
         else:  # "standard"
             # Standard: prioritize easiest composites first (by target t-level, which accounts for SNFS)
             composite = query.order_by(
                 Composite.target_t_level.asc(),
                 Composite.created_at.asc()
-            ).first()
+            ).with_for_update(skip_locked=True, of=Composite).first()
 
         # No work available
         if not composite:
@@ -461,7 +463,9 @@ def get_p1_work(
                 Composite.created_at.asc()
             )
 
-        assigned_composite = query.first()
+        # Lock the chosen row until the WorkAssignment INSERT commits so
+        # concurrent /p1-work callers can't both claim the same composite.
+        assigned_composite = query.with_for_update(skip_locked=True, of=Composite).first()
 
         if not assigned_composite:
             response_data = {

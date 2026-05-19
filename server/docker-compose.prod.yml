@@ -4,8 +4,12 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     ports:
-      - "8000:8000"  # Expose API on host port 8000 for nginx proxy
+      # Bind to 127.0.0.1 so the API is only reachable via nginx on the
+      # same host. Docker manipulates iptables directly and bypasses ufw,
+      # so "8000:8000" would expose the port even with a firewall.
+      - "127.0.0.1:8000:8000"
     environment:
+      ENV: production
       DATABASE_URL_FILE: /run/secrets/database_url
       # Security keys read from secret files
       SECRET_KEY_FILE: /run/secrets/api_secret_key

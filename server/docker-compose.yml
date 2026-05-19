@@ -5,8 +5,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    ports:
-      - "8000:8000"
+    # ports: ignored when network_mode: host. Lockdown is in the uvicorn
+    # --host flag below.
     environment:
       # WARNING: DEVELOPMENT/EXAMPLE CONFIGURATION ONLY!
       # For production, use docker-compose.prod.yml with Docker secrets.
@@ -15,4 +15,4 @@ services:
       SECRET_KEY: dev-secret-key-change-in-production
     network_mode: host  # Allows container to access localhost PostgreSQL
     restart: unless-stopped
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 127.0.0.1 --port 8000"

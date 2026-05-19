@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 from typing import Tuple, Literal
 import logging
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 
+from ...rate_limit import get_real_client_ip
 from ...database import get_db
 from ...dependencies import get_composite_service
 from ...schemas.submit import SubmitResultRequest, SubmitResultResponse
@@ -21,7 +21,7 @@ router = APIRouter()
 
 # Initialize rate limiter - 30 submissions per minute per IP
 # Stage 2 consumers can submit rapidly when processing multiple residues
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=get_real_client_ip)
 
 @router.post("/submit_result", response_model=SubmitResultResponse)
 @limiter.limit("30/minute")

@@ -48,6 +48,14 @@ class Settings(BaseSettings):
         description="PostgreSQL connection string"
     )
 
+    # Environment ("development" or "production"). When set to "production"
+    # the secret_key/admin_api_key validators raise on the default values
+    # instead of warning, so a misconfigured deploy fails fast.
+    environment: str = Field(
+        default=os.getenv("ENV", "development"),
+        description="Deployment environment: 'development' or 'production'"
+    )
+
     # API
     api_title: str = "ECM Distributed Factorization API"
     api_version: str = "1.0.0"
@@ -73,6 +81,19 @@ class Settings(BaseSettings):
         default=os.getenv("RESIDUE_STORAGE_PATH", "data/residues"),
         description="Path to store ECM residue files for two-stage decoupling"
     )
+
+    # Trusted reverse proxies. Comma-separated list of IPs whose
+    # CF-Connecting-IP / X-Forwarded-For headers we will honor. Requests
+    # from anywhere else have those headers ignored (prevents IP spoofing
+    # against the rate limiter when uvicorn is reachable outside nginx).
+    trusted_proxies: str = Field(
+        default=os.getenv("TRUSTED_PROXIES", "127.0.0.1,::1"),
+        description="Comma-separated list of trusted proxy IPs"
+    )
+
+    @property
+    def trusted_proxies_set(self) -> set:
+        return {ip.strip() for ip in self.trusted_proxies.split(",") if ip.strip()}
 
     # Security
     secret_key: str = Field(
@@ -100,15 +121,25 @@ class Settings(BaseSettings):
         return v
 
     @validator("secret_key")
-    def validate_secret_key(cls, v):
+    def validate_secret_key(cls, v, values):
         if v == "dev-secret-key-change-in-production":
+            if values.get("environment") == "production":
+                raise ValueError(
+                    "SECRET_KEY is the default placeholder but ENV=production — "
+                    "refusing to start. Set SECRET_KEY (or SECRET_KEY_FILE) to a real value."
+                )
             import warnings
             warnings.warn("Using default secret key - change for production!", UserWarning)
         return v
 
     @validator("admin_api_key")
-    def validate_admin_api_key(cls, v):
+    def validate_admin_api_key(cls, v, values):
         if v == "dev-admin-key-change-in-production":
+            if values.get("environment") == "production":
+                raise ValueError(
+                    "ADMIN_API_KEY is the default placeholder but ENV=production — "
+                    "refusing to start. Set ADMIN_API_KEY (or ADMIN_API_KEY_FILE) to a real value."
+                )
             import warnings
             warnings.warn("Using default admin API key - change for production!", UserWarning)
         return v

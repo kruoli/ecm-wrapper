@@ -348,7 +348,9 @@ class ResidueManager:
             ECMResidue.created_at.asc()
         )
 
-        residue = query.first()
+        # Lock the residue row until claim_residue() updates status='claimed'
+        # in the same transaction, preventing two clients from grabbing it.
+        residue = query.with_for_update(skip_locked=True, of=ECMResidue).first()
         if residue:
             logger.info(f"Found available residue ID {residue.id} for client {client_id}")
         else:

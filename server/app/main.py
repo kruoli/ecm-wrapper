@@ -14,9 +14,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import get_settings
-from .database import engine
 from .dependencies import AdminAuthRedirect
-from .models.base import Base
 from .api.v1.router import v1_router
 from .utils.html_helpers import get_unauthorized_redirect_html
 
@@ -63,8 +61,10 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
+# Schema is owned by Alembic — see Dockerfile CMD which runs
+# `alembic upgrade head` before uvicorn. Do NOT call Base.metadata.create_all()
+# here; it papers over missing migrations and lets the live schema drift
+# silently from migration history.
 
 # Get settings
 settings = get_settings()

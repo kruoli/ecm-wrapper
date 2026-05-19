@@ -29,7 +29,9 @@ services:
       dockerfile: docker/Dockerfile
     container_name: ecm-api
     ports:
-      - "${API_PORT:-8000}:8000"
+      # Bind to 127.0.0.1 so the API is only reachable via a reverse proxy
+      # on the same host. Override API_HOST to expose externally if needed.
+      - "${API_HOST:-127.0.0.1}:${API_PORT:-8000}:8000"
     environment:
       DATABASE_URL: postgresql://ecm_user:${DB_PASSWORD}@postgres:5432/ecm_distributed
       SECRET_KEY: ${SECRET_KEY}

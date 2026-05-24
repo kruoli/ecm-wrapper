@@ -266,11 +266,23 @@ class Stage2ConsumerMode(WorkMode):
 
     def cleanup_on_failure(self, work: Optional[Dict[str, Any]], error: BaseException) -> None:
         if self.current_residue_id:
-            if not self.api_client.abandon_residue(self.ctx.client_id, self.current_residue_id):
-                # Network likely down - queue abandonment so residue gets released on reconnect
-                self.wrapper.submission_queue.enqueue_residue_abandonment(
-                    self.current_residue_id, self.ctx.client_id
+            queue = self.wrapper.submission_queue
+            if queue.has_pending_result_for_residue(self.current_residue_id):
+                # Stage 2 finished, but submitting the result failed and the
+                # queue now holds it for retry. Hold the residue claim so the
+                # 24h timeout (not another client) covers us until the queue
+                # drains and chains complete_residue — re-claiming the same
+                # residue here would waste hours of CPU re-doing stage 2.
+                self.logger.info(
+                    f"Holding residue {self.current_residue_id} claim - "
+                    "completed result is queued for retry"
                 )
+            else:
+                if not self.api_client.abandon_residue(self.ctx.client_id, self.current_residue_id):
+                    # Network likely down - queue abandonment so residue gets released on reconnect
+                    queue.enqueue_residue_abandonment(
+                        self.current_residue_id, self.ctx.client_id
+                    )
             self.current_residue_id = None
 
         self._cleanup_local_residue()

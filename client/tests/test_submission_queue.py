@@ -45,6 +45,7 @@ class TestEnqueueResult:
         assert data["type"] == "result"
         assert data["payload"] == payload
         assert data["attempts"] == 0
+        assert "completion_chain" not in data
 
     def test_enqueue_with_context(self, queue):
         payload = {"composite": "123456789" * 10}
@@ -53,6 +54,13 @@ class TestEnqueueResult:
         data = json.loads(filepath.read_text())
         assert "composite_preview" in data
         assert len(data["composite_preview"]) <= 50
+
+    def test_enqueue_with_completion_chain(self, queue):
+        payload = {"composite": "123", "method": "ecm"}
+        chain = {"residue_id": 32225, "client_id": "worker-7"}
+        filepath = queue.enqueue_result(payload, completion_chain=chain)
+        data = json.loads(filepath.read_text())
+        assert data["completion_chain"] == chain
 
 
 class TestEnqueueResidueUpload:
@@ -239,3 +247,69 @@ class TestDrain:
         assert success == 1
         assert fail == 1
         assert queue.count() == 1  # One item remains
+
+
+class TestPendingResultLookup:
+    def test_empty_queue_returns_false(self, queue):
+        assert queue.has_pending_result_for_residue(32225) is False
+
+    def test_finds_pending_result_by_residue_id(self, queue):
+        queue.enqueue_result(
+            {"composite": "123"},
+            completion_chain={"residue_id": 32225, "client_id": "c"},
+        )
+        assert queue.has_pending_result_for_residue(32225) is True
+        assert queue.has_pending_result_for_residue(99999) is False
+
+    def test_ignores_results_without_chain(self, queue):
+        queue.enqueue_result({"composite": "123"})
+        assert queue.has_pending_result_for_residue(32225) is False
+
+
+class TestChainedResidueCompletion:
+    def test_chains_complete_residue_on_drain_success(self, queue, mock_api_client):
+        mock_api_client.submit_result.return_value = {"status": "ok", "attempt_id": 555}
+        queue.enqueue_result(
+            {"composite": "123"},
+            completion_chain={"residue_id": 32225, "client_id": "worker-7"},
+        )
+
+        success, fail = queue.drain(mock_api_client)
+        assert success == 1
+        assert fail == 0
+        mock_api_client.complete_residue.assert_called_once_with(
+            client_id="worker-7", residue_id=32225, stage2_attempt_id=555,
+        )
+        assert queue.count() == 0  # Result removed, completion succeeded inline
+
+    def test_falls_back_to_queued_completion_on_chain_failure(self, queue, mock_api_client):
+        mock_api_client.submit_result.return_value = {"status": "ok", "attempt_id": 555}
+        mock_api_client.complete_residue.return_value = None  # Network blip
+
+        queue.enqueue_result(
+            {"composite": "123"},
+            completion_chain={"residue_id": 32225, "client_id": "worker-7"},
+        )
+
+        success, fail = queue.drain(mock_api_client)
+        # Result item was submitted; chained completion failed and was queued.
+        assert success == 1
+        assert fail == 0
+        assert queue.count() == 1  # The new residue_complete item
+
+        # The new item is a residue_complete carrying the attempt_id
+        files = list(queue.completions_dir.glob("residue_complete_*.json"))
+        assert len(files) == 1
+        data = json.loads(files[0].read_text())
+        assert data["type"] == "residue_complete"
+        assert data["payload"]["residue_id"] == 32225
+        assert data["payload"]["stage2_attempt_id"] == 555
+        assert data["payload"]["client_id"] == "worker-7"
+
+    def test_no_chain_means_no_complete_residue_call(self, queue, mock_api_client):
+        mock_api_client.submit_result.return_value = {"status": "ok", "attempt_id": 555}
+        queue.enqueue_result({"composite": "123"})  # No chain
+
+        success, fail = queue.drain(mock_api_client)
+        assert success == 1
+        mock_api_client.complete_residue.assert_not_called()

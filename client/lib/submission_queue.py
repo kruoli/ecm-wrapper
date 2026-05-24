@@ -71,7 +71,8 @@ class SubmissionQueue:
     def enqueue_result(
         self,
         payload: Dict[str, Any],
-        results_context: Optional[Dict[str, Any]] = None
+        results_context: Optional[Dict[str, Any]] = None,
+        completion_chain: Optional[Dict[str, Any]] = None
     ) -> Optional[Path]:
         """
         Enqueue a failed result submission for later retry.
@@ -79,12 +80,16 @@ class SubmissionQueue:
         Args:
             payload: The API submission payload (ready to POST)
             results_context: Optional original results dict for debugging
+            completion_chain: Optional follow-up call to make after a successful
+                resubmit. For stage 2 results, this carries {residue_id, client_id}
+                so the queue can call complete_residue with the attempt_id returned
+                by the resubmitted result, finalizing the work without re-execution.
 
         Returns:
             Path to the queued item file, or None on error
         """
         self._ensure_dirs()
-        item = {
+        item: Dict[str, Any] = {
             "type": "result",
             "created_at": datetime.datetime.now().isoformat(),
             "attempts": 0,
@@ -93,6 +98,8 @@ class SubmissionQueue:
         if results_context:
             # Store composite for logging, but don't duplicate the full context
             item["composite_preview"] = str(results_context.get("composite", ""))[:50]
+        if completion_chain:
+            item["completion_chain"] = completion_chain
 
         filename = self._generate_filename("result")
         filepath = self.results_dir / filename
@@ -345,6 +352,28 @@ class SubmissionQueue:
                              if not f.name.startswith("residue_") or f.suffix == ".json")
         return total
 
+    def has_pending_result_for_residue(self, residue_id: int) -> bool:
+        """
+        True if a queued result item carries a completion_chain for this residue_id.
+
+        Used by stage 2 to decide whether to abandon a residue claim after a
+        failed submission: if the queue already holds the computed result, the
+        claim should be kept so the queue can finalize it on retry instead of
+        the work being re-executed by another client.
+        """
+        if not self.results_dir.exists():
+            return False
+        for f in self.results_dir.glob("*.json"):
+            try:
+                with open(f, 'r') as fh:
+                    data = json.load(fh)
+            except (json.JSONDecodeError, OSError):
+                continue
+            chain = data.get("completion_chain") or {}
+            if chain.get("residue_id") == residue_id:
+                return True
+        return False
+
     def _get_queue_files(self) -> List[Path]:
         """Get all queue item files sorted oldest-first."""
         files: List[Path] = []
@@ -439,6 +468,63 @@ class SubmissionQueue:
 
         return (success_count, fail_count)
 
+    def _chain_residue_complete(
+        self,
+        api_client: 'APIClient',
+        item: Dict[str, Any],
+        response: Dict[str, Any],
+    ) -> None:
+        """
+        After a queued stage-2 result re-submits successfully, finalize the
+        residue with the attempt_id from the response.
+
+        If the chained complete_residue call fails (network blip again, etc.),
+        enqueue a residue_complete item so a later drain can retry it. A 404
+        from the server (residue expired) is treated as already-final and
+        silently dropped.
+        """
+        chain = item.get("completion_chain") or {}
+        residue_id = chain.get("residue_id")
+        client_id = chain.get("client_id")
+        if residue_id is None or client_id is None:
+            return
+
+        attempt_id = response.get("attempt_id")
+        if not attempt_id:
+            self.logger.warning(
+                f"Queued result for residue {residue_id} returned no attempt_id; "
+                "cannot chain complete_residue"
+            )
+            return
+
+        try:
+            complete_result = api_client.complete_residue(
+                client_id=client_id,
+                residue_id=residue_id,
+                stage2_attempt_id=attempt_id,
+            )
+            if complete_result is None:
+                self.enqueue_residue_completion(
+                    residue_id=residue_id,
+                    client_id=client_id,
+                    stage2_attempt_id=attempt_id,
+                )
+        except ResourceNotFoundError:
+            self.logger.warning(
+                f"Residue {residue_id} already expired/completed on server; "
+                "chained completion skipped"
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"Chained complete_residue failed for residue {residue_id}: {e}; "
+                "queuing for later retry"
+            )
+            self.enqueue_residue_completion(
+                residue_id=residue_id,
+                client_id=client_id,
+                stage2_attempt_id=attempt_id,
+            )
+
     def _retry_item(self, api_client: 'APIClient', item: Dict[str, Any]) -> bool:
         """
         Retry a single queued item.
@@ -460,7 +546,10 @@ class SubmissionQueue:
                     payload=payload,
                     save_on_failure=False  # Don't re-save on failure (already in queue)
                 )
-                return response is not None
+                if response is None:
+                    return False
+                self._chain_residue_complete(api_client, item, response)
+                return True
 
             elif item_type == "residue_upload":
                 residue_path = item.get("residue_file")

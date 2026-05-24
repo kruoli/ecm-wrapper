@@ -290,7 +290,19 @@ class WorkMode(ABC):
         }
 
         print("Submitting stage 2 results...")
-        submit_response = self.wrapper.submit_result(results, self.args.project, 'gmp-ecm-ecm')
+        # If every endpoint fails the queue records this chain so a later drain
+        # can call complete_residue with the attempt_id returned on retry,
+        # finalizing the work without the client re-executing stage 2.
+        completion_chain = None
+        if residue_id is not None:
+            completion_chain = {
+                "residue_id": residue_id,
+                "client_id": self.ctx.client_id,
+            }
+        submit_response = self.wrapper.submit_result(
+            results, self.args.project, 'gmp-ecm-ecm',
+            completion_chain=completion_chain,
+        )
 
         if not submit_response:
             self.logger.error("Failed to submit stage 2 results")

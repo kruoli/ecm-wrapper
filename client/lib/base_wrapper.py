@@ -246,7 +246,8 @@ class BaseWrapper:
 
     def submit_payload_to_endpoints(self, payload: Dict[str, Any],
                                     save_on_failure: bool = True,
-                                    results_context: Optional[Dict[str, Any]] = None) -> 'SubmissionResult':
+                                    results_context: Optional[Dict[str, Any]] = None,
+                                    completion_chain: Optional[Dict[str, Any]] = None) -> 'SubmissionResult':
         """
         Submit a pre-built payload to all configured API endpoints.
 
@@ -254,6 +255,10 @@ class BaseWrapper:
             payload: Pre-built API submission payload
             save_on_failure: Whether to save failed submissions to disk
             results_context: Optional full results dict for failure persistence
+            completion_chain: Optional follow-up call metadata recorded with the
+                queued item if all endpoints fail. Stage 2 passes
+                {residue_id, client_id} so a later drain can chain
+                complete_residue instead of the work being re-executed.
 
         Returns:
             SubmissionResult with per-endpoint responses.
@@ -297,17 +302,22 @@ class BaseWrapper:
 
         # If all submissions failed, enqueue for automatic retry
         if not result and save_on_failure:
-            self.submission_queue.enqueue_result(payload, results_context)
+            self.submission_queue.enqueue_result(payload, results_context, completion_chain)
 
         return result
 
     def submit_result(self, results: Dict[str, Any], project: Optional[str] = None,
-                     program: str = "unknown") -> 'SubmissionResult':
+                     program: str = "unknown",
+                     completion_chain: Optional[Dict[str, Any]] = None) -> 'SubmissionResult':
         """
         Submit results to API endpoint(s) with retry logic.
 
         If multiple endpoints are configured, submits to all of them.
         Returns SubmissionResult with per-endpoint responses.
+
+        `completion_chain` (stage 2 only) carries {residue_id, client_id} to be
+        recorded on the queue item if every endpoint fails, so the eventual
+        retry can chain complete_residue and avoid re-executing the work.
         """
         self._ensure_api_clients()  # Lazy load API clients on first use
         assert self.api_clients is not None  # For type checker
@@ -328,7 +338,8 @@ class BaseWrapper:
         return self.submit_payload_to_endpoints(
             payload=payload,
             save_on_failure=True,
-            results_context=results
+            results_context=results,
+            completion_chain=completion_chain,
         )
 
     def abandon_work(self, work_id: str, reason: str = "client_terminated") -> bool:

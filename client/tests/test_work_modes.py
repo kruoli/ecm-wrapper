@@ -426,6 +426,53 @@ class TestCleanupOnFailure:
         self.wrapper.abandon_work.assert_not_called()
 
 
+class TestStage2CleanupOnFailure:
+    """Stage2ConsumerMode.cleanup_on_failure: hold-vs-abandon decision."""
+
+    def setup_method(self):
+        self.wrapper = MockWrapper()
+
+    def _make_mode(self, has_pending: bool) -> Stage2ConsumerMode:
+        self.wrapper.submission_queue.has_pending_result_for_residue.return_value = has_pending
+        self.wrapper.submission_queue.enqueue_residue_abandonment = Mock()
+        self.wrapper.api_client.abandon_residue = Mock(return_value=True)
+        ctx = WorkLoopContext(
+            wrapper=self.wrapper,
+            client_id='test-client',
+            args=create_mock_args(stage2_only=True, b2=5000000),
+        )
+        mode = Stage2ConsumerMode(ctx)
+        mode.current_residue_id = 32225
+        return mode
+
+    def test_holds_claim_when_result_is_queued(self):
+        mode = self._make_mode(has_pending=True)
+        mode.cleanup_on_failure({}, RuntimeError("submit failed"))
+
+        # Claim must NOT be released - the queued result needs to finalize it.
+        self.wrapper.api_client.abandon_residue.assert_not_called()
+        self.wrapper.submission_queue.enqueue_residue_abandonment.assert_not_called()
+        assert mode.current_residue_id is None  # Still cleared from in-memory state
+
+    def test_abandons_when_no_pending_result(self):
+        mode = self._make_mode(has_pending=False)
+        mode.cleanup_on_failure({}, RuntimeError("execution failed"))
+
+        self.wrapper.api_client.abandon_residue.assert_called_once_with(
+            'test-client', 32225,
+        )
+
+    def test_queues_abandonment_when_abandon_call_fails(self):
+        mode = self._make_mode(has_pending=False)
+        self.wrapper.api_client.abandon_residue.return_value = False  # Network down
+
+        mode.cleanup_on_failure({}, RuntimeError("execution failed"))
+
+        self.wrapper.submission_queue.enqueue_residue_abandonment.assert_called_once_with(
+            32225, 'test-client',
+        )
+
+
 def main():
     """Run all tests."""
     print("Running work_modes tests...\n")

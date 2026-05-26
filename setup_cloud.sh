@@ -183,8 +183,15 @@ fi
 # ============================================================
 echo ""
 echo "📚 Installing Python dependencies..."
-pip3 install -q requests pyyaml
+# Use `python3 -m pip` so packages land in the same interpreter that runs the
+# client (vast.ai images often ship with conda + system Python side-by-side).
+# Fall back to --break-system-packages for PEP 668 environments.
+if ! python3 -m pip install requests pyyaml; then
+    echo "⚠️  pip install failed, retrying with --break-system-packages..."
+    python3 -m pip install --break-system-packages requests pyyaml
+fi
 echo "✓ Dependencies installed (requests, pyyaml)"
+python3 -c "import requests, yaml; print(f'   requests {requests.__version__}, pyyaml {yaml.__version__}')"
 
 # ============================================================
 # Step 7: Detect GPU

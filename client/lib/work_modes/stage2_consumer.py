@@ -10,7 +10,7 @@ import time
 
 from ..ecm_config import FactorResult
 from ..work_helpers import print_work_header
-from ..arg_parser import get_workers_default, resolve_pin_threads
+from ..arg_parser import get_workers_default, resolve_pin_threads, resolve_stage2_progress_interval
 from ..api_client import ResourceNotFoundError
 from ..cleanup_helpers import handle_shutdown
 from .base import WorkMode, WorkLoopContext
@@ -175,7 +175,7 @@ class Stage2ConsumerMode(WorkMode):
 
         factor, all_factors, curves, exec_time, sigma = executor.execute(
             early_termination=not self.args.continue_after_factor,
-            progress_interval=self.args.progress_interval
+            progress_interval=resolve_stage2_progress_interval(self.args)
         )
 
         # Build FactorResult

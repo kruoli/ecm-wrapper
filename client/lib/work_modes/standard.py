@@ -11,7 +11,7 @@ from ..ecm_config import (
 from ..work_helpers import print_work_header, request_ecm_work
 from ..arg_parser import (
     resolve_gpu_settings, resolve_worker_count, get_max_batch_default,
-    resolve_pin_threads,
+    resolve_pin_threads, resolve_stage2_progress_interval,
 )
 from ..ecm_arg_helpers import parse_sigma_arg, resolve_param
 from .base import WorkMode, WorkLoopContext
@@ -119,13 +119,18 @@ class StandardAutoWorkMode(WorkMode):
         # Resolve GPU settings for two-stage mode
         _, gpu_device, gpu_curves = resolve_gpu_settings(self.args, self.wrapper.typed_config)
 
+        tlevel_progress_interval = (
+            resolve_stage2_progress_interval(self.args)
+            if self.args.two_stage
+            else self.args.progress_interval
+        )
         config = TLevelConfig(
             composite=composite,
             target_t_level=target_tlevel,
             start_t_level=start_tlevel,
             threads=workers,
             verbose=self.args.verbose,
-            progress_interval=self.args.progress_interval,
+            progress_interval=tlevel_progress_interval,
             max_batch_curves=max_batch,
             use_two_stage=self.args.two_stage,
             b2_multiplier=self.args.b2_multiplier or 500.0,
@@ -181,7 +186,7 @@ class StandardAutoWorkMode(WorkMode):
                 stage1_parametrization=param if param else 3,
                 threads=workers,
                 verbose=self.args.verbose,
-                progress_interval=self.args.progress_interval,
+                progress_interval=resolve_stage2_progress_interval(self.args),
                 pin_threads=resolve_pin_threads(self.args),
                 gpu_device=gpu_device,
                 gpu_curves=gpu_curves

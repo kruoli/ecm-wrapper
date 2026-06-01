@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Tuple
 
+from .arg_parser import resolve_stage2_progress_interval
 from .ecm_config import ECMConfig, TwoStageConfig, MultiprocessConfig, TLevelConfig, FactorResult
 from .ecm_math import calculate_target_tlevel, is_probably_prime
 from .results_builder import results_for_stage1
@@ -70,7 +71,7 @@ def run_stage2_only_mode(wrapper, args, output: UserOutput, params: ResolvedPara
         stage1_curves=0,
         stage2_workers=params.workers,
         verbose=args.verbose or False,
-        progress_interval=args.progress_interval or 0,
+        progress_interval=resolve_stage2_progress_interval(args),
         resume_file=residue_path,
     )
 
@@ -212,6 +213,11 @@ def run_tlevel_mode(wrapper, args, output: UserOutput, params: ResolvedParams) -
             "Composite": f"C{digit_length} ({current_composite[:20]}...)" if len(current_composite) > 25 else f"C{digit_length}"
         })
 
+        tlevel_progress_interval = (
+            resolve_stage2_progress_interval(args)
+            if args.two_stage
+            else (args.progress_interval or 0)
+        )
         config = TLevelConfig(
             composite=current_composite,
             target_t_level=target_t_level,
@@ -222,7 +228,7 @@ def run_tlevel_mode(wrapper, args, output: UserOutput, params: ResolvedParams) -
             verbose=args.verbose or False,
             workers=args.workers or 1,
             use_two_stage=args.two_stage or False,
-            progress_interval=args.progress_interval or 0,
+            progress_interval=tlevel_progress_interval,
             max_batch_curves=params.max_batch,
             b2_multiplier=getattr(args, 'b2_multiplier', None) or 500.0,
             b2_dictionary=params.b2_dictionary,
@@ -366,7 +372,7 @@ def run_two_stage_mode(wrapper, args, output: UserOutput, params: ResolvedParams
         gpu_device=params.gpu_device,
         gpu_curves=params.gpu_curves,
         continue_after_factor=False,
-        progress_interval=args.progress_interval or 0,
+        progress_interval=resolve_stage2_progress_interval(args),
         project=args.project,
         no_submit=not args.submit
     )

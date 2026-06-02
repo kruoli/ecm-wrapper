@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import subprocess
 import time
-import threading
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple, Union, Callable
 from lib.base_wrapper import BaseWrapper
@@ -33,8 +32,8 @@ class ECMWrapper(BaseWrapper):
     def __init__(self, config_path: str):
         super().__init__(config_path)
         self.residue_manager = ResidueFileManager()
-        # Graceful shutdown support (3 levels)
-        self.stop_event = threading.Event()  # Shared with Stage2Executor for curve-level stop
+        # Graceful shutdown support (3 levels). stop_event is inherited from
+        # BaseWrapper and shared with run_subprocess_with_parsing / Stage2Executor.
         self.interrupted = False
         self.shutdown_level = 0  # 0=none, 1=complete batch, 2=complete curve, 3=abort
         self.graceful_shutdown_requested = False  # First Ctrl+C: finish current work
@@ -988,14 +987,29 @@ class ECMWrapper(BaseWrapper):
             'ecm'
         )
 
-    def _fully_factor_found_result(self, factor: str, max_ecm_attempts: int = 5, quiet: bool = False) -> List[str]:
+    def _fully_factor_with_runner(
+        self,
+        factor: str,
+        runner: Callable[[str, int, int], List[str]],
+        max_ecm_attempts: int = 5,
+        quiet: bool = False,
+    ) -> List[str]:
         """
-        Recursively factor a result from ECM until all prime factors found.
-        Handles composite factors by using trial division + ECM with increasing B1.
+        Recursively factor a value via trial division + ECM with increasing B1.
+
+        Shared body for `_fully_factor_found_result` and `_fully_factor_composite`,
+        which differ only in the ECM runner they use (high-level `run_ecm_v2`
+        vs primitive `_execute_ecm_primitive`).
 
         Args:
-            factor: Factor found by ECM (may be composite)
-            max_ecm_attempts: Maximum ECM attempts with increasing B1 (default: 5)
+            factor: Factor to fully factor (may be composite)
+            runner: Callable(composite, b1, curves) -> list of factor strings.
+                Recursion reuses the same runner, which is what keeps the
+                primitive-only path free of run_ecm_v2 -> run_multiprocess_v2
+                -> _fully_factor_composite recursion.
+            max_ecm_attempts: Maximum ECM attempts with increasing B1
+            quiet: Reserved for log suppression; currently passed through
+                recursion but not honored (preserved for API compat).
 
         Returns:
             List of prime factors (as strings)
@@ -1009,122 +1023,13 @@ class ECMWrapper(BaseWrapper):
         if cofactor == 1:
             return all_primes
 
-        # Check if cofactor is prime using probabilistic test
         if is_probably_prime(cofactor):
             self.logger.info(f"Cofactor {cofactor} is prime")
             all_primes.append(str(cofactor))
             return all_primes
 
-        # Cofactor is composite - use ECM with increasing B1
         digit_length = len(str(cofactor))
         self.logger.info(f"Cofactor remaining: C{digit_length}, using ECM to complete factorization")
-
-        current_cofactor = cofactor
-        for attempt in range(max_ecm_attempts):
-            if current_cofactor == 1:
-                break
-
-            # Select B1 based on cofactor size - target factors up to half the digits
-            cofactor_digits = len(str(current_cofactor))
-            target_digits = (cofactor_digits + 1) // 2
-            # Use OPTIMAL_B1_TABLE for proper B1 and curve count
-            b1, expected_curves = OPTIMAL_B1_TABLE[0][1], OPTIMAL_B1_TABLE[0][2]
-            for digits, table_b1, table_curves in OPTIMAL_B1_TABLE:
-                if target_digits <= digits:
-                    b1, expected_curves = table_b1, table_curves
-                    break
-            # Spread expected curves across attempts, minimum 50 per attempt
-            curves = max(50, expected_curves // max_ecm_attempts)
-
-            self.logger.info(f"ECM attempt {attempt+1}/{max_ecm_attempts} on C{cofactor_digits} "
-                             f"with B1={b1}, {curves} curves (target P{target_digits})")
-
-            try:
-                # Use v2 API for ECM execution
-                from lib.ecm_config import ECMConfig
-                config = ECMConfig(
-                    composite=str(current_cofactor),
-                    b1=b1,
-                    curves=curves,
-                    verbose=False
-                )
-                ecm_result = self.run_ecm_v2(config)
-
-                # Extract factors from FactorResult
-                found_factors = ecm_result.factors if ecm_result.factors else []
-
-                if found_factors:
-                    self.logger.info(f"ECM found {len(found_factors)} factor(s): {found_factors}")
-
-                    # Recursively factor each found factor
-                    for found_factor in found_factors:
-                        sub_primes = self._fully_factor_found_result(found_factor, max_ecm_attempts, quiet=quiet)
-                        all_primes.extend(sub_primes)
-
-                        # Divide out from cofactor (use while loop to handle repeated factors)
-                        for prime in sub_primes:
-                            while current_cofactor % int(prime) == 0:
-                                current_cofactor //= int(prime)
-
-                    # Check if fully factored
-                    if current_cofactor == 1:
-                        break
-
-                    # Check if remaining cofactor is prime
-                    if is_probably_prime(current_cofactor):
-                        self.logger.info(f"Remaining cofactor {current_cofactor} is prime")
-                        all_primes.append(str(current_cofactor))
-                        current_cofactor = 1
-                        break
-                else:
-                    self.logger.info(f"No factor found in attempt {attempt+1}")
-
-            except Exception as e:
-                self.logger.error(f"ECM factorization error: {e}")
-                break
-
-        # If we still have a composite cofactor after all attempts, return it as-is
-        if current_cofactor > 1:
-            self.logger.warning(f"Could not fully factor C{len(str(current_cofactor))}: {current_cofactor}")
-            all_primes.append(str(current_cofactor))
-
-        return all_primes
-
-    def _fully_factor_composite(self, factor: str, max_ecm_attempts: int = 5) -> List[str]:
-        """
-        Recursively factor a composite using primitives directly (no run_ecm_v2).
-
-        This method is called from run_multiprocess_v2 to factor any composite
-        factors found. It uses _execute_ecm_primitive directly to avoid infinite
-        recursion through run_ecm_v2 -> run_multiprocess_v2 -> _fully_factor_composite.
-
-        Args:
-            factor: Factor found by ECM (may be composite)
-            max_ecm_attempts: Maximum ECM attempts with increasing B1
-
-        Returns:
-            List of prime factors (as strings)
-        """
-        # trial_division, is_probably_prime, OPTIMAL_B1_TABLE imported at module level
-
-        factor_int = int(factor)
-
-        # Trial division catches small factors quickly
-        small_primes, cofactor = trial_division(factor_int, limit=10**7)
-        all_primes = [str(p) for p in small_primes]
-
-        if cofactor == 1:
-            return all_primes
-
-        # Check if cofactor is prime
-        if is_probably_prime(cofactor):
-            self.logger.info(f"Cofactor {cofactor} is prime")
-            all_primes.append(str(cofactor))
-            return all_primes
-
-        # Cofactor is composite - use ECM primitive directly
-        digit_length = len(str(cofactor))
-        self.logger.info(f"Factoring composite cofactor C{digit_length} using ECM primitive")
 
         current_cofactor = cofactor
         for attempt in range(max_ecm_attempts):
@@ -1134,7 +1039,6 @@ class ECMWrapper(BaseWrapper):
             cofactor_digits = len(str(current_cofactor))
             # Target factors up to half the digit length (smallest factor can't be larger)
             target_digits = (cofactor_digits + 1) // 2
-            # Use OPTIMAL_B1_TABLE for proper B1 and curve count
             b1, expected_curves = OPTIMAL_B1_TABLE[0][1], OPTIMAL_B1_TABLE[0][2]
             for digits, table_b1, table_curves in OPTIMAL_B1_TABLE:
                 if target_digits <= digits:
@@ -1147,25 +1051,17 @@ class ECMWrapper(BaseWrapper):
                              f"with B1={b1}, {curves} curves (target P{target_digits})")
 
             try:
-                # Call primitive directly - no recursive factoring
-                prim_result = self._execute_ecm_primitive(
-                    composite=str(current_cofactor),
-                    b1=b1,
-                    curves=curves,
-                    verbose=False
-                )
-
-                found_factors = prim_result.get('factors', [])
+                found_factors = runner(str(current_cofactor), b1, curves)
 
                 if found_factors:
-                    self.logger.info(f"Found {len(found_factors)} factor(s): {found_factors}")
+                    self.logger.info(f"ECM found {len(found_factors)} factor(s): {found_factors}")
 
                     for found_factor in found_factors:
-                        # Recursively factor each found factor
-                        sub_primes = self._fully_factor_composite(found_factor, max_ecm_attempts)
+                        sub_primes = self._fully_factor_with_runner(
+                            found_factor, runner, max_ecm_attempts, quiet
+                        )
                         all_primes.extend(sub_primes)
 
-                        # Divide out from cofactor
                         for prime in sub_primes:
                             while current_cofactor % int(prime) == 0:
                                 current_cofactor //= int(prime)
@@ -1185,9 +1081,40 @@ class ECMWrapper(BaseWrapper):
                 self.logger.error(f"ECM factorization error: {e}")
                 break
 
-        # If we still have a composite cofactor, return it as-is
         if current_cofactor > 1:
             self.logger.warning(f"Could not fully factor C{len(str(current_cofactor))}: {current_cofactor}")
             all_primes.append(str(current_cofactor))
 
         return all_primes
+
+    def _fully_factor_found_result(self, factor: str, max_ecm_attempts: int = 5, quiet: bool = False) -> List[str]:
+        """
+        Recursively factor a result from ECM until all prime factors found.
+
+        Uses the high-level `run_ecm_v2` API (which routes through multiprocess
+        when appropriate). Use this from contexts that are not already inside a
+        multiprocess worker — otherwise see `_fully_factor_composite`.
+        """
+        def runner(composite: str, b1: int, curves: int) -> List[str]:
+            ecm_result = self.run_ecm_v2(ECMConfig(
+                composite=composite, b1=b1, curves=curves, verbose=False,
+            ))
+            return ecm_result.factors if ecm_result.factors else []
+
+        return self._fully_factor_with_runner(factor, runner, max_ecm_attempts, quiet)
+
+    def _fully_factor_composite(self, factor: str, max_ecm_attempts: int = 5) -> List[str]:
+        """
+        Recursively factor a composite using `_execute_ecm_primitive` directly.
+
+        Called from inside `run_multiprocess_v2` to factor any composite factors
+        found. Bypasses `run_ecm_v2` to avoid the
+        run_ecm_v2 -> run_multiprocess_v2 -> _fully_factor_composite recursion.
+        """
+        def runner(composite: str, b1: int, curves: int) -> List[str]:
+            prim_result = self._execute_ecm_primitive(
+                composite=composite, b1=b1, curves=curves, verbose=False,
+            )
+            return prim_result.get('factors', [])
+
+        return self._fully_factor_with_runner(factor, runner, max_ecm_attempts)

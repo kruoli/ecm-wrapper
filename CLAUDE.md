@@ -212,9 +212,15 @@ All factors from a single ECM run are submitted in one API call via `factors_fou
 - **Environment**: Set `DATABASE_URL` to override default connection string
 
 ### Code Quality Checks
-When making code changes, always run both syntax and type checks:
+When making code changes, run a type checker — `py_compile` only catches syntax errors and is not sufficient on its own.
+
+Both `mypy` and `pyright` are installed via pipx (`~/.local/bin/`). They overlap on real bugs; differences:
+- **mypy** is quieter and focused on argument/assignment type mismatches.
+- **pyright** adds stricter flow-narrowing analysis (catches more `Optional` leaks) and flags duck-typed mocks in tests. More noise, also more coverage.
+
+Typical invocations (from `client/` or `server/`):
 ```bash
-python3 -m py_compile *.py                      # Syntax only
-python3 -m mypy --ignore-missing-imports *.py   # Type checking (preferred)
+mypy --ignore-missing-imports .                 # Quieter, focused checks
+pyright                                          # Stricter, more findings
 ```
-**Important**: `py_compile` alone is insufficient - always use mypy or pylint for thorough validation.
+Pyright auto-discovers source roots; mypy needs `--ignore-missing-imports` until a `mypy.ini` / `pyproject.toml` config is added.

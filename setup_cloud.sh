@@ -11,88 +11,8 @@ echo "============================================================"
 echo ""
 
 # ============================================================
-# Step 1: Detect GPU Architecture (CUDA Compute Capability)
+# Step 1: Check/Install Dependencies
 # ============================================================
-echo "🔍 Detecting GPU architecture..."
-ECM_VERSION="ecm86"  # Default fallback
-CUDA_MAJOR=""
-
-if command -v nvidia-smi &> /dev/null; then
-    # Get CUDA compute capability and GPU name
-    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | xargs)
-    COMPUTE_CAP_RAW=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | xargs)
-
-    if [ ! -z "$COMPUTE_CAP_RAW" ]; then
-        # Remove decimal point (e.g., "8.6" -> "86")
-        COMPUTE_CAP=$(echo "$COMPUTE_CAP_RAW" | tr -d '.' | tr -d ' ')
-
-        echo "   GPU: $GPU_NAME (compute capability $COMPUTE_CAP_RAW)"
-
-        # Map compute capability to ECM version
-        # Note: Using string comparison for major version, then numeric for minor
-        MAJOR=$(echo "$COMPUTE_CAP_RAW" | cut -d'.' -f1)
-        MINOR=$(echo "$COMPUTE_CAP_RAW" | cut -d'.' -f2)
-
-        if [ "$MAJOR" -ge "12" ]; then
-            # Blackwell and newer (RTX 50-series, B-series, etc.)
-            ECM_VERSION="ecm120"
-            echo "✓ Using ecm120 (CUDA sm_120+ / Blackwell)"
-        elif [ "$MAJOR" -ge "9" ]; then
-            # Hopper and newer (H100, etc.)
-            ECM_VERSION="ecm90"
-            echo "✓ Using ecm90 (CUDA sm_90+ / Hopper)"
-        elif [ "$MAJOR" -eq "8" ] && [ "$MINOR" -ge "6" ]; then
-            # Ampere (RTX 3090, A100, etc.)
-            ECM_VERSION="ecm86"
-            echo "✓ Using ecm86 (CUDA sm_86 / Ampere)"
-        elif [ "$MAJOR" -eq "7" ] && [ "$MINOR" -ge "5" ]; then
-            # Turing (RTX 2080, T4, etc.)
-            ECM_VERSION="ecm75"
-            echo "✓ Using ecm75 (CUDA sm_75 / Turing)"
-        else
-            # Older GPUs - use ecm75 as fallback
-            ECM_VERSION="ecm75"
-            echo "✓ Using ecm75 (older GPU, compute $COMPUTE_CAP_RAW)"
-        fi
-    else
-        echo "⚠️  Could not detect GPU compute capability, using default (ecm86)"
-    fi
-else
-    echo "⚠️  nvidia-smi not found, using default (ecm86)"
-fi
-
-if command -v nvcc &> /dev/null; then
-    NVCC_VERSION_OUTPUT=$(nvcc --version 2>/dev/null || true)
-    CUDA_RELEASE=$(echo "$NVCC_VERSION_OUTPUT" | sed -n 's/.*release \([0-9][0-9]*\)\..*/\1/p' | head -1)
-
-    if [ ! -z "$CUDA_RELEASE" ]; then
-        CUDA_MAJOR="$CUDA_RELEASE"
-        echo "   CUDA toolkit: v$CUDA_MAJOR"
-
-        if [ "$CUDA_MAJOR" -eq "13" ]; then
-            case "$ECM_VERSION" in
-                ecm86|ecm90|ecm120)
-                    ECM_VERSION="${ECM_VERSION}v13"
-                    echo "✓ Using CUDA v13 ECM binary directory: $ECM_VERSION"
-                    ;;
-                *)
-                    echo "ℹ️  No CUDA v13-specific binary directory for $ECM_VERSION"
-                    ;;
-            esac
-        fi
-    else
-        echo "⚠️  Could not parse nvcc version, using $ECM_VERSION"
-    fi
-else
-    echo "ℹ️  nvcc not found, using $ECM_VERSION"
-fi
-
-echo "   Using ECM binary: $ECM_VERSION"
-
-# ============================================================
-# Step 2: Check/Install Dependencies
-# ============================================================
-echo ""
 echo "📦 Checking dependencies..."
 
 # Check if running as root or with sudo access
@@ -118,7 +38,7 @@ fi
 echo "✓ Dependencies ready"
 
 # ============================================================
-# Step 3: User Configuration
+# Step 2: User Configuration
 # ============================================================
 echo ""
 echo "============================================================"
@@ -126,9 +46,6 @@ read -p "📝 Enter your username: " USERNAME
 read -p "🖥️  Enter machine name (optional, default: $(hostname)): " MACHINE_NAME
 MACHINE_NAME=${MACHINE_NAME:-$(hostname)}
 
-# ECM work parameters
-read -p "🔢 Enter B1 value (default: 11000000): " B1_VALUE
-B1_VALUE=${B1_VALUE:-11000000}
 read -p "⭐ Enter priority filter (default: 5): " PRIORITY_VALUE
 PRIORITY_VALUE=${PRIORITY_VALUE:-5}
 
@@ -138,7 +55,7 @@ echo "============================================================"
 echo ""
 
 # ============================================================
-# Step 4: Setup Directory
+# Step 3: Setup Directory
 # ============================================================
 INSTALL_DIR="$HOME/ecm-wrapper"
 echo "📁 Setting up in: $INSTALL_DIR"
@@ -159,27 +76,36 @@ mkdir -p data
 echo "✓ Data directory created"
 
 # ============================================================
-# Step 5: Download ECM Binary
+# Step 4: Download ECM Binary
 # ============================================================
+# Single universal binary: CUDA runtime is statically linked and the binary
+# carries GPU SASS for every arch (sm_50-sm_120). Nothing CUDA-specific needs
+# to be installed on the host - just an NVIDIA driver (CUDA 12+ class). This
+# replaces the old per-arch / per-CUDA-version (ecm86, ecm86v13, ...) matrix.
 echo ""
-echo "⬇️  Downloading ECM binary ($ECM_VERSION)..."
-ECM_DOWNLOAD_URL="https://ecm.kyleaskine.com/downloads/${ECM_VERSION}/ecm.gz"
+echo "⬇️  Downloading ECM binary (universal: static cudart, sm_50-sm_120)..."
+ECM_DOWNLOAD_URL="https://ecm.kyleaskine.com/downloads/ecm/ecm.gz"
 ECM_PATH="$HOME/ecm"
 
-wget -q --show-progress "$ECM_DOWNLOAD_URL" -O "${ECM_PATH}.gz"
-gunzip -f "${ECM_PATH}.gz"
-chmod +x "$ECM_PATH"
+if wget -q --show-progress "$ECM_DOWNLOAD_URL" -O "${ECM_PATH}.gz"; then
+    gunzip -f "${ECM_PATH}.gz"
+    chmod +x "$ECM_PATH"
+else
+    echo "❌ Failed to download ECM binary from $ECM_DOWNLOAD_URL"
+    exit 1
+fi
 
-# Verify installation
+# Verify installation (--version doesn't touch the GPU, so this works on CPU-only hosts too)
 if [ -x "$ECM_PATH" ]; then
-    ECM_VERSION_STR=$("$ECM_PATH" --version 2>&1 | head -1 || echo "unknown")
+    ECM_VERSION_STR=$(echo 1 | "$ECM_PATH" 1 2>&1 | head -1 || echo "unknown")
     echo "✓ ECM binary installed: $ECM_VERSION_STR"
 else
-    echo "⚠️  ECM binary download may have failed"
+    echo "❌ ECM binary installation failed"
+    exit 1
 fi
 
 # ============================================================
-# Step 6: Install Python Dependencies
+# Step 5: Install Python Dependencies
 # ============================================================
 echo ""
 echo "📚 Installing Python dependencies..."
@@ -194,7 +120,7 @@ echo "✓ Dependencies installed (requests, pyyaml)"
 python3 -c "import requests, yaml; print(f'   requests {requests.__version__}, pyyaml {yaml.__version__}')"
 
 # ============================================================
-# Step 7: Detect GPU
+# Step 6: Detect GPU
 # ============================================================
 echo ""
 echo "🎮 Checking for GPU..."
@@ -212,7 +138,7 @@ else
 fi
 
 # ============================================================
-# Step 8: Create Configuration
+# Step 7: Create Configuration
 # ============================================================
 echo ""
 echo "⚙️  Creating client.local.yaml..."
@@ -245,7 +171,7 @@ EOF
 echo "✓ Configuration file created"
 
 # ============================================================
-# Step 9: Setup Complete - Display Summary
+# Step 8: Setup Complete - Display Summary
 # ============================================================
 echo ""
 echo "============================================================"
@@ -255,7 +181,7 @@ echo "Username:      $USERNAME"
 echo "Machine:       $MACHINE_NAME"
 echo "API Endpoint:  $API_ENDPOINT"
 echo "ECM Binary:    $ECM_PATH"
-echo "Architecture:  $ECM_VERSION"
+echo "Binary:        universal (static cudart, sm_50-sm_120)"
 echo "GPU:           $GPU_ENABLED"
 echo "Working Dir:   $INSTALL_DIR/client"
 echo "============================================================"
@@ -270,19 +196,19 @@ echo ""
 echo "  # Test with a small number (ecm_wrapper.py doesn't submit by default)"
 echo "  python3 ecm_wrapper.py --composite \"123456789012345\" --curves 10 --b1 11000"
 echo ""
-echo "  # Auto-work mode (progressive strategy, stage 1 only)"
-echo "  python3 ecm_client.py --work-type progressive --stage1-only --b1 $B1_VALUE --priority $PRIORITY_VALUE -v"
+echo "  # Auto-work mode (progressive strategy, stage 1 only; client selects B1)"
+echo "  python3 ecm_client.py --work-type progressive --stage1-only --priority $PRIORITY_VALUE -v"
 echo ""
 echo "  # Auto-work with specific count"
-echo "  python3 ecm_client.py --work-type progressive --work-count 10 --stage1-only --b1 $B1_VALUE --priority $PRIORITY_VALUE -v"
+echo "  python3 ecm_client.py --work-type progressive --work-count 10 --stage1-only --priority $PRIORITY_VALUE -v"
 echo ""
 if [ "$GPU_ENABLED" = "true" ]; then
 echo "  # Auto-work with GPU (stage 1 only)"
-echo "  python3 ecm_client.py --work-type progressive --stage1-only --b1 $B1_VALUE --priority $PRIORITY_VALUE -v"
+echo "  python3 ecm_client.py --work-type progressive --stage1-only --priority $PRIORITY_VALUE -v"
 echo ""
 fi
 echo "  # Auto-work with multiprocess (CPU only)"
-echo "  python3 ecm_client.py --work-type progressive --multiprocess --workers 8 --stage1-only --b1 $B1_VALUE --priority $PRIORITY_VALUE -v"
+echo "  python3 ecm_client.py --work-type progressive --multiprocess --workers 8 --stage1-only --priority $PRIORITY_VALUE -v"
 echo ""
 echo "============================================================"
 echo ""
@@ -296,8 +222,8 @@ if [[ "$START_NOW" =~ ^[Yy]$ ]]; then
     echo ""
     cd "$INSTALL_DIR/client"
     if [ "$GPU_ENABLED" = "true" ]; then
-        python3 ecm_client.py --work-type progressive --stage1-only --b1 $B1_VALUE --priority $PRIORITY_VALUE -v
+        python3 ecm_client.py --work-type progressive --stage1-only --priority $PRIORITY_VALUE -v
     else
-        python3 ecm_client.py --work-type progressive --multiprocess --stage1-only --b1 $B1_VALUE --priority $PRIORITY_VALUE -v
+        python3 ecm_client.py --work-type progressive --multiprocess --stage1-only --priority $PRIORITY_VALUE -v
     fi
 fi

@@ -9,7 +9,7 @@ each phase). Tick items as they land.
 |-------|--------|-------|
 | Phase 1 — Mechanical | **complete** | All items done 2026-04-27 |
 | Phase 2 — Typed surface | **complete** | Items 3 + 4 done 2026-04-28/29 |
-| Phase 3 — Architectural | pending | Highest reward, do with test suite running |
+| Phase 3 — Architectural | in progress | Item 8 done 2026-06-01; 2, 5, 6, 7 pending |
 
 ---
 
@@ -225,11 +225,17 @@ Higher reward, more risk. Run the test suite throughout.
   `ResultsBuilder` already exists for stage 1. Add `results_for_stage2()` /
   `results_for_multiprocess()` factories.
 
-- [ ] **8. Parameterize `_fully_factor_*` runner.** `_fully_factor_found_result`
-  (ecm_executor.py:991) and `_fully_factor_composite` (:1093) are ~95% the same
-  ~100-line method. Differ only in which factor-runner they call (`run_ecm_v2`
-  vs `_execute_ecm_primitive`). Pass the runner as a callable; collapse to one
-  method.
+- [x] **8. Parameterize `_fully_factor_*` runner.** *(done 2026-06-01)*
+  Shared body extracted to `_fully_factor_with_runner(factor, runner,
+  max_ecm_attempts, quiet)` (ecm_executor.py). Both `_fully_factor_found_result`
+  and `_fully_factor_composite` are now thin wrappers (~15 lines each) that
+  define their runner closure and delegate. Recursion happens via
+  `_fully_factor_with_runner` reusing the same runner, which preserves the
+  no-run_ecm_v2 invariant of the composite path. Public signatures unchanged
+  (including the unused-but-passed-through `quiet` parameter) so external
+  callers (`execution_engine.py`, `result_processor.py`) and tests
+  (`test_composite_factor_splitting.py`, `test_result_processor.py`) need no
+  changes. ecm_executor.py: 1193 → 1120 lines (-73). All 452 tests pass.
 
 ---
 

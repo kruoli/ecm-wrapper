@@ -27,7 +27,9 @@ class CompositeTargetMode(StandardAutoWorkMode):
 
     def __init__(self, ctx: WorkLoopContext):
         super().__init__(ctx)
-        self.target_composite = ctx.args.composite
+        # get_work_mode() only routes here when args.composite is truthy.
+        assert ctx.args.composite is not None
+        self.target_composite: str = ctx.args.composite
         self._work_done = False
 
     def request_work(self) -> Optional[Dict[str, Any]]:

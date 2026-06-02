@@ -5,7 +5,7 @@ Shared argument parsing logic for ECM and YAFU wrappers.
 import argparse
 import sys
 import multiprocessing
-from typing import Dict, Any, Optional, Union, TYPE_CHECKING
+from typing import Dict, Optional, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .typed_config import AppConfig

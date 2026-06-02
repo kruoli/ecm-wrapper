@@ -84,6 +84,10 @@ class BaseWrapper:
         self._subprocess_lock = threading.Lock()
         atexit.register(self._terminate_all_subprocesses)
 
+        # Coordinated shutdown event used by run_subprocess_with_parsing and
+        # subclasses (ECMWrapper, Stage2Executor) for 3-level Ctrl+C handling.
+        self.stop_event: threading.Event = threading.Event()
+
     def _ensure_api_clients(self):
         """Initialize API clients on first use (lazy loading)."""
         if self.api_clients is not None:
@@ -597,7 +601,7 @@ class BaseWrapper:
                         line_callback(line, output_lines)
 
                 # Check if stop requested (e.g. second Ctrl+C)
-                if hasattr(self, 'stop_event') and self.stop_event.is_set():
+                if self.stop_event.is_set():
                     self.logger.info(f"{log_prefix}: Stop requested, sending SIGINT to subprocess")
                     try:
                         if sys.platform != 'win32':

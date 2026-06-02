@@ -69,6 +69,8 @@ class StandardAutoWorkMode(WorkMode):
         """Execute using progressive t-level targeting."""
         server_target = work.get('target_t_level')
         if has_client_tlevel:
+            # Caller invariant: has_client_tlevel == (self.args.tlevel is not None)
+            assert self.args.tlevel is not None
             if server_target is not None and self.args.tlevel > server_target:
                 print(f"Capping --tlevel {self.args.tlevel:.1f} at server target t{server_target:.1f}")
                 target_tlevel = server_target
@@ -80,7 +82,9 @@ class StandardAutoWorkMode(WorkMode):
         if self.args.start_tlevel is not None:
             start_tlevel = self.args.start_tlevel
         else:
-            start_tlevel = work.get('current_t_level', 0.0)
+            # Server may return current_t_level=None explicitly; `or` covers both
+            # the missing-key and explicit-None cases.
+            start_tlevel = work.get('current_t_level') or 0.0
 
         mode_desc = "client t-level" if has_client_tlevel else "server t-level"
         print(f"Mode: {mode_desc} (start: {start_tlevel:.1f}, target: {target_tlevel:.1f})")
@@ -153,8 +157,10 @@ class StandardAutoWorkMode(WorkMode):
 
     def _execute_b1b2_mode(self, work: Dict[str, Any], composite: str) -> FactorResult:
         """Execute using explicit B1/B2 parameters."""
-        b1 = self.args.b1
-        b2 = 0
+        # Caller invariant: execute_work() only routes here when args.b1 is set.
+        assert self.args.b1 is not None
+        b1: int = self.args.b1
+        b2: Optional[int] = 0
         k = 0
         if 'b2_from_dict' in work:
             b2 = work['b2_from_dict']
